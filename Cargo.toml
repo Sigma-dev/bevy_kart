@@ -9,6 +9,7 @@ bevy = "0.17"
 # Browser API access used directly by this crate
 web-sys = { version = "0.3", features = [
     "Window",
+    "Location",
 ] }
 # For compact codes: deflate compression + base62 encoding
 miniz_oxide = "0.7"

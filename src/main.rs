@@ -22,7 +22,7 @@ struct TestSignalingPlugin;
 
 impl Plugin for TestSignalingPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.add_systems(Startup, auto_answer_from_url).add_systems(
             Update,
             (
                 keyboard_shortcuts,
@@ -96,6 +96,10 @@ fn log_local_sdp_ready(mut r: MessageReader<LocalSdpReady>) {
             "===== LOCAL_CODE_BEGIN =====\n{}\n===== LOCAL_CODE_END =====",
             code
         );
+        if let Some(base) = current_base_url() {
+            let link = format!("{}?code={}", base, code);
+            info!("Shareable link (opens with this code): {}", link);
+        }
         info!("Local CODE logged to console. A prompt will show it for easy copy.");
     }
 }
@@ -110,6 +114,44 @@ fn log_connection_open(mut r: MessageReader<ConnectionOpen>) {
 fn log_incoming_data(mut r: MessageReader<IncomingData>) {
     for IncomingData(s) in r.read() {
         info!("RECEIVED: {}", s);
+    }
+}
+
+// Return current page URL without any query string or hash fragment
+fn current_base_url() -> Option<String> {
+    let href = web_sys::window()?.location().href().ok()?;
+    let no_hash = href.split('#').next().unwrap_or(href.as_str());
+    let base = no_hash.split('?').next().unwrap_or(no_hash);
+    Some(base.trim_end_matches('/').to_string())
+}
+
+// Extract the `code` query parameter from the current URL if present
+fn extract_code_query_param() -> Option<String> {
+    let href = web_sys::window()?.location().href().ok()?;
+    let no_hash = href.split('#').next().unwrap_or(href.as_str());
+    let query = no_hash.split('?').nth(1)?;
+    for pair in query.split('&') {
+        let mut it = pair.splitn(2, '=');
+        let key = it.next()?;
+        if key == "code" {
+            let val = it.next().unwrap_or("");
+            return Some(val.to_string());
+        }
+    }
+    None
+}
+
+// On page load, if `?code=` is present, treat it as a REMOTE OFFER CODE and create an answer immediately
+fn auto_answer_from_url(mut w_answer: MessageWriter<CreateAnswer>) {
+    if let Some(code) = extract_code_query_param() {
+        if let Some(sdp) = code_to_sdp(&code) {
+            if !sdp.trim().is_empty() {
+                info!("URL contained an offer code. Creating answer automatically...");
+                w_answer.write(CreateAnswer { remote_sdp: sdp });
+            }
+        } else {
+            info!("Invalid ?code URL parameter. Unable to decode offer.");
+        }
     }
 }
 

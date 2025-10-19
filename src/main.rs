@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy_webrtc::{
-    ConnectionOpen, CreateAnswer, CreateOffer, IncomingData, LocalSdpReady, SendData, SetRemote,
-    WebRtcPlugin,
+    ConnectionId, ConnectionOpen, CreateAnswer, CreateOffer, IncomingData, LocalSdpReady, SendData,
+    SetRemote, WebRtcPlugin,
 };
 
 const BASE62_ALPHABET: &str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -20,17 +20,37 @@ fn code_to_sdp(code: &str) -> Option<String> {
 
 struct TestSignalingPlugin;
 
+#[derive(Component, Clone, Copy, Debug, Eq, PartialEq, Hash)]
+struct NetConnection {
+    id: ConnectionId,
+}
+
+#[derive(Resource, Default)]
+struct ConnectionIdAllocator {
+    next: u64,
+}
+
+impl ConnectionIdAllocator {
+    fn allocate(&mut self) -> ConnectionId {
+        let id = self.next;
+        self.next = self.next.wrapping_add(1);
+        ConnectionId(id)
+    }
+}
+
 impl Plugin for TestSignalingPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, auto_answer_from_url).add_systems(
-            Update,
-            (
-                keyboard_shortcuts,
-                log_local_sdp_ready,
-                log_connection_open,
-                log_incoming_data,
-            ),
-        );
+        app.init_resource::<ConnectionIdAllocator>()
+            .add_systems(Startup, auto_answer_from_url)
+            .add_systems(
+                Update,
+                (
+                    keyboard_shortcuts,
+                    log_local_sdp_ready,
+                    log_connection_open,
+                    log_incoming_data,
+                ),
+            );
     }
 }
 
@@ -51,17 +71,30 @@ fn keyboard_shortcuts(
     mut w_answer: MessageWriter<CreateAnswer>,
     mut w_set: MessageWriter<SetRemote>,
     mut w_send: MessageWriter<SendData>,
+    mut id_alloc: ResMut<ConnectionIdAllocator>,
+    q_conns: Query<&NetConnection>,
 ) {
     if keys.just_pressed(KeyCode::KeyO) {
-        w_offer.write(CreateOffer);
-        info!("Creating offer... wait for LOCAL CODE popup and console log.");
+        let id = id_alloc.allocate();
+        w_offer.write(CreateOffer { id });
+        info!(
+            "Creating offer for connection {:?}... wait for LOCAL CODE popup and console log.",
+            id
+        );
     }
     if keys.just_pressed(KeyCode::KeyA) {
         if let Some(code) = prompt("Paste REMOTE OFFER CODE:") {
             if let Some(sdp) = code_to_sdp(&code) {
                 if !sdp.trim().is_empty() {
-                    w_answer.write(CreateAnswer { remote_sdp: sdp });
-                    info!("Creating answer... wait for LOCAL CODE popup and console log.");
+                    let id = id_alloc.allocate();
+                    w_answer.write(CreateAnswer {
+                        id,
+                        remote_sdp: sdp,
+                    });
+                    info!(
+                        "Creating answer for connection {:?}... wait for LOCAL CODE popup and console log.",
+                        id
+                    );
                 }
             } else {
                 info!("Invalid code. Please check and try again.");
@@ -72,8 +105,17 @@ fn keyboard_shortcuts(
         if let Some(code) = prompt("Paste REMOTE ANSWER CODE:") {
             if let Some(sdp) = code_to_sdp(&code) {
                 if !sdp.trim().is_empty() {
-                    w_set.write(SetRemote { sdp });
-                    info!("Applied remote answer. Waiting for data channel to open...");
+                    // Determine target connection id
+                    let target_id = select_target_connection(&q_conns);
+                    if let Some(id) = target_id {
+                        w_set.write(SetRemote { id, sdp });
+                        info!(
+                            "Applied remote answer for connection {:?}. Waiting for data channel to open...",
+                            id
+                        );
+                    } else {
+                        info!("No connection selected. Create a connection first (O or A).");
+                    }
                 }
             } else {
                 info!("Invalid code. Please check and try again.");
@@ -83,37 +125,79 @@ fn keyboard_shortcuts(
     if keys.just_pressed(KeyCode::KeyT) {
         let text = prompt("Send text over data channel:").unwrap_or_default();
         if !text.is_empty() {
-            info!("Sending text: {}", text);
-            w_send.write(SendData { text });
+            // Choose a target connection: if one, use it; otherwise prompt for id or 'all'
+            if let Some(single) = only_connection(&q_conns) {
+                info!("Sending to {:?}: {}", single, text);
+                w_send.write(SendData { id: single, text });
+            } else {
+                let target = prompt("Target connection id (number) or 'all':").unwrap_or_default();
+                if target.trim().eq_ignore_ascii_case("all") {
+                    for c in q_conns.iter() {
+                        w_send.write(SendData {
+                            id: c.id,
+                            text: text.clone(),
+                        });
+                    }
+                    info!("Sent to all connections: {}", text);
+                } else if let Ok(n) = target.trim().parse::<u64>() {
+                    let id = ConnectionId(n);
+                    info!("Sending to {:?}: {}", id, text);
+                    w_send.write(SendData { id, text });
+                } else {
+                    info!("Invalid target. Not sending.");
+                }
+            }
         }
     }
 }
 
-fn log_local_sdp_ready(mut r: MessageReader<LocalSdpReady>) {
-    for LocalSdpReady(sdp) in r.read() {
+fn only_connection(q: &Query<&NetConnection>) -> Option<ConnectionId> {
+    let mut it = q.iter();
+    let first = it.next()?;
+    if it.next().is_none() {
+        Some(first.id)
+    } else {
+        None
+    }
+}
+
+fn select_target_connection(q: &Query<&NetConnection>) -> Option<ConnectionId> {
+    if let Some(id) = only_connection(q) {
+        return Some(id);
+    }
+    let entered = prompt("Target connection id (number):").unwrap_or_default();
+    entered.trim().parse::<u64>().ok().map(ConnectionId)
+}
+
+fn log_local_sdp_ready(mut r: MessageReader<LocalSdpReady>, mut commands: Commands) {
+    for LocalSdpReady { id, sdp } in r.read() {
         let code = sdp_to_code(&sdp);
         info!(
-            "===== LOCAL_CODE_BEGIN =====\n{}\n===== LOCAL_CODE_END =====",
-            code
+            "[{:?}] ===== LOCAL_CODE_BEGIN =====\n{}\n===== LOCAL_CODE_END =====",
+            id, code
         );
         if let Some(base) = current_base_url() {
             let link = format!("{}?code={}", base, code);
-            info!("Shareable link (opens with this code): {}", link);
+            info!("[{:?}] Shareable link (opens with this code): {}", id, link);
         }
-        info!("Local CODE logged to console. A prompt will show it for easy copy.");
+        info!(
+            "[{:?}] Local CODE logged to console. A prompt will show it for easy copy.",
+            id
+        );
+        // Ensure an entity exists for this connection id
+        commands.spawn(NetConnection { id: *id });
     }
 }
 
 fn log_connection_open(mut r: MessageReader<ConnectionOpen>) {
-    if !r.is_empty() {
-        r.clear();
-        info!("Data channel is OPEN");
+    for ConnectionOpen(id) in r.read() {
+        info!("[{:?}] Data channel is OPEN", id);
     }
 }
 
 fn log_incoming_data(mut r: MessageReader<IncomingData>) {
-    for IncomingData(s) in r.read() {
-        info!("RECEIVED: {}", s);
+    for IncomingData { id, text } in r.read() {
+        info!("[{:?}] RECEIVED: {}", id, text);
     }
 }
 
@@ -164,12 +248,24 @@ fn extract_code_query_param() -> Option<String> {
 }
 
 // On page load, if `?code=` is present, treat it as a REMOTE OFFER CODE and create an answer immediately
-fn auto_answer_from_url(mut w_answer: MessageWriter<CreateAnswer>) {
+fn auto_answer_from_url(
+    mut w_answer: MessageWriter<CreateAnswer>,
+    mut commands: Commands,
+    mut id_alloc: ResMut<ConnectionIdAllocator>,
+) {
     if let Some(code) = extract_code_query_param() {
         if let Some(sdp) = code_to_sdp(&code) {
             if !sdp.trim().is_empty() {
-                info!("URL contained an offer code. Creating answer automatically...");
-                w_answer.write(CreateAnswer { remote_sdp: sdp });
+                let id = id_alloc.allocate();
+                info!(
+                    "URL contained an offer code. Creating answer automatically for connection {:?}...",
+                    id
+                );
+                w_answer.write(CreateAnswer {
+                    id,
+                    remote_sdp: sdp,
+                });
+                commands.spawn(NetConnection { id });
             }
         } else {
             info!("Invalid ?code URL parameter. Unable to decode offer.");

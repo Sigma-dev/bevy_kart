@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use js_sys::Uint8Array;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
@@ -17,36 +18,50 @@ use web_sys::RtcPeerConnection;
 use web_sys::RtcSdpType;
 use web_sys::RtcSessionDescriptionInit;
 
-// Messages exposed to Bevy application code
-#[derive(Message, Default)]
-pub struct CreateOffer;
+// Messages exposed to Bevy application code (now include ConnectionId)
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+pub struct ConnectionId(pub u64);
+
+#[derive(Message)]
+pub struct CreateOffer {
+    pub id: ConnectionId,
+}
 
 #[derive(Message)]
 pub struct CreateAnswer {
+    pub id: ConnectionId,
     pub remote_sdp: String,
 }
 
 #[derive(Message)]
 pub struct SetRemote {
-    pub sdp: String, // Answer SDP for offerer side
+    pub id: ConnectionId, // Answer SDP for offerer side
+    pub sdp: String,
 }
 
 #[derive(Message)]
 pub struct SendData {
+    pub id: ConnectionId,
     pub text: String,
 }
 
 #[derive(Message)]
-pub struct LocalSdpReady(pub String);
+pub struct LocalSdpReady {
+    pub id: ConnectionId,
+    pub sdp: String,
+}
 
 #[derive(Message)]
-pub struct IncomingData(pub String);
+pub struct IncomingData {
+    pub id: ConnectionId,
+    pub text: String,
+}
 
 #[derive(Message)]
-pub struct ConnectionOpen;
+pub struct ConnectionOpen(pub ConnectionId);
 
-// NonSend resource (do not derive Resource; inserted as NonSend)
-struct RtcContext {
+// Per-connection state, stored inside the NonSend resource map
+struct ConnState {
     pc_slot: Rc<RefCell<Option<RtcPeerConnection>>>,
     dc_slot: Rc<RefCell<Option<RtcDataChannel>>>,
     // Buffers to bridge JS callbacks back into Bevy's world
@@ -55,14 +70,27 @@ struct RtcContext {
     pending_local_sdp: Rc<RefCell<Vec<String>>>,
 }
 
-impl Default for RtcContext {
-    fn default() -> Self {
+impl ConnState {
+    fn new() -> Self {
         Self {
             pc_slot: Rc::new(RefCell::new(None)),
             dc_slot: Rc::new(RefCell::new(None)),
             pending_open: Rc::new(Cell::new(false)),
             pending_messages: Rc::new(RefCell::new(Vec::new())),
             pending_local_sdp: Rc::new(RefCell::new(Vec::new())),
+        }
+    }
+}
+
+// NonSend resource (do not derive Resource; inserted as NonSend)
+struct RtcContext {
+    conns: HashMap<ConnectionId, ConnState>,
+}
+
+impl Default for RtcContext {
+    fn default() -> Self {
+        Self {
+            conns: HashMap::new(),
         }
     }
 }
@@ -161,60 +189,77 @@ fn hook_data_channel(
     msg_closure.forget();
 }
 
-fn handle_create_offer(ctx: NonSendMut<RtcContext>, mut ev: MessageReader<CreateOffer>) {
-    if ev.is_empty() {
-        return;
-    }
-    ev.clear();
+fn handle_create_offer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<CreateOffer>) {
+    for CreateOffer { id } in ev.read() {
+        // Fresh per-connection state
+        let state = ctx
+            .conns
+            .entry(ConnectionId(id.0))
+            .or_insert_with(ConnState::new);
 
-    // Fresh peer connection
-    let pc = match make_peer_connection() {
-        Ok(pc) => pc,
-        Err(err) => {
-            info!("Failed to create RTCPeerConnection: {:?}", err);
-            return;
-        }
-    };
-
-    // Create data channel immediately (offerer)
-    let dc = pc.create_data_channel("data");
-    hook_data_channel(ctx.pending_open.clone(), ctx.pending_messages.clone(), &dc);
-
-    // Prepare to emit local SDP after ICE completes
-    let sdp_buf = ctx.pending_local_sdp.clone();
-    let pc_clone = pc.clone();
-
-    spawn_local(async move {
-        // Create offer
-        let offer_promise = pc_clone.create_offer();
-        let offer_val = match wasm_bindgen_futures::JsFuture::from(offer_promise).await {
-            Ok(v) => v,
-            Err(e) => {
-                info!("createOffer failed: {:?}", e);
-                return;
+        // Fresh peer connection
+        let pc = match make_peer_connection() {
+            Ok(pc) => pc,
+            Err(err) => {
+                info!("Failed to create RTCPeerConnection: {:?}", err);
+                continue;
             }
         };
-        let offer: RtcSessionDescriptionInit = offer_val.unchecked_into();
 
-        // Set local description
-        if wasm_bindgen_futures::JsFuture::from(pc_clone.set_local_description(&offer))
-            .await
-            .is_err()
-        {
-            return;
-        }
-        await_ice_complete(pc_clone.clone()).await;
-        if let Some(local) = pc_clone.local_description() {
-            sdp_buf.borrow_mut().push(local.sdp());
-        }
-    });
+        // Create data channel immediately (offerer)
+        let dc = pc.create_data_channel("data");
+        hook_data_channel(
+            state.pending_open.clone(),
+            state.pending_messages.clone(),
+            &dc,
+        );
 
-    ctx.dc_slot.borrow_mut().replace(dc);
-    ctx.pc_slot.borrow_mut().replace(pc);
+        // Prepare to emit local SDP after ICE completes
+        let sdp_buf = state.pending_local_sdp.clone();
+        let pc_clone = pc.clone();
+        let this_id = id;
+
+        spawn_local(async move {
+            // Create offer
+            let offer_promise = pc_clone.create_offer();
+            let offer_val = match wasm_bindgen_futures::JsFuture::from(offer_promise).await {
+                Ok(v) => v,
+                Err(e) => {
+                    info!("createOffer failed: {:?}", e);
+                    return;
+                }
+            };
+            let offer: RtcSessionDescriptionInit = offer_val.unchecked_into();
+
+            // Set local description
+            if wasm_bindgen_futures::JsFuture::from(pc_clone.set_local_description(&offer))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            await_ice_complete(pc_clone.clone()).await;
+            if let Some(local) = pc_clone.local_description() {
+                sdp_buf.borrow_mut().push(local.sdp());
+            }
+            // sdp will be pumped with id later
+            let _ = this_id; // silence unused warning in some builds
+        });
+
+        state.dc_slot.borrow_mut().replace(dc);
+        state.pc_slot.borrow_mut().replace(pc);
+    }
+    ev.clear();
 }
 
-fn handle_create_answer(ctx: NonSendMut<RtcContext>, mut ev: MessageReader<CreateAnswer>) {
-    for CreateAnswer { remote_sdp } in ev.read() {
+fn handle_create_answer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<CreateAnswer>) {
+    for CreateAnswer { id, remote_sdp } in ev.read() {
+        // Fresh per-connection state
+        let state = ctx
+            .conns
+            .entry(ConnectionId(id.0))
+            .or_insert_with(ConnState::new);
+
         let pc = match make_peer_connection() {
             Ok(pc) => pc,
             Err(err) => {
@@ -224,9 +269,9 @@ fn handle_create_answer(ctx: NonSendMut<RtcContext>, mut ev: MessageReader<Creat
         };
 
         // Listen for datachannel from offerer
-        let on_dc_ctx_open = ctx.pending_open.clone();
-        let on_dc_ctx_msgs = ctx.pending_messages.clone();
-        let dc_slot = ctx.dc_slot.clone();
+        let on_dc_ctx_open = state.pending_open.clone();
+        let on_dc_ctx_msgs = state.pending_messages.clone();
+        let dc_slot = state.dc_slot.clone();
         let on_dc = Closure::wrap(Box::new(move |ev: RtcDataChannelEvent| {
             let channel = ev.channel();
             hook_data_channel(on_dc_ctx_open.clone(), on_dc_ctx_msgs.clone(), &channel);
@@ -236,8 +281,9 @@ fn handle_create_answer(ctx: NonSendMut<RtcContext>, mut ev: MessageReader<Creat
         on_dc.forget();
 
         let sdp_text = remote_sdp.clone();
-        let sdp_buf = ctx.pending_local_sdp.clone();
+        let sdp_buf = state.pending_local_sdp.clone();
         let pc_clone = pc.clone();
+        let _this_id = id;
         spawn_local(async move {
             // Apply remote offer
             let remote = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
@@ -267,33 +313,38 @@ fn handle_create_answer(ctx: NonSendMut<RtcContext>, mut ev: MessageReader<Creat
             }
         });
 
-        ctx.pc_slot.borrow_mut().replace(pc);
+        state.pc_slot.borrow_mut().replace(pc);
     }
     ev.clear();
 }
 
 fn handle_set_remote(ctx: NonSend<RtcContext>, mut ev: MessageReader<SetRemote>) {
-    if let Some(pc) = ctx.pc_slot.borrow().clone() {
-        for SetRemote { sdp } in ev.read() {
-            let pc_clone = pc.clone();
-            let sdp_text = sdp.clone();
-            spawn_local(async move {
-                let desc = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
-                desc.set_sdp(&sdp_text);
-                let _ =
-                    wasm_bindgen_futures::JsFuture::from(pc_clone.set_remote_description(&desc))
-                        .await;
-            });
+    for SetRemote { id, sdp } in ev.read() {
+        if let Some(state) = ctx.conns.get(&id) {
+            if let Some(pc) = state.pc_slot.borrow().clone() {
+                let pc_clone = pc.clone();
+                let sdp_text = sdp.clone();
+                spawn_local(async move {
+                    let desc = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
+                    desc.set_sdp(&sdp_text);
+                    let _ = wasm_bindgen_futures::JsFuture::from(
+                        pc_clone.set_remote_description(&desc),
+                    )
+                    .await;
+                });
+            }
         }
     }
     ev.clear();
 }
 
 fn handle_send_data(ctx: NonSend<RtcContext>, mut ev: MessageReader<SendData>) {
-    if let Some(dc) = ctx.dc_slot.borrow().as_ref() {
-        if dc.ready_state() == RtcDataChannelState::Open {
-            for SendData { text } in ev.read() {
-                let _ = dc.send_with_str(text.as_str());
+    for SendData { id, text } in ev.read() {
+        if let Some(state) = ctx.conns.get(&id) {
+            if let Some(dc) = state.dc_slot.borrow().as_ref() {
+                if dc.ready_state() == RtcDataChannelState::Open {
+                    let _ = dc.send_with_str(text.as_str());
+                }
             }
         }
     }
@@ -307,16 +358,22 @@ fn pump_js_callbacks(
     mut msg_writer: MessageWriter<IncomingData>,
     mut open_writer: MessageWriter<ConnectionOpen>,
 ) {
-    if ctx.pending_open.replace(false) {
-        open_writer.write(ConnectionOpen);
-    }
-    let mut msgs = ctx.pending_messages.borrow_mut();
-    for s in msgs.drain(..) {
-        msg_writer.write(IncomingData(s));
-    }
-    drop(msgs);
-    let mut sdp = ctx.pending_local_sdp.borrow_mut();
-    for s in sdp.drain(..) {
-        sdp_writer.write(LocalSdpReady(s));
+    // Iterate over connections and flush their pending buffers with ids
+    let ids: Vec<ConnectionId> = ctx.conns.keys().cloned().collect();
+    for id in ids {
+        if let Some(state) = ctx.conns.get(&id) {
+            if state.pending_open.replace(false) {
+                open_writer.write(ConnectionOpen(id));
+            }
+            let mut msgs = state.pending_messages.borrow_mut();
+            for s in msgs.drain(..) {
+                msg_writer.write(IncomingData { id, text: s });
+            }
+            drop(msgs);
+            let mut sdp = state.pending_local_sdp.borrow_mut();
+            for s in sdp.drain(..) {
+                sdp_writer.write(LocalSdpReady { id, sdp: s });
+            }
+        }
     }
 }

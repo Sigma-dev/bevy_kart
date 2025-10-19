@@ -117,17 +117,39 @@ fn log_incoming_data(mut r: MessageReader<IncomingData>) {
     }
 }
 
+fn get_url() -> Option<String> {
+    let window = web_sys::window()?;
+
+    // Prefer the embedding page's URL when running inside itch.io's iframe domain.
+    // On itch, the game runs at html-classic.itch.zone, but the shareable URL
+    // should be the project page (the embedding referrer) when available.
+    let hostname_is_itch_zone = window
+        .location()
+        .hostname()
+        .ok()
+        .map(|h| h.ends_with("itch.zone") || h.ends_with("itch.io"))
+        .unwrap_or(false);
+
+    let referrer = window.document().map(|d| d.referrer()).unwrap_or_default();
+
+    if hostname_is_itch_zone && !referrer.is_empty() {
+        Some(referrer)
+    } else {
+        Some(window.location().href().ok()?)
+    }
+}
+
 // Return current page URL without any query string or hash fragment
 fn current_base_url() -> Option<String> {
-    let href = web_sys::window()?.location().href().ok()?;
-    let no_hash = href.split('#').next().unwrap_or(href.as_str());
+    let source = get_url()?;
+    let no_hash = source.split('#').next().unwrap_or(source.as_str());
     let base = no_hash.split('?').next().unwrap_or(no_hash);
     Some(base.trim_end_matches('/').to_string())
 }
 
 // Extract the `code` query parameter from the current URL if present
 fn extract_code_query_param() -> Option<String> {
-    let href = web_sys::window()?.location().href().ok()?;
+    let href = get_url()?;
     let no_hash = href.split('#').next().unwrap_or(href.as_str());
     let query = no_hash.split('?').nth(1)?;
     for pair in query.split('&') {
@@ -152,6 +174,11 @@ fn auto_answer_from_url(mut w_answer: MessageWriter<CreateAnswer>) {
         } else {
             info!("Invalid ?code URL parameter. Unable to decode offer.");
         }
+    } else {
+        info!(
+            "No ?code URL parameter found. Unable to create answer automatically. URL: {}",
+            get_url().unwrap_or_default()
+        );
     }
 }
 

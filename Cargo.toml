@@ -10,6 +10,7 @@ bevy = "0.17"
 web-sys = { version = "0.3", features = [
     "Window",
     "Location",
+    "Document",
 ] }
 # For compact codes: deflate compression + base62 encoding
 miniz_oxide = "0.7"

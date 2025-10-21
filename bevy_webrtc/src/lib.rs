@@ -60,12 +60,24 @@ pub struct IncomingData {
 #[derive(Message)]
 pub struct ConnectionOpen(pub ConnectionId);
 
+#[derive(Message)]
+pub struct CloseConnection {
+    pub id: ConnectionId,
+}
+
+#[derive(Message)]
+pub struct CloseAllConnections;
+
+#[derive(Message)]
+pub struct ConnectionClosed(pub ConnectionId);
+
 // Per-connection state, stored inside the NonSend resource map
 struct ConnState {
     pc_slot: Rc<RefCell<Option<RtcPeerConnection>>>,
     dc_slot: Rc<RefCell<Option<RtcDataChannel>>>,
     // Buffers to bridge JS callbacks back into Bevy's world
     pending_open: Rc<Cell<bool>>,
+    pending_closed: Rc<Cell<bool>>,
     pending_messages: Rc<RefCell<Vec<String>>>,
     pending_local_sdp: Rc<RefCell<Vec<String>>>,
 }
@@ -76,6 +88,7 @@ impl ConnState {
             pc_slot: Rc::new(RefCell::new(None)),
             dc_slot: Rc::new(RefCell::new(None)),
             pending_open: Rc::new(Cell::new(false)),
+            pending_closed: Rc::new(Cell::new(false)),
             pending_messages: Rc::new(RefCell::new(Vec::new())),
             pending_local_sdp: Rc::new(RefCell::new(Vec::new())),
         }
@@ -107,6 +120,9 @@ impl Plugin for WebRtcPlugin {
             .add_message::<LocalSdpReady>()
             .add_message::<IncomingData>()
             .add_message::<ConnectionOpen>()
+            .add_message::<CloseConnection>()
+            .add_message::<CloseAllConnections>()
+            .add_message::<ConnectionClosed>()
             .add_systems(
                 Update,
                 (
@@ -115,6 +131,8 @@ impl Plugin for WebRtcPlugin {
                     handle_set_remote,
                     handle_send_data,
                     pump_js_callbacks,
+                    handle_close_connection,
+                    handle_close_all,
                 ),
             );
     }
@@ -156,10 +174,12 @@ async fn await_ice_complete(pc: RtcPeerConnection) {
 // Setup data channel callbacks and store channel
 fn hook_data_channel(
     pending_open: Rc<Cell<bool>>,
+    pending_closed: Rc<Cell<bool>>,
     pending_messages: Rc<RefCell<Vec<String>>>,
     dc: &RtcDataChannel,
 ) {
     let on_open_flag = pending_open.clone();
+    let on_close_flag = pending_closed.clone();
     let on_msg_buf = pending_messages.clone();
 
     // onopen -> mark flag
@@ -168,6 +188,13 @@ fn hook_data_channel(
     }) as Box<dyn FnMut()>);
     dc.set_onopen(Some(open_closure.as_ref().unchecked_ref()));
     open_closure.forget();
+
+    // onclose -> mark closed flag
+    let close_closure = Closure::wrap(Box::new(move || {
+        on_close_flag.set(true);
+    }) as Box<dyn FnMut()>);
+    dc.set_onclose(Some(close_closure.as_ref().unchecked_ref()));
+    close_closure.forget();
 
     // onmessage -> push string messages
     let msg_closure = Closure::wrap(Box::new(move |ev: web_sys::MessageEvent| {
@@ -210,6 +237,7 @@ fn handle_create_offer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<Cr
         let dc = pc.create_data_channel("data");
         hook_data_channel(
             state.pending_open.clone(),
+            state.pending_closed.clone(),
             state.pending_messages.clone(),
             &dc,
         );
@@ -270,11 +298,17 @@ fn handle_create_answer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<C
 
         // Listen for datachannel from offerer
         let on_dc_ctx_open = state.pending_open.clone();
+        let on_dc_ctx_closed = state.pending_closed.clone();
         let on_dc_ctx_msgs = state.pending_messages.clone();
         let dc_slot = state.dc_slot.clone();
         let on_dc = Closure::wrap(Box::new(move |ev: RtcDataChannelEvent| {
             let channel = ev.channel();
-            hook_data_channel(on_dc_ctx_open.clone(), on_dc_ctx_msgs.clone(), &channel);
+            hook_data_channel(
+                on_dc_ctx_open.clone(),
+                on_dc_ctx_closed.clone(),
+                on_dc_ctx_msgs.clone(),
+                &channel,
+            );
             dc_slot.borrow_mut().replace(channel);
         }) as Box<dyn FnMut(RtcDataChannelEvent)>);
         pc.set_ondatachannel(Some(on_dc.as_ref().unchecked_ref()));
@@ -357,6 +391,7 @@ fn pump_js_callbacks(
     mut sdp_writer: MessageWriter<LocalSdpReady>,
     mut msg_writer: MessageWriter<IncomingData>,
     mut open_writer: MessageWriter<ConnectionOpen>,
+    mut closed_writer: MessageWriter<ConnectionClosed>,
 ) {
     // Iterate over connections and flush their pending buffers with ids
     let ids: Vec<ConnectionId> = ctx.conns.keys().cloned().collect();
@@ -364,6 +399,9 @@ fn pump_js_callbacks(
         if let Some(state) = ctx.conns.get(&id) {
             if state.pending_open.replace(false) {
                 open_writer.write(ConnectionOpen(id));
+            }
+            if state.pending_closed.replace(false) {
+                closed_writer.write(ConnectionClosed(id));
             }
             let mut msgs = state.pending_messages.borrow_mut();
             for s in msgs.drain(..) {
@@ -376,4 +414,43 @@ fn pump_js_callbacks(
             }
         }
     }
+}
+
+fn handle_close_connection(
+    mut ctx: NonSendMut<RtcContext>,
+    mut ev: MessageReader<CloseConnection>,
+) {
+    for CloseConnection { id } in ev.read() {
+        if let Some(state) = ctx.conns.remove(&id) {
+            if let Some(dc) = state.dc_slot.borrow().as_ref() {
+                let _ = dc.close();
+            }
+            if let Some(pc) = state.pc_slot.borrow().as_ref() {
+                pc.close();
+            }
+        }
+    }
+    ev.clear();
+}
+
+fn handle_close_all(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<CloseAllConnections>) {
+    let mut any = false;
+    for _ in ev.read() {
+        any = true;
+    }
+    if !any {
+        return;
+    }
+    let ids: Vec<ConnectionId> = ctx.conns.keys().cloned().collect();
+    for id in ids {
+        if let Some(state) = ctx.conns.remove(&id) {
+            if let Some(dc) = state.dc_slot.borrow().as_ref() {
+                let _ = dc.close();
+            }
+            if let Some(pc) = state.pc_slot.borrow().as_ref() {
+                pc.close();
+            }
+        }
+    }
+    ev.clear();
 }

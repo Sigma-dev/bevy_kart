@@ -5,7 +5,10 @@ edition = "2024"
 
 [dependencies]
 bevy_webrtc = { path = "bevy_webrtc" }
+bevy_easy_p2p = { path = "bevy_easy_p2p" }
+bevy_firestore_p2p = { path = "bevy_firestore_p2p" }
 bevy = "0.17"
+serde = { version = "1", features = ["derive"] }
 # Browser API access used directly by this crate
 web-sys = { version = "0.3", features = [
     "Window",

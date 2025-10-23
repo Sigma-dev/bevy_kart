@@ -1,5 +1,10 @@
-use bevy::{ecs::system::SystemParam, prelude::*};
+use bevy::{
+    ecs::system::SystemParam, platform::collections::HashSet, prelude::*,
+    state::state::FreelyMutableState,
+};
+use core::any::TypeId;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub type ClientId = u64;
 
@@ -30,6 +35,8 @@ pub enum P2PData<PlayerData, PlayerInputData> {
     ClientInput(PlayerInputData),
     ClientDataUpdate(PlayerData),
     HostLobbyInfoUpdate(Vec<PlayerInfo<PlayerData>>),
+    // Generic state sync payload: (registered type index, serialized JSON payload)
+    StateSync(u8, String),
 }
 
 // Events
@@ -114,6 +121,9 @@ pub struct EasyP2PState<
     pub lobby_code: String,
     pub players: Vec<PlayerInfo<PlayerData>>,
 }
+
+#[derive(Resource, Default, Clone, Copy)]
+pub struct IsHost(pub bool);
 
 impl<
     PlayerData: Serialize
@@ -269,6 +279,8 @@ where
 {
     fn build(&self, app: &mut App) {
         app.init_resource::<EasyP2PState<PlayerData>>()
+            .init_resource::<IsHost>()
+            .init_resource::<SyncedStateRegister>()
             .init_state::<P2PLobbyState>() // Alternatively we could use .insert_state(AppState::Menu)
             // Request channel messages
             .add_message::<OnCreateLobbyReq>()
@@ -314,6 +326,45 @@ where
     }
 }
 
+// Registry for synced states
+#[derive(Resource, Default)]
+pub struct SyncedStateRegister {
+    pub readers: Vec<fn(&str, &mut Commands) -> ()>,
+    pub indexes: HashMap<TypeId, u8>,
+    pub counter: u8,
+}
+
+impl SyncedStateRegister {
+    pub fn register_state<S>(&mut self)
+    where
+        S: States
+            + Serialize
+            + for<'de> Deserialize<'de>
+            + Clone
+            + Send
+            + Sync
+            + core::fmt::Debug
+            + 'static
+            + FreelyMutableState,
+    {
+        if self.indexes.contains_key(&TypeId::of::<S>()) {
+            return;
+        }
+        let idx = self.counter;
+        self.indexes.insert(TypeId::of::<S>(), idx);
+        self.counter = self.counter.wrapping_add(1);
+        self.readers.push(|payload: &str, commands: &mut Commands| {
+            if let Ok(value) = serde_json::from_str::<S>(payload) {
+                commands.set_state::<S>(value);
+            }
+        });
+    }
+}
+
+// Message to apply a synced state locally on clients
+#[derive(Message, Clone)]
+pub struct OnApplyState<S>(pub S);
+
 // Request channel messages
 #[derive(Message, Clone)]
 pub struct OnCreateLobbyReq;
@@ -348,6 +399,7 @@ fn on_external_lobby_exit<
     mut state: ResMut<EasyP2PState<PlayerData>>,
     mut r: MessageReader<OnLobbyExit>,
     mut lobby_state: ResMut<NextState<P2PLobbyState>>,
+    mut host_flag: ResMut<IsHost>,
 ) {
     let mut any = false;
     for _ in r.read() {
@@ -357,6 +409,7 @@ fn on_external_lobby_exit<
         return;
     }
     state.is_host = false;
+    host_flag.0 = false;
     state.lobby_code.clear();
     state.players.clear();
     lobby_state.set(P2PLobbyState::OutOfLobby);
@@ -376,12 +429,22 @@ fn broadcast_roster_on_host<
 >(
     mut info_r: MessageReader<OnTransportRosterChanged>,
     mut w_send_all: MessageWriter<OnSendToAllReq<PlayerData, PlayerInputData>>,
-    state: Res<EasyP2PState<PlayerData>>,
+    mut state: ResMut<EasyP2PState<PlayerData>>,
 ) {
     if !state.is_host {
         return;
     }
-    for OnTransportRosterChanged(_) in info_r.read() {
+    for OnTransportRosterChanged(list) in info_r.read() {
+        // Build allowed set from transport’s joined client ids
+        let allowed: HashSet<u64> = list.iter().filter_map(|s| s.parse::<u64>().ok()).collect();
+
+        // Prune clients not in the transport roster
+        state.players.retain(|p| match p.id {
+            NetworkedId::ClientId(cid) => allowed.contains(&cid),
+            NetworkedId::Host => true,
+        });
+
+        // Broadcast updated roster (host + filtered clients)
         let players = state.get_players();
         info!("broadcast_roster_on_host: {:?}", players);
         w_send_all.write(OnSendToAllReq(P2PData::HostLobbyInfoUpdate(players)));
@@ -477,14 +540,17 @@ fn state_update_system<
     mut entered_r: MessageReader<OnLobbyEntered>,
     mut exit_r: MessageReader<OnExitLobbyReq>,
     mut lobby_state: ResMut<NextState<P2PLobbyState>>,
+    mut host_flag: ResMut<IsHost>,
 ) {
     for OnLobbyCreated(code) in created_r.read() {
         state.is_host = true;
         state.lobby_code = code.clone();
+        host_flag.0 = true;
     }
     for OnLobbyJoined(code) in joined_r.read() {
         state.is_host = false;
         state.lobby_code = code.clone();
+        host_flag.0 = false;
     }
     for OnLobbyEntered(code) in entered_r.read() {
         state.lobby_code = code.clone();
@@ -496,10 +562,12 @@ fn state_update_system<
         state.lobby_code.clear();
         state.players.clear();
         lobby_state.set(P2PLobbyState::OutOfLobby);
+        host_flag.0 = false;
     }
 }
 
 fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData>(
+    mut commands: Commands,
     mut internal_client_r: MessageReader<OnInternalClientData<PlayerData, PlayerInputData>>,
     mut internal_host_r: MessageReader<OnInternalHostData<PlayerData, PlayerInputData>>,
     mut client_w: MessageWriter<OnClientMessageReceived>,
@@ -507,6 +575,7 @@ fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData>(
     mut roster_w: MessageWriter<OnRosterUpdate<PlayerData>>,
     mut relay_w: MessageWriter<OnRelayToAllExcept<PlayerData, PlayerInputData>>,
     mut state: ResMut<EasyP2PState<PlayerData>>,
+    register: Res<SyncedStateRegister>,
 ) where
     PlayerData:
         Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
@@ -537,6 +606,7 @@ fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData>(
                     .unwrap()
                     .data = data.clone();
             }
+            P2PData::StateSync(_, _) => {}
         }
     }
     for OnInternalHostData(data) in internal_host_r.read() {
@@ -553,6 +623,14 @@ fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData>(
                 info!("HostLobbyInfoUpdate: {:?}", players_data);
                 state.players = players_data.clone();
                 let _ = roster_w.write(OnRosterUpdate(players_data.clone()));
+            }
+            P2PData::StateSync(type_index, payload) => {
+                let idx = *type_index as usize;
+                info!("StateSync: {:?}", idx);
+                if idx < register.readers.len() {
+                    let reader = register.readers[idx];
+                    reader(payload, &mut commands);
+                }
             }
             P2PData::ClientInput(_) => {}
             P2PData::ClientDataUpdate(_) => {}
@@ -590,6 +668,88 @@ fn send_local_data_after_enter<
         )));
     }
 }
+
+// App extension to initialize and register a networked state and systems
+pub trait NetworkedStatesExt {
+    fn init_networked_state<S>(&mut self) -> &mut Self
+    where
+        S: States
+            + Serialize
+            + for<'de> Deserialize<'de>
+            + Clone
+            + Send
+            + Sync
+            + core::fmt::Debug
+            + 'static
+            + FreelyMutableState;
+}
+
+impl NetworkedStatesExt for App {
+    fn init_networked_state<S>(&mut self) -> &mut Self
+    where
+        S: States
+            + Serialize
+            + for<'de> Deserialize<'de>
+            + Clone
+            + Send
+            + Sync
+            + core::fmt::Debug
+            + 'static
+            + FreelyMutableState,
+    {
+        // Ensure registry and client apply message (state must be initialized by the app beforehand)
+        self.add_message::<OnApplyState<S>>();
+        {
+            let mut reg = self
+                .world_mut()
+                .get_resource_mut::<SyncedStateRegister>()
+                .expect("SyncedStateRegister not initialized");
+            reg.register_state::<S>();
+        }
+        // Systems: host broadcasts changes; clients queue an OnApplyState<S> via registry reader
+        self.add_systems(Update, host_broadcast_state_change::<S>);
+        self
+    }
+}
+
+fn host_broadcast_state_change<S>(
+    host_flag: Res<IsHost>,
+    current: Res<State<S>>,
+    mut last: Local<Option<S>>,
+    register: Res<SyncedStateRegister>,
+    mut w_send_all: MessageWriter<OnTransportSendToAll>,
+) where
+    S: States
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + Clone
+        + PartialEq
+        + Send
+        + Sync
+        + core::fmt::Debug
+        + 'static,
+{
+    if !host_flag.0 {
+        return;
+    }
+    let current_value = current.get().clone();
+    if last.as_ref().map(|v| v == &current_value).unwrap_or(false) {
+        return;
+    }
+    *last = Some(current_value.clone());
+    if let Some(index) = register.indexes.get(&TypeId::of::<S>()) {
+        if let Ok(text) = serde_json::to_string(&current_value) {
+            if let Ok(payload) = serde_json::to_string(&P2PData::<(), ()>::StateSync(*index, text))
+            {
+                w_send_all.write(OnTransportSendToAll(payload));
+            }
+        }
+    }
+}
+
+// Client-side apply is handled by user code calling add_synced_state and their state being freely mutable; otherwise, messages are available via P2PData::StateSync
+
+// applying is handled inside SyncedStateRegister reader via Commands::add
 
 fn handle_client_data_update_on_host<
     PlayerData: Serialize

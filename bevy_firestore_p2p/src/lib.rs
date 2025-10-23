@@ -350,21 +350,19 @@ fn handle_kick_requests(
                 break;
             }
         }
-        if let Some(conn_raw) = to_remove {
-            let conn = ConnectionId(conn_raw);
-            w_close_one.write(CloseConnection { id: conn });
-            for (e, c) in q_conns.iter() {
-                if c.id == conn {
-                    commands.entity(e).despawn();
-                }
+        let conn_raw = to_remove.unwrap();
+        let conn = ConnectionId(conn_raw);
+        w_close_one.write(CloseConnection { id: conn });
+        for (e, c) in q_conns.iter() {
+            if c.id == conn {
+                commands.entity(e).despawn();
             }
-            sig.host_connection_to_client_id.remove(&conn_raw);
-            sig.answered_clients.remove(&target);
-            sig.joined_clients.remove(&target);
-            let list: Vec<String> = sig.joined_clients.iter().cloned().collect();
-            info!("transport roster changed: {:?}", list);
-            lobby_info_w.write(OnTransportRosterChanged(list));
         }
+        sig.host_connection_to_client_id.remove(&conn_raw);
+        sig.answered_clients.remove(&target);
+        sig.joined_clients.remove(&target);
+        let list: Vec<String> = sig.joined_clients.iter().cloned().collect();
+        lobby_info_w.write(OnTransportRosterChanged(list));
     }
 }
 
@@ -427,7 +425,6 @@ fn log_connection_open(
             if let Some(cid_str) = sig.host_connection_to_client_id.get(&id.0).cloned() {
                 sig.joined_clients.insert(cid_str);
                 let list: Vec<String> = sig.joined_clients.iter().cloned().collect();
-                info!("transport roster changed (conn open): {:?}", list);
                 lobby_info_w.write(OnTransportRosterChanged(list));
             }
         } else if !sig.client_emitted_join {
@@ -461,7 +458,6 @@ fn handle_connection_closed(
                 sig.answered_clients.remove(&cid_str);
                 sig.joined_clients.remove(&cid_str);
                 let list: Vec<String> = sig.joined_clients.iter().cloned().collect();
-                info!("transport roster changed (conn closed): {:?}", list);
                 lobby_info_w.write(OnTransportRosterChanged(list));
             }
         } else {

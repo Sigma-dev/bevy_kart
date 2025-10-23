@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_easy_p2p::{ NetworkedId};
+use bevy_easy_p2p::{ NetworkedId, NetworkedStatesExt};
 use bevy_easy_p2p::{
     EasyP2P, EasyP2PPlugin, EasyP2PState, OnClientMessageReceived, OnHostMessageReceived,
     OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyJoined, OnRosterUpdate, P2PLobbyState,
@@ -14,6 +14,12 @@ struct AppPlayerData {
     pub name: String,
 }
 
+#[derive(States, Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+enum AppState {
+    #[default]
+    OutOfGame,
+    Game,
+}
 
 impl From<String> for AppPlayerData {
     fn from(value: String) -> Self {
@@ -137,6 +143,8 @@ fn main() {
             TextInputPlugin,
         ))
         .add_systems(Startup, (auto_join_from_url, setup))
+        .init_state::<AppState>()
+        .init_networked_state::<AppState>()
         .add_systems(
             Update,
             (
@@ -203,6 +211,9 @@ fn lobby_chat_input_history(
     }
 }
 
+#[derive(Component)]
+struct KickTarget(NetworkedId);
+
 fn players_buttons(
     commands: &mut Commands,
     parent: Entity,
@@ -227,6 +238,8 @@ fn players_buttons(
                     BorderColor::all(Color::WHITE),
                     BorderRadius::MAX,
                     BackgroundColor(Color::linear_rgb(0.94, 0.00, 0.00)),
+                    KickTarget(player.id),
+
                     children![(
                         Text::new(player.data.name.clone()),
                         TextFont {
@@ -244,15 +257,12 @@ fn players_buttons(
                         AppPlayerData,
                         AppPlayerInputData,
                     >,
-                     parents: Query<&Children>,
-                     texts: Query<&Text>| {
-                        let parent = parents.get(trigger.entity).unwrap();
-                        for child in parent.iter() {
-                            if let Ok(text) = texts.get(child) {
-                                easy.kick(text.0.to_string().parse().unwrap());
-                            }
+                     kick_targets: Query<&KickTarget>| {
+                        let target = kick_targets.get(trigger.entity).unwrap();
+                        if let NetworkedId::ClientId(cid) = target.0 {
+                            easy.kick(cid);
                         }
-                    },
+                    }
                 )
                 .id();
             commands.entity(parent).add_child(button);
@@ -288,16 +298,21 @@ fn players_buttons(
 
 fn spawn_lobby_players_buttons(
     mut commands: Commands,
-    buttons: Query<Entity, With<LobbyPlayersButtons>>,
+    buttons: Query<(Entity, Option<&Children>), With<LobbyPlayersButtons>>,
     easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>,
 ) {
     if !easy.is_host() {
         return;
     }
-    for button in buttons.iter() {
+    for (button, children) in buttons.iter() {
+        let players = easy.get_players();
+        if children.map(|c| c.len()).unwrap_or(0) == players.len() {
+            continue;
+        }
         commands.entity(button).despawn_children();
-        players_buttons(&mut commands, button, easy.get_players().clone(), easy.is_host());
+        players_buttons(&mut commands, button, players, easy.is_host());
     }
+    
 }
 
 fn spawn_client_players_buttons(
@@ -310,7 +325,6 @@ fn spawn_client_players_buttons(
         return;
     }
     for OnRosterUpdate(list) in roster_r.read() {
-        info!("spawn_client_players_buttons: {:?}", list);
         for button in buttons.iter() {
             commands.entity(button).despawn_children();
             players_buttons(
@@ -327,6 +341,7 @@ fn spawn_lobby(mut commands: Commands) {
     let lobby = commands
         .spawn((
             DespawnOnExit(P2PLobbyState::InLobby),
+            DespawnOnExit(AppState::OutOfGame),
             Node {
                 width: percent(100),
                 height: percent(100),
@@ -336,7 +351,7 @@ fn spawn_lobby(mut commands: Commands) {
             },
         ))
         .id();
-    let button = commands
+    let exit_button = commands
         .spawn((
             Button,
             Node {
@@ -384,7 +399,7 @@ fn spawn_lobby(mut commands: Commands) {
             Node {
                 position_type: PositionType::Absolute,
                 bottom: px(5),
-                right: px(5),
+                left: px(5),
                 ..default()
             },
             LobbyCodeText,
@@ -441,12 +456,44 @@ fn spawn_lobby(mut commands: Commands) {
             },
         ))
         .id();
+    let start_button = commands
+    .spawn((
+        Button,
+        Node {
+            height: px(65),
+            border: UiRect::all(px(5)),
+            // horizontally center child text
+            justify_content: JustifyContent::Center,
+            // vertically center child text
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BorderColor::all(Color::WHITE),
+        BorderRadius::MAX,
+        BackgroundColor(Color::BLACK),
+        children![(
+            Text::new("Start Game"),
+            TextFont {
+                font_size: 33.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.9, 0.9, 0.9)),
+            TextShadow::default(),
+        )],
+    ))
+    .observe(
+        |_trigger: On<Pointer<Press>>, mut next_state: ResMut<NextState<AppState>>| {
+            next_state.set(AppState::Game);
+        },
+    )
+    .id();
     commands.entity(lobby).add_children(&[
-        button,
+        exit_button,
         lobby_code_text,
         lobby_chat_input_text,
         lobby_chat_input_history,
         buttons,
+        start_button,
     ]);
 }
 
@@ -454,10 +501,10 @@ fn spawn_menu(mut commands: Commands, mut easy: EasyP2P<FirestoreWebRtcTransport
     if easy.get_local_player_data().name.is_empty() {
         easy.set_local_player_data(AppPlayerData { name: "YOUR_NAME".to_string() });
     }
-    info!("spawn_menu: {:?}", easy.get_local_player_data());
     let menu = commands
         .spawn((
             DespawnOnExit(P2PLobbyState::OutOfLobby),
+            DespawnOnExit(AppState::OutOfGame),
             Node {
                 width: percent(100),
                 height: percent(100),

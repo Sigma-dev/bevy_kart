@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bevy_text_input = { path = "bevy_text_input" }
 bevy_webrtc = { path = "bevy_webrtc" }
 bevy_easy_p2p = { path = "bevy_easy_p2p" }
 bevy_firestore_p2p = { path = "bevy_firestore_p2p" }

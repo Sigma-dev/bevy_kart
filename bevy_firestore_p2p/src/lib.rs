@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use bevy_easy_p2p::{
-    ClientId, ExitReason, NetworkedId, OnCreateLobbyReq, OnExitLobbyReq, OnInternalClientData,
-    OnInternalHostData, OnJoinLobbyReq, OnKickReq, OnLobbyCreated, OnLobbyEntered, OnLobbyExit,
-    OnLobbyInfoUpdate, OnLobbyJoined, OnRelayToAllExcept, OnSendToAllReq, OnSendToClientReq,
-    OnSendToHostReq, P2PData, P2PTransport, PlayerInfo,
+    ClientId, ExitReason, OnCreateLobbyReq, OnExitLobbyReq, OnJoinLobbyReq, OnKickReq,
+    OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyJoined, OnTransportIncomingFromClient,
+    OnTransportIncomingFromHost, OnTransportRelayToAllExcept, OnTransportRosterChanged,
+    OnTransportSendToAll, OnTransportSendToClient, OnTransportSendToHost, P2PTransport,
 };
 use bevy_webrtc::{
     CloseAllConnections, CloseConnection, ConnectionClosed, ConnectionId, ConnectionOpen,
@@ -60,6 +60,8 @@ struct SignalingState {
     offer_conn: Option<ConnectionId>,
     host_connection_to_client_id: HashMap<u64, String>,
     client_join_pending: bool,
+    // Track if client has emitted OnLobbyJoined/OnLobbyEntered
+    client_emitted_join: bool,
 }
 
 #[derive(Resource, Default)]
@@ -70,27 +72,9 @@ struct FirestoreShared {
     room_exists: bool,
 }
 
-pub struct FirestoreP2PPlugin<PlayerData, PlayerInputData>(
-    pub std::marker::PhantomData<(PlayerData, PlayerInputData)>,
-);
+pub struct FirestoreP2PPlugin;
 
-impl<PlayerData, PlayerInputData> Plugin for FirestoreP2PPlugin<PlayerData, PlayerInputData>
-where
-    PlayerData: serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + Clone
-        + Send
-        + Sync
-        + core::fmt::Debug
-        + 'static,
-    PlayerInputData: serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + Clone
-        + Send
-        + Sync
-        + core::fmt::Debug
-        + 'static,
-{
+impl Plugin for FirestoreP2PPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ConnectionIdAllocator>()
             .init_resource::<FirestoreConfig>()
@@ -98,16 +82,15 @@ where
             .init_resource::<FirestoreShared>()
             .add_plugins(WebRtcPlugin)
             .add_systems(Update, handle_create_join_requests)
-            .add_systems(Update, handle_send_requests::<PlayerData, PlayerInputData>)
+            .add_systems(Update, handle_send_requests)
             .add_systems(Update, handle_exit_requests)
             .add_systems(Update, handle_kick_requests)
             .add_systems(Update, log_local_sdp_ready)
             .add_systems(Update, log_connection_open)
-            .add_systems(Update, log_incoming_data::<PlayerData, PlayerInputData>)
+            .add_systems(Update, log_incoming_data)
             .add_systems(Update, handle_connection_closed)
             .add_systems(Update, firestore_pump)
-            .add_systems(Update, on_lobby_exit_cleanup)
-            .add_systems(Update, broadcast_host_roster::<PlayerData, PlayerInputData>);
+            .add_systems(Update, on_lobby_exit_cleanup);
     }
 }
 
@@ -223,7 +206,6 @@ fn handle_create_join_requests(
     cfg: Res<FirestoreConfig>,
     mut lobby_created: MessageWriter<OnLobbyCreated>,
     mut lobby_entered: MessageWriter<OnLobbyEntered>,
-    mut _lobby_joined: MessageWriter<OnLobbyJoined>,
 ) {
     for _ in create_r.read() {
         let room = generate_room_code();
@@ -256,38 +238,16 @@ fn handle_create_join_requests(
     }
 }
 
-fn handle_send_requests<PlayerData, PlayerInputData>(
-    mut send_host_r: MessageReader<OnSendToHostReq<PlayerData, PlayerInputData>>,
-    mut send_all_r: MessageReader<OnSendToAllReq<PlayerData, PlayerInputData>>,
-    mut send_client_r: MessageReader<OnSendToClientReq<PlayerData, PlayerInputData>>,
-    mut relay_except_r: MessageReader<OnRelayToAllExcept<PlayerData, PlayerInputData>>,
+fn handle_send_requests(
+    mut send_host_r: MessageReader<OnTransportSendToHost>,
+    mut send_all_r: MessageReader<OnTransportSendToAll>,
+    mut send_client_r: MessageReader<OnTransportSendToClient>,
+    mut relay_except_r: MessageReader<OnTransportRelayToAllExcept>,
     mut w_send: MessageWriter<SendData>,
     q_conns: Query<(Entity, &NetConnection)>,
     sig: Res<SignalingState>,
-) where
-    PlayerData: serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + Clone
-        + Send
-        + Sync
-        + core::fmt::Debug
-        + 'static,
-    PlayerInputData: serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + Clone
-        + Send
-        + Sync
-        + core::fmt::Debug
-        + 'static,
-{
-    for req in send_all_r.read() {
-        let text = match serde_json::to_string(&req.0) {
-            Ok(s) => s,
-            Err(e) => {
-                info!("Failed to serialize P2PData for broadcast: {:?}", e);
-                continue;
-            }
-        };
+) {
+    for OnTransportSendToAll(text) in send_all_r.read() {
         for (_, c) in q_conns.iter() {
             info!("Sending to {:?}: {}", c.id, text);
             w_send.write(SendData {
@@ -297,28 +257,17 @@ fn handle_send_requests<PlayerData, PlayerInputData>(
         }
     }
 
-    for req in send_host_r.read() {
-        let text = match serde_json::to_string(&req.0) {
-            Ok(s) => s,
-            Err(e) => {
-                info!("Failed to serialize P2PData to host: {:?}", e);
-                continue;
-            }
-        };
+    for OnTransportSendToHost(text) in send_host_r.read() {
         if let Some(single) = only_connection_ids(&q_conns) {
-            w_send.write(SendData { id: single, text });
+            w_send.write(SendData {
+                id: single,
+                text: text.clone(),
+            });
         }
     }
 
     // Send to specific client (host only)
-    for OnSendToClientReq(client_id, data) in send_client_r.read() {
-        let text = match serde_json::to_string(&data) {
-            Ok(s) => s,
-            Err(e) => {
-                info!("Failed to serialize P2PData to client: {:?}", e);
-                continue;
-            }
-        };
+    for OnTransportSendToClient(client_id, text) in send_client_r.read() {
         if !sig.is_host {
             continue;
         }
@@ -338,17 +287,10 @@ fn handle_send_requests<PlayerData, PlayerInputData>(
     }
 
     // Relay to all except the sender (host only)
-    for OnRelayToAllExcept(sender, data) in relay_except_r.read() {
+    for OnTransportRelayToAllExcept(sender, text) in relay_except_r.read() {
         if !sig.is_host {
             continue;
         }
-        let text = match serde_json::to_string(&data) {
-            Ok(s) => s,
-            Err(e) => {
-                info!("Failed to serialize P2PData for relay: {:?}", e);
-                continue;
-            }
-        };
         let sender_str = sender.to_string();
         for (conn_raw, cid_str) in sig.host_connection_to_client_id.iter() {
             if cid_str == &sender_str {
@@ -382,6 +324,7 @@ fn handle_exit_requests(
         sig.client_answer_applied = false;
         sig.offer_conn = None;
         sig.client_join_pending = false;
+        sig.client_emitted_join = false;
         sig.host_connection_to_client_id.clear();
         FIRESTORE_INBOX.with(|inbox| inbox.borrow_mut().clear());
     }
@@ -392,7 +335,7 @@ fn handle_kick_requests(
     mut kick_r: MessageReader<OnKickReq>,
     mut w_close_one: MessageWriter<CloseConnection>,
     mut sig: ResMut<SignalingState>,
-    mut lobby_info_w: MessageWriter<OnLobbyInfoUpdate>,
+    mut lobby_info_w: MessageWriter<OnTransportRosterChanged>,
     q_conns: Query<(Entity, &NetConnection)>,
 ) {
     for OnKickReq(client_id) in kick_r.read() {
@@ -419,8 +362,8 @@ fn handle_kick_requests(
             sig.answered_clients.remove(&target);
             sig.joined_clients.remove(&target);
             let list: Vec<String> = sig.joined_clients.iter().cloned().collect();
-            info!("lobby info update: {:?}", list);
-            lobby_info_w.write(OnLobbyInfoUpdate(list));
+            info!("transport roster changed: {:?}", list);
+            lobby_info_w.write(OnTransportRosterChanged(list));
         }
     }
 }
@@ -474,7 +417,9 @@ fn log_local_sdp_ready(
 fn log_connection_open(
     mut r: MessageReader<ConnectionOpen>,
     mut sig: ResMut<SignalingState>,
-    mut lobby_info_w: MessageWriter<OnLobbyInfoUpdate>,
+    mut lobby_info_w: MessageWriter<OnTransportRosterChanged>,
+    mut lobby_joined: MessageWriter<OnLobbyJoined>,
+    mut lobby_entered: MessageWriter<OnLobbyEntered>,
 ) {
     for ConnectionOpen(id) in r.read() {
         info!("Connection {:?} data channel open", id);
@@ -482,9 +427,15 @@ fn log_connection_open(
             if let Some(cid_str) = sig.host_connection_to_client_id.get(&id.0).cloned() {
                 sig.joined_clients.insert(cid_str);
                 let list: Vec<String> = sig.joined_clients.iter().cloned().collect();
-                info!("lobby info update (conn open): {:?}", list);
-                lobby_info_w.write(OnLobbyInfoUpdate(list));
+                info!("transport roster changed (conn open): {:?}", list);
+                lobby_info_w.write(OnTransportRosterChanged(list));
             }
+        } else if !sig.client_emitted_join {
+            // Client: emit lobby joined/entered only once when channel becomes ready
+            let room = sig.room_code.clone();
+            lobby_joined.write(OnLobbyJoined(room.clone()));
+            lobby_entered.write(OnLobbyEntered(room));
+            sig.client_emitted_join = true;
         }
     }
 }
@@ -493,7 +444,7 @@ fn handle_connection_closed(
     mut commands: Commands,
     mut r: MessageReader<ConnectionClosed>,
     mut sig: ResMut<SignalingState>,
-    mut lobby_info_w: MessageWriter<OnLobbyInfoUpdate>,
+    mut lobby_info_w: MessageWriter<OnTransportRosterChanged>,
     mut lobby_exit_w: MessageWriter<OnLobbyExit>,
     q_conns: Query<(Entity, &NetConnection)>,
 ) {
@@ -510,8 +461,8 @@ fn handle_connection_closed(
                 sig.answered_clients.remove(&cid_str);
                 sig.joined_clients.remove(&cid_str);
                 let list: Vec<String> = sig.joined_clients.iter().cloned().collect();
-                info!("lobby info update (conn closed): {:?}", list);
-                lobby_info_w.write(OnLobbyInfoUpdate(list));
+                info!("transport roster changed (conn closed): {:?}", list);
+                lobby_info_w.write(OnTransportRosterChanged(list));
             }
         } else {
             // If client's only connection closed, exit lobby (disconnected)
@@ -523,38 +474,21 @@ fn handle_connection_closed(
     }
 }
 
-fn log_incoming_data<PlayerData, PlayerInputData>(
+fn log_incoming_data(
     mut r: MessageReader<IncomingData>,
     sig: Res<SignalingState>,
-    mut ev_client: MessageWriter<OnInternalClientData<PlayerData, PlayerInputData>>,
-    mut ev_host: MessageWriter<OnInternalHostData<PlayerData, PlayerInputData>>,
-) where
-    PlayerData: serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + Clone
-        + Send
-        + Sync
-        + core::fmt::Debug
-        + 'static,
-    PlayerInputData: serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + Clone
-        + Send
-        + Sync
-        + core::fmt::Debug
-        + 'static,
-{
+    mut ev_client: MessageWriter<OnTransportIncomingFromClient>,
+    mut ev_host: MessageWriter<OnTransportIncomingFromHost>,
+) {
     for IncomingData { id, text } in r.read() {
-        let parsed: Result<P2PData<PlayerData, PlayerInputData>, _> = serde_json::from_str(&text);
-        let Ok(data) = parsed else { continue };
         if sig.is_host {
             if let Some(cid_str) = sig.host_connection_to_client_id.get(&id.0) {
                 if let Ok(cid) = cid_str.parse::<u64>() {
-                    ev_client.write(OnInternalClientData(cid, data.clone()));
+                    ev_client.write(OnTransportIncomingFromClient(cid, text.clone()));
                 }
             }
         } else {
-            ev_host.write(OnInternalHostData(data.clone()));
+            ev_host.write(OnTransportIncomingFromHost(text.clone()));
         }
     }
 }
@@ -566,10 +500,7 @@ fn firestore_pump(
     mut w_set: MessageWriter<SetRemote>,
     mut id_alloc: ResMut<ConnectionIdAllocator>,
     mut shared: ResMut<FirestoreShared>,
-    mut lobby_info_w: MessageWriter<OnLobbyInfoUpdate>,
     mut w_offer: MessageWriter<CreateOffer>,
-    mut lobby_joined: MessageWriter<OnLobbyJoined>,
-    mut lobby_entered: MessageWriter<OnLobbyEntered>,
 ) {
     if sig.room_code.is_empty() {
         return;
@@ -607,20 +538,12 @@ fn firestore_pump(
             }
         }
         if !doc.is_null() {
-            apply_firestore_doc(
-                &doc,
-                &mut sig,
-                &mut w_answer,
-                &mut w_set,
-                &mut id_alloc,
-                &mut lobby_info_w,
-            );
-            // If we are a client waiting to join, and the room exists, now emit join and create offer
+            apply_firestore_doc(&doc, &mut sig, &mut w_answer, &mut w_set, &mut id_alloc);
+            // If we are a client waiting to join and the room exists, create offer only.
+            // Delay emitting OnLobbyJoined/OnLobbyEntered until data channel opens.
             if sig.client_join_pending && !sig.is_host {
                 sig.client_join_pending = false;
-                let room = sig.room_code.clone();
-                lobby_joined.write(OnLobbyJoined(room.clone()));
-                lobby_entered.write(OnLobbyEntered(room.clone()));
+                sig.client_emitted_join = false;
                 let id = id_alloc.allocate();
                 sig.offer_conn = Some(id);
                 w_offer.write(CreateOffer { id });
@@ -652,7 +575,6 @@ fn apply_firestore_doc(
     w_answer: &mut MessageWriter<CreateAnswer>,
     w_set: &mut MessageWriter<SetRemote>,
     id_alloc: &mut ResMut<ConnectionIdAllocator>,
-    _lobby_info_w: &mut MessageWriter<OnLobbyInfoUpdate>,
 ) {
     let fields = doc.get("fields");
     if let Some(fields) = fields {
@@ -729,6 +651,7 @@ fn on_lobby_exit_cleanup(
     sig.client_answer_applied = false;
     sig.offer_conn = None;
     sig.client_join_pending = false;
+    sig.client_emitted_join = false;
     sig.host_connection_to_client_id.clear();
     shared.in_flight = false;
     shared.next_allowed_fetch_at_ms = 0.0;
@@ -755,51 +678,4 @@ impl P2PTransport for FirestoreWebRtcTransport {
     fn poll_transport(_world: &mut World) {}
 }
 
-fn broadcast_host_roster<PlayerData, PlayerInputData>(
-    sig: Res<SignalingState>,
-    mut info_r: MessageReader<OnLobbyInfoUpdate>,
-    mut w_send_all: MessageWriter<OnSendToAllReq<PlayerData, PlayerInputData>>,
-) where
-    PlayerData: serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + Clone
-        + Send
-        + Sync
-        + core::fmt::Debug
-        + 'static,
-    PlayerInputData: serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + Clone
-        + Send
-        + Sync
-        + core::fmt::Debug
-        + 'static,
-{
-    if !sig.is_host {
-        return;
-    }
-    for OnLobbyInfoUpdate(list) in info_r.read() {
-        let mut ids = list.clone();
-        if !ids.iter().any(|s| s == "Host") {
-            ids.push("Host".to_string());
-        }
-        let payload: Vec<PlayerInfo<PlayerData>> = ids
-            .into_iter()
-            .map(|label| PlayerInfo::<PlayerData> {
-                id: match label.as_str() {
-                    "Host" => NetworkedId::Host,
-                    _ => label
-                        .parse::<u64>()
-                        .map(NetworkedId::ClientId)
-                        .unwrap_or(NetworkedId::Host),
-                },
-                // We can't construct PlayerData here; send an empty default via JSON null if supported.
-                // Consumers should interpret PlayerInfo.data as app-defined; here we send unit using serde default.
-                data: serde_json::from_value(serde_json::Value::Null)
-                    .ok()
-                    .unwrap_or_else(|| unsafe { core::mem::MaybeUninit::zeroed().assume_init() }),
-            })
-            .collect();
-        w_send_all.write(OnSendToAllReq(P2PData::HostLobbyInfoUpdate(payload)));
-    }
-}
+// Roster broadcasting is now handled in bevy_easy_p2p; transport only emits OnTransportRosterChanged

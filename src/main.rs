@@ -1,23 +1,19 @@
-use bevy::{
-    input::{
-        ButtonState,
-        keyboard::{Key, KeyboardInput},
-    },
-    prelude::*,
-};
+use bevy::prelude::*;
+use bevy_easy_p2p::{ NetworkedId};
 use bevy_easy_p2p::{
     EasyP2P, EasyP2PPlugin, EasyP2PState, OnClientMessageReceived, OnHostMessageReceived,
-    OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyInfoUpdate, OnLobbyJoined, OnRosterUpdate,
-    P2PLobbyState,
+    OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyJoined, OnRosterUpdate, P2PLobbyState,
 };
 use bevy_firestore_p2p::FirestoreP2PPlugin;
 use bevy_firestore_p2p::FirestoreWebRtcTransport;
+use bevy_text_input::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 struct AppPlayerData {
     pub name: String,
 }
+
 
 impl From<String> for AppPlayerData {
     fn from(value: String) -> Self {
@@ -92,7 +88,7 @@ fn on_lobby_entered(mut r: MessageReader<OnLobbyEntered>) {
 
 fn on_lobby_exit(
     mut r: MessageReader<OnLobbyExit>,
-    mut inputs: Query<&mut Text, With<InputField>>,
+    mut inputs: Query<&mut Text, With<TextInput>>,
     mut history: ResMut<LobbyChatInputHistory>,
 ) {
     for OnLobbyExit(reason) in r.read() {
@@ -104,20 +100,17 @@ fn on_lobby_exit(
     }
 }
 
-fn on_lobby_info(mut r: MessageReader<OnLobbyInfoUpdate>) {
-    for OnLobbyInfoUpdate(list) in r.read() {
-        info!("Players: {:?}", list);
-    }
-}
+// Lobby info updates are now routed via OnRosterUpdate and EasyP2PState
 
 fn on_client_message_received(
     mut r: MessageReader<OnClientMessageReceived>,
     mut history: ResMut<LobbyChatInputHistory>,
+    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>
 ) {
     for OnClientMessageReceived(cid, text) in r.read() {
         info!("Client message received: {:?}: {}", cid, text);
         if !text.starts_with("__") {
-            history.add(format!("Client {}: {}", cid, text));
+            history.add(format!("{}: {}", easy.get_player_data(NetworkedId::ClientId(*cid)).name, text));
         }
     }
 }
@@ -125,11 +118,12 @@ fn on_client_message_received(
 fn on_host_message_received(
     mut r: MessageReader<OnHostMessageReceived>,
     mut history: ResMut<LobbyChatInputHistory>,
+    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>
 ) {
     for OnHostMessageReceived(text) in r.read() {
         info!("Host message received: {}", text);
         if !text.starts_with("__") {
-            history.add(format!("Host: {}", text));
+            history.add(format!("{}: {}", easy.get_player_data(NetworkedId::Host).name, text));
         }
     }
 }
@@ -139,7 +133,8 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .add_plugins((
             EasyP2PPlugin::<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>::default(),
-            FirestoreP2PPlugin::<AppPlayerData, AppPlayerInputData>(std::marker::PhantomData),
+            FirestoreP2PPlugin,
+            TextInputPlugin,
         ))
         .add_systems(Startup, (auto_join_from_url, setup))
         .add_systems(
@@ -149,7 +144,6 @@ fn main() {
                 on_lobby_joined,
                 on_lobby_entered,
                 on_lobby_exit,
-                on_lobby_info,
                 on_client_message_received,
                 on_host_message_received,
             ),
@@ -162,7 +156,6 @@ fn main() {
             (
                 lobby_code,
                 lobby_chat_input_history,
-                chat_input_inputs,
                 spawn_lobby_players_buttons,
                 spawn_client_players_buttons,
             ),
@@ -177,22 +170,10 @@ fn setup(mut commands: Commands) {
 #[derive(Component)]
 struct LobbyCodeText;
 
-fn lobby_code(state: Res<EasyP2PState>, mut texts: Query<&mut Text, With<LobbyCodeText>>) {
+fn lobby_code(state: Res<EasyP2PState<AppPlayerData>>, mut texts: Query<&mut Text, With<LobbyCodeText>>) {
     for mut text in texts.iter_mut() {
         *text = Text::new(state.lobby_code.clone());
     }
-}
-
-#[derive(Component)]
-struct InputField {
-    capitalize: bool,
-    no_spaces: bool,
-}
-
-#[derive(EntityEvent)]
-struct InputFieldSubmit {
-    entity: Entity,
-    text: String,
 }
 
 #[derive(Resource)]
@@ -222,68 +203,19 @@ fn lobby_chat_input_history(
     }
 }
 
-fn chat_input_inputs(
-    mut commands: Commands,
-    mut evr_kbd: MessageReader<KeyboardInput>,
-    mut inputs: Query<(Entity, &mut Text, &InputField)>,
-) {
-    for ev in evr_kbd.read() {
-        // We don't care about key releases, only key presses
-        if ev.state == ButtonState::Released {
-            continue;
-        }
-        for (entity, mut input, input_field) in inputs.iter_mut() {
-            match &ev.logical_key {
-                // Handle pressing Enter to finish the input
-                Key::Enter => {
-                    println!("Text input: {}", &*input.0);
-                    commands.entity(entity).trigger(|entity| InputFieldSubmit {
-                        entity: entity,
-                        text: input.0.clone(),
-                    });
-
-                    input.0.clear();
-                }
-                // Handle pressing Backspace to delete last char
-                Key::Backspace => {
-                    input.0.pop();
-                }
-                Key::Space => {
-                    if !input_field.no_spaces {
-                        input.0.push(' ');
-                    }
-                }
-                // Handle key presses that produce text characters
-                Key::Character(str) => {
-                    // Ignore any input that contains control (special) characters
-                    if str.chars().any(|c| c.is_control()) {
-                        continue;
-                    }
-                    if input_field.capitalize {
-                        input.0.push_str(str.to_uppercase().as_str());
-                    } else {
-                        input.0.push_str(str.as_str());
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
 fn players_buttons(
     commands: &mut Commands,
     parent: Entity,
-    players: Vec<(String, bool)>,
+    players: Vec<bevy_easy_p2p::PlayerInfo<AppPlayerData>>,
     is_host: bool,
 ) {
-    for (id, is_person_host) in players {
+    for player in players {
+        let is_person_host = player.id == NetworkedId::Host;
         if is_person_host == false && is_host {
             let button = commands
                 .spawn((
                     Button,
                     Node {
-                        width: px(150),
                         height: px(65),
                         border: UiRect::all(px(5)),
                         // horizontally center child text
@@ -296,7 +228,7 @@ fn players_buttons(
                     BorderRadius::MAX,
                     BackgroundColor(Color::linear_rgb(0.94, 0.00, 0.00)),
                     children![(
-                        Text::new(id),
+                        Text::new(player.data.name.clone()),
                         TextFont {
                             font_size: 33.0,
                             ..default()
@@ -330,7 +262,6 @@ fn players_buttons(
         commands.entity(parent).with_child((
             Button,
             Node {
-                width: px(150),
                 height: px(65),
                 border: UiRect::all(px(5)),
                 // horizontally center child text
@@ -343,7 +274,7 @@ fn players_buttons(
             BorderRadius::MAX,
             BackgroundColor(Color::linear_rgb(0.00, 0.00, 0.00)),
             children![(
-                Text::new(id),
+                Text::new(player.data.name.clone()),
                 TextFont {
                     font_size: 33.0,
                     ..default()
@@ -365,14 +296,14 @@ fn spawn_lobby_players_buttons(
     }
     for button in buttons.iter() {
         commands.entity(button).despawn_children();
-        players_buttons(&mut commands, button, easy.get_players(), easy.is_host());
+        players_buttons(&mut commands, button, easy.get_players().clone(), easy.is_host());
     }
 }
 
 fn spawn_client_players_buttons(
     mut commands: Commands,
     buttons: Query<Entity, With<LobbyPlayersButtons>>,
-    mut roster_r: MessageReader<OnRosterUpdate>,
+    mut roster_r: MessageReader<OnRosterUpdate<AppPlayerData>>,
     easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>,
 ) {
     if easy.is_host() {
@@ -385,7 +316,7 @@ fn spawn_client_players_buttons(
             players_buttons(
                 &mut commands,
                 button,
-                list.clone().into_iter().map(|id| (id, false)).collect(),
+                list.clone(),
                 false,
             );
         }
@@ -409,7 +340,6 @@ fn spawn_lobby(mut commands: Commands) {
         .spawn((
             Button,
             Node {
-                width: px(150),
                 height: px(65),
                 border: UiRect::all(px(5)),
                 // horizontally center child text
@@ -465,10 +395,7 @@ fn spawn_lobby(mut commands: Commands) {
         .spawn((
             // Accepts a `String` or any type that converts into a `String`, such as `&str`
             Text::new(""),
-            InputField {
-                capitalize: false,
-                no_spaces: false,
-            },
+            TextInput::new(false, false),
             Node {
                 position_type: PositionType::Absolute,
                 bottom: px(5),
@@ -481,11 +408,11 @@ fn spawn_lobby(mut commands: Commands) {
              mut easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>,
              mut history: ResMut<LobbyChatInputHistory>| {
                 if easy.is_host() {
-                    easy.send_message_all(trigger.text.clone());
+                    easy.send_message_all(trigger.text().to_string());
                 } else {
-                    easy.send_message_to_host(trigger.text.clone());
+                    easy.send_message_to_host(trigger.text().to_string());
                 }
-                history.add(format!("You: {}", trigger.text.clone()));
+                history.add(format!("You: {}", trigger.text()));
             },
         )
         .id();
@@ -523,7 +450,11 @@ fn spawn_lobby(mut commands: Commands) {
     ]);
 }
 
-fn spawn_menu(mut commands: Commands) {
+fn spawn_menu(mut commands: Commands, mut easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>) {
+    if easy.get_local_player_data().name.is_empty() {
+        easy.set_local_player_data(AppPlayerData { name: "YOUR_NAME".to_string() });
+    }
+    info!("spawn_menu: {:?}", easy.get_local_player_data());
     let menu = commands
         .spawn((
             DespawnOnExit(P2PLobbyState::OutOfLobby),
@@ -540,7 +471,6 @@ fn spawn_menu(mut commands: Commands) {
         .spawn((
             Button,
             Node {
-                width: px(150),
                 height: px(65),
                 border: UiRect::all(px(5)),
                 // horizontally center child text
@@ -570,23 +500,49 @@ fn spawn_menu(mut commands: Commands) {
         .id();
     let code_input = commands
         .spawn((
-            InputField {
-                capitalize: true,
-                no_spaces: true,
-            },
-            Text::new(""),
+            TextInput::new(true, true),
             Node {
                 position_type: PositionType::Absolute,
-                top: px(5),
-                left: px(5),
+                top: px(15),
+                left: px(15),
+                height: px(25),
+                width: px(150),
                 ..default()
             },
+             Outline {
+                width: px(6),
+                offset: px(6),
+                color: Color::WHITE,
+            }, 
         ))
         .observe(
             |trigger: On<InputFieldSubmit>, mut easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>| {
-                easy.join_lobby(&trigger.text);
+                easy.join_lobby(&trigger.text().to_string());
             },
         )
         .id();
-    commands.entity(menu).add_children(&[button, code_input]);
+    let name_input = commands
+    .spawn((
+        TextInput::new(false, false).with_max_characters(10),
+        Text::new(easy.get_local_player_data().name.clone()),
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(15),
+            right: px(15),
+            height: px(25),
+            ..default()
+        },
+        Outline {
+            width: px(6),
+            offset: px(6),
+            color: Color::WHITE,
+        }, 
+    ))
+    .observe(
+        |trigger: On<InputFieldChange>, mut easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>| {
+            easy.set_local_player_data(AppPlayerData { name: trigger.text().to_string() });
+        },
+    )
+    .id();
+    commands.entity(menu).add_children(&[button, code_input, name_input]);
 }

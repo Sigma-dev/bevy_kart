@@ -981,6 +981,7 @@ dependencies = [
  "bevy",
  "bevy_easy_p2p",
  "bevy_firestore_p2p",
+ "bevy_text_input",
  "bevy_webrtc",
  "gcloud-sdk",
  "js-sys",
@@ -1481,6 +1482,13 @@ dependencies = [
  "thiserror 2.0.17",
  "tracing",
  "wgpu-types",
+]
+
+[[package]]
+name = "bevy_text_input"
+version = "0.1.0"
+dependencies = [
+ "bevy",
 ]
 
 [[package]]

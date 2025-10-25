@@ -1,9 +1,9 @@
 use bevy::prelude::*;
-use bevy_easy_p2p::{ NetworkedId, NetworkedStatesExt};
 use bevy_easy_p2p::{
     EasyP2P, EasyP2PPlugin, EasyP2PState, OnClientMessageReceived, OnHostMessageReceived,
     OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyJoined, OnRosterUpdate, P2PLobbyState,
 };
+use bevy_easy_p2p::{NetworkedId, NetworkedStatesExt};
 use bevy_firestore_p2p::FirestoreP2PPlugin;
 use bevy_firestore_p2p::FirestoreWebRtcTransport;
 use bevy_text_input::prelude::*;
@@ -30,6 +30,11 @@ impl From<String> for AppPlayerData {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct AppPlayerInputData {
     pub forward: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+enum AppInstantiations {
+    Kart(NetworkedId),
 }
 
 fn get_url() -> Option<String> {
@@ -60,7 +65,12 @@ fn extract_query_param(target: &str) -> Option<String> {
 }
 
 fn auto_join_from_url(
-    mut easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>,
+    mut easy: EasyP2P<
+        FirestoreWebRtcTransport,
+        AppPlayerData,
+        AppPlayerInputData,
+        AppInstantiations,
+    >,
 ) {
     info!("auto_join_from_url");
     if let Some(room) = extract_query_param("room") {
@@ -106,17 +116,80 @@ fn on_lobby_exit(
     }
 }
 
+fn on_instantiation(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+    mut easy: EasyP2P<
+        FirestoreWebRtcTransport,
+        AppPlayerData,
+        AppPlayerInputData,
+        AppInstantiations,
+    >,
+) {
+    for data in easy.get_instantiations() {
+        match &data.instantiation {
+            AppInstantiations::Kart(id) => {
+                let player = easy.get_player_data(id.clone());
+                let texture = asset_server.load("sprites/karts.png");
+                let layout = TextureAtlasLayout::from_grid(UVec2::splat(8), 8, 1, None, None);
+                let texture_atlas_layout = texture_atlas_layouts.add(layout);
+                let id = commands
+                    .spawn((
+                        DespawnOnExit(AppState::Game),
+                        Sprite::from_atlas_image(
+                            texture,
+                            TextureAtlas {
+                                layout: texture_atlas_layout,
+                                index: 0,
+                            },
+                        ),
+                        data.transform,
+                        id.clone(),
+                    ))
+                    .id();
+                commands.spawn((
+                    FollowTransform(id),
+                    children![(
+                        Text2d::new(player.name),
+                        Transform::from_xyz(0., 5., 100.).with_scale(Vec3::splat(0.1)),
+                    )],
+                ));
+            }
+        }
+    }
+}
+
+#[derive(Component)]
+#[require(Transform)]
+
+struct FollowTransform(Entity);
+
+fn follow_transform(
+    transforms: Query<&Transform, Without<FollowTransform>>,
+    mut follow_transforms: Query<(&mut Transform, &FollowTransform)>,
+) {
+    for (mut transform, follow_transform) in follow_transforms.iter_mut() {
+        let target_transform = transforms.get(follow_transform.0).unwrap();
+        transform.translation = target_transform.translation;
+    }
+}
+
 // Lobby info updates are now routed via OnRosterUpdate and EasyP2PState
 
 fn on_client_message_received(
     mut r: MessageReader<OnClientMessageReceived>,
     mut history: ResMut<LobbyChatInputHistory>,
-    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>
+    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
 ) {
     for OnClientMessageReceived(cid, text) in r.read() {
         info!("Client message received: {:?}: {}", cid, text);
         if !text.starts_with("__") {
-            history.add(format!("{}: {}", easy.get_player_data(NetworkedId::ClientId(*cid)).name, text));
+            history.add(format!(
+                "{}: {}",
+                easy.get_player_data(NetworkedId::ClientId(*cid)).name,
+                text
+            ));
         }
     }
 }
@@ -124,21 +197,30 @@ fn on_client_message_received(
 fn on_host_message_received(
     mut r: MessageReader<OnHostMessageReceived>,
     mut history: ResMut<LobbyChatInputHistory>,
-    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>
+    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
 ) {
     for OnHostMessageReceived(text) in r.read() {
         info!("Host message received: {}", text);
         if !text.starts_with("__") {
-            history.add(format!("{}: {}", easy.get_player_data(NetworkedId::Host).name, text));
+            history.add(format!(
+                "{}: {}",
+                easy.get_player_data(NetworkedId::Host).name,
+                text
+            ));
         }
     }
 }
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .add_plugins((
-            EasyP2PPlugin::<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>::default(),
+            EasyP2PPlugin::<
+                FirestoreWebRtcTransport,
+                AppPlayerData,
+                AppPlayerInputData,
+                AppInstantiations,
+            >::default(),
             FirestoreP2PPlugin,
             TextInputPlugin,
         ))
@@ -154,14 +236,17 @@ fn main() {
                 on_lobby_exit,
                 on_client_message_received,
                 on_host_message_received,
+                on_instantiation,
             ),
         )
         .insert_resource(LobbyChatInputHistory(Vec::new()))
         .add_systems(OnEnter(P2PLobbyState::OutOfLobby), spawn_menu)
         .add_systems(OnEnter(P2PLobbyState::InLobby), spawn_lobby)
+        .add_systems(OnEnter(AppState::Game), spawn_track)
         .add_systems(
             Update,
             (
+                follow_transform,
                 lobby_code,
                 lobby_chat_input_history,
                 spawn_lobby_players_buttons,
@@ -172,13 +257,21 @@ fn main() {
 }
 
 fn setup(mut commands: Commands) {
-    commands.spawn(Camera2d);
+    let mut projection = OrthographicProjection::default_2d();
+    projection.scaling_mode = bevy::camera::ScalingMode::Fixed {
+        width: 256.,
+        height: 144.,
+    };
+    commands.spawn((Camera2d, Projection::Orthographic(projection)));
 }
 
 #[derive(Component)]
 struct LobbyCodeText;
 
-fn lobby_code(state: Res<EasyP2PState<AppPlayerData>>, mut texts: Query<&mut Text, With<LobbyCodeText>>) {
+fn lobby_code(
+    state: Res<EasyP2PState<AppPlayerData>>,
+    mut texts: Query<&mut Text, With<LobbyCodeText>>,
+) {
     for mut text in texts.iter_mut() {
         *text = Text::new(state.lobby_code.clone());
     }
@@ -239,7 +332,6 @@ fn players_buttons(
                     BorderRadius::MAX,
                     BackgroundColor(Color::linear_rgb(0.94, 0.00, 0.00)),
                     KickTarget(player.id),
-
                     children![(
                         Text::new(player.data.name.clone()),
                         TextFont {
@@ -256,13 +348,14 @@ fn players_buttons(
                         FirestoreWebRtcTransport,
                         AppPlayerData,
                         AppPlayerInputData,
+                        AppInstantiations,
                     >,
                      kick_targets: Query<&KickTarget>| {
                         let target = kick_targets.get(trigger.entity).unwrap();
                         if let NetworkedId::ClientId(cid) = target.0 {
                             easy.kick(cid);
                         }
-                    }
+                    },
                 )
                 .id();
             commands.entity(parent).add_child(button);
@@ -299,7 +392,7 @@ fn players_buttons(
 fn spawn_lobby_players_buttons(
     mut commands: Commands,
     buttons: Query<(Entity, Option<&Children>), With<LobbyPlayersButtons>>,
-    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>,
+    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
 ) {
     if !easy.is_host() {
         return;
@@ -312,14 +405,13 @@ fn spawn_lobby_players_buttons(
         commands.entity(button).despawn_children();
         players_buttons(&mut commands, button, players, easy.is_host());
     }
-    
 }
 
 fn spawn_client_players_buttons(
     mut commands: Commands,
     buttons: Query<Entity, With<LobbyPlayersButtons>>,
     mut roster_r: MessageReader<OnRosterUpdate<AppPlayerData>>,
-    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>,
+    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
 ) {
     if easy.is_host() {
         return;
@@ -327,17 +419,48 @@ fn spawn_client_players_buttons(
     for OnRosterUpdate(list) in roster_r.read() {
         for button in buttons.iter() {
             commands.entity(button).despawn_children();
-            players_buttons(
-                &mut commands,
-                button,
-                list.clone(),
-                false,
-            );
+            players_buttons(&mut commands, button, list.clone(), false);
         }
     }
 }
 
-fn spawn_lobby(mut commands: Commands) {
+fn spawn_track(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut easy: EasyP2P<
+        FirestoreWebRtcTransport,
+        AppPlayerData,
+        AppPlayerInputData,
+        AppInstantiations,
+    >,
+) {
+    commands.spawn((
+        DespawnOnExit(AppState::Game),
+        Sprite::from_image(asset_server.load("sprites/track.png")),
+    ));
+    if !easy.is_host() {
+        return;
+    }
+    for (i, player) in easy.get_players().iter().enumerate() {
+        let i = i as i32;
+        let position: Vec3 = Vec3::new(
+            (-25 + (i / 3) * -10) as f32,
+            (-39 + (i % 3) * -7) as f32,
+            10.,
+        );
+        easy.instantiate(
+            AppInstantiations::Kart(player.id.clone()),
+            Transform::from_translation(position)
+                .with_rotation(Quat::from_rotation_z(-90_f32.to_radians())),
+        );
+    }
+}
+
+fn spawn_lobby(
+    mut commands: Commands,
+    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
+) {
+    let is_host = easy.is_host();
     let lobby = commands
         .spawn((
             DespawnOnExit(P2PLobbyState::InLobby),
@@ -377,7 +500,13 @@ fn spawn_lobby(mut commands: Commands) {
             )],
         ))
         .observe(
-            |_trigger: On<Pointer<Press>>, mut easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>| {
+            |_trigger: On<Pointer<Press>>,
+             mut easy: EasyP2P<
+                FirestoreWebRtcTransport,
+                AppPlayerData,
+                AppPlayerInputData,
+                AppInstantiations,
+            >| {
                 easy.exit_lobby();
             },
         )
@@ -420,7 +549,12 @@ fn spawn_lobby(mut commands: Commands) {
         ))
         .observe(
             |trigger: On<InputFieldSubmit>,
-             mut easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>,
+             mut easy: EasyP2P<
+                FirestoreWebRtcTransport,
+                AppPlayerData,
+                AppPlayerInputData,
+                AppInstantiations,
+            >,
              mut history: ResMut<LobbyChatInputHistory>| {
                 if easy.is_host() {
                     easy.send_message_all(trigger.text().to_string());
@@ -456,50 +590,63 @@ fn spawn_lobby(mut commands: Commands) {
             },
         ))
         .id();
-    let start_button = commands
-    .spawn((
-        Button,
-        Node {
-            height: px(65),
-            border: UiRect::all(px(5)),
-            // horizontally center child text
-            justify_content: JustifyContent::Center,
-            // vertically center child text
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        BorderColor::all(Color::WHITE),
-        BorderRadius::MAX,
-        BackgroundColor(Color::BLACK),
-        children![(
-            Text::new("Start Game"),
-            TextFont {
-                font_size: 33.0,
-                ..default()
-            },
-            TextColor(Color::srgb(0.9, 0.9, 0.9)),
-            TextShadow::default(),
-        )],
-    ))
-    .observe(
-        |_trigger: On<Pointer<Press>>, mut next_state: ResMut<NextState<AppState>>| {
-            next_state.set(AppState::Game);
-        },
-    )
-    .id();
+
+    if is_host {
+        let start_button = commands
+            .spawn((
+                Button,
+                Node {
+                    height: px(65),
+                    border: UiRect::all(px(5)),
+                    // horizontally center child text
+                    justify_content: JustifyContent::Center,
+                    // vertically center child text
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BorderColor::all(Color::WHITE),
+                BorderRadius::MAX,
+                BackgroundColor(Color::BLACK),
+                children![(
+                    Text::new("Start Game"),
+                    TextFont {
+                        font_size: 33.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                    TextShadow::default(),
+                )],
+            ))
+            .observe(
+                |_trigger: On<Pointer<Press>>, mut next_state: ResMut<NextState<AppState>>| {
+                    next_state.set(AppState::Game);
+                },
+            )
+            .id();
+        commands.entity(lobby).add_child(start_button);
+    }
     commands.entity(lobby).add_children(&[
         exit_button,
         lobby_code_text,
         lobby_chat_input_text,
         lobby_chat_input_history,
         buttons,
-        start_button,
     ]);
 }
 
-fn spawn_menu(mut commands: Commands, mut easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>) {
+fn spawn_menu(
+    mut commands: Commands,
+    mut easy: EasyP2P<
+        FirestoreWebRtcTransport,
+        AppPlayerData,
+        AppPlayerInputData,
+        AppInstantiations,
+    >,
+) {
     if easy.get_local_player_data().name.is_empty() {
-        easy.set_local_player_data(AppPlayerData { name: "YOUR_NAME".to_string() });
+        easy.set_local_player_data(AppPlayerData {
+            name: "YOUR_NAME".to_string(),
+        });
     }
     let menu = commands
         .spawn((
@@ -540,7 +687,13 @@ fn spawn_menu(mut commands: Commands, mut easy: EasyP2P<FirestoreWebRtcTransport
             )],
         ))
         .observe(
-            |_trigger: On<Pointer<Press>>, mut easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>| {
+            |_trigger: On<Pointer<Press>>,
+             mut easy: EasyP2P<
+                FirestoreWebRtcTransport,
+                AppPlayerData,
+                AppPlayerInputData,
+                AppInstantiations,
+            >| {
                 easy.create_lobby();
             },
         )
@@ -556,40 +709,56 @@ fn spawn_menu(mut commands: Commands, mut easy: EasyP2P<FirestoreWebRtcTransport
                 width: px(150),
                 ..default()
             },
-             Outline {
+            Outline {
                 width: px(6),
                 offset: px(6),
                 color: Color::WHITE,
-            }, 
+            },
         ))
         .observe(
-            |trigger: On<InputFieldSubmit>, mut easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>| {
+            |trigger: On<InputFieldSubmit>,
+             mut easy: EasyP2P<
+                FirestoreWebRtcTransport,
+                AppPlayerData,
+                AppPlayerInputData,
+                AppInstantiations,
+            >| {
                 easy.join_lobby(&trigger.text().to_string());
             },
         )
         .id();
     let name_input = commands
-    .spawn((
-        TextInput::new(false, false).with_max_characters(10),
-        Text::new(easy.get_local_player_data().name.clone()),
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(15),
-            right: px(15),
-            height: px(25),
-            ..default()
-        },
-        Outline {
-            width: px(6),
-            offset: px(6),
-            color: Color::WHITE,
-        }, 
-    ))
-    .observe(
-        |trigger: On<InputFieldChange>, mut easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData>| {
-            easy.set_local_player_data(AppPlayerData { name: trigger.text().to_string() });
-        },
-    )
-    .id();
-    commands.entity(menu).add_children(&[button, code_input, name_input]);
+        .spawn((
+            TextInput::new(false, false).with_max_characters(10),
+            Text::new(easy.get_local_player_data().name.clone()),
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(15),
+                right: px(15),
+                height: px(25),
+                ..default()
+            },
+            Outline {
+                width: px(6),
+                offset: px(6),
+                color: Color::WHITE,
+            },
+        ))
+        .observe(
+            |trigger: On<InputFieldChange>,
+             mut easy: EasyP2P<
+                FirestoreWebRtcTransport,
+                AppPlayerData,
+                AppPlayerInputData,
+                AppInstantiations,
+            >| {
+                easy.set_local_player_data(AppPlayerData {
+                    name: trigger.text().to_string(),
+                });
+            },
+        )
+        .id();
+    commands
+        .entity(menu)
+        .add_children(&[button, code_input, name_input]);
 }

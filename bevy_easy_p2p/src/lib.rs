@@ -17,7 +17,7 @@ pub enum P2PLobbyState {
 }
 
 // Typed transport data
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum NetworkedId {
     Host,
     ClientId(u64),
@@ -30,13 +30,81 @@ pub struct PlayerInfo<PlayerData> {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum P2PData<PlayerData, PlayerInputData> {
+pub enum P2PData<PlayerData, PlayerInputData, Instantiations> {
     ClientLobbyChatMessage(String, NetworkedId),
     ClientInput(PlayerInputData),
     ClientDataUpdate(PlayerData),
     HostLobbyInfoUpdate(Vec<PlayerInfo<PlayerData>>),
     // Generic state sync payload: (registered type index, serialized JSON payload)
     StateSync(u8, String),
+    HostInstantiation(InstantiationDataNet<Instantiations>),
+}
+
+// Serializable transform wrapper for network transport
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct NetTransform {
+    pub translation: [f32; 3],
+    pub rotation: [f32; 4],
+    pub scale: [f32; 3],
+}
+
+impl From<&Transform> for NetTransform {
+    fn from(t: &Transform) -> Self {
+        Self {
+            translation: [t.translation.x, t.translation.y, t.translation.z],
+            rotation: [t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w],
+            scale: [t.scale.x, t.scale.y, t.scale.z],
+        }
+    }
+}
+
+impl From<&NetTransform> for Transform {
+    fn from(nt: &NetTransform) -> Self {
+        Transform::from_xyz(nt.translation[0], nt.translation[1], nt.translation[2])
+            .with_rotation(Quat::from_xyzw(
+                nt.rotation[0],
+                nt.rotation[1],
+                nt.rotation[2],
+                nt.rotation[3],
+            ))
+            .with_scale(Vec3::new(nt.scale[0], nt.scale[1], nt.scale[2]))
+    }
+}
+
+// Transport payload for instantiation (serializable)
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct InstantiationDataNet<Instantiations> {
+    pub transform: NetTransform,
+    pub instantiation: Instantiations,
+}
+
+// Local event payload for instantiation (uses Transform directly)
+#[derive(Clone, Debug)]
+pub struct InstantiationData<Instantiations> {
+    pub transform: Transform,
+    pub instantiation: Instantiations,
+}
+
+impl<Instantiations: Clone> From<&InstantiationData<Instantiations>>
+    for InstantiationDataNet<Instantiations>
+{
+    fn from(value: &InstantiationData<Instantiations>) -> Self {
+        Self {
+            transform: NetTransform::from(&value.transform),
+            instantiation: value.instantiation.clone(),
+        }
+    }
+}
+
+impl<Instantiations: Clone> From<&InstantiationDataNet<Instantiations>>
+    for InstantiationData<Instantiations>
+{
+    fn from(value: &InstantiationDataNet<Instantiations>) -> Self {
+        Self {
+            transform: Transform::from(&value.transform),
+            instantiation: value.instantiation.clone(),
+        }
+    }
 }
 
 // Events
@@ -64,9 +132,9 @@ pub struct OnRosterUpdate<
         + PartialEq,
 >(pub Vec<PlayerInfo<PlayerData>>);
 #[derive(Message, Clone)]
-pub struct OnRelayToAllExcept<PlayerData, PlayerInputData>(
+pub struct OnRelayToAllExcept<PlayerData, PlayerInputData, Instantiations>(
     pub ClientId,
-    pub P2PData<PlayerData, PlayerInputData>,
+    pub P2PData<PlayerData, PlayerInputData, Instantiations>,
 );
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,13 +160,15 @@ pub struct OnTransportIncomingFromClient(pub ClientId, pub String);
 #[derive(Message, Clone)]
 pub struct OnTransportIncomingFromHost(pub String);
 #[derive(Message, Clone)]
-pub struct OnInternalClientData<PlayerData, PlayerInputData>(
+pub struct HandleInstantiation<Instantiations>(pub InstantiationData<Instantiations>);
+#[derive(Message, Clone)]
+pub struct OnInternalClientData<PlayerData, PlayerInputData, Instantiations>(
     pub ClientId,
-    pub P2PData<PlayerData, PlayerInputData>,
+    pub P2PData<PlayerData, PlayerInputData, Instantiations>,
 );
 #[derive(Message, Clone)]
-pub struct OnInternalHostData<PlayerData, PlayerInputData>(
-    pub P2PData<PlayerData, PlayerInputData>,
+pub struct OnInternalHostData<PlayerData, PlayerInputData, Instantiations>(
+    pub P2PData<PlayerData, PlayerInputData, Instantiations>,
 );
 
 // Heartbeat removed: rely on WebRTC close events instead
@@ -175,24 +245,36 @@ pub struct EasyP2P<
         + Default
         + PartialEq,
     PlayerInputData: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
+    Instantiations: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
 > {
     create_w: MessageWriter<'w, OnCreateLobbyReq>,
     join_w: MessageWriter<'w, OnJoinLobbyReq>,
     exit_w: MessageWriter<'w, OnExitLobbyReq>,
-    send_host_w: MessageWriter<'w, OnSendToHostReq<PlayerData, PlayerInputData>>,
-    send_all_w: MessageWriter<'w, OnSendToAllReq<PlayerData, PlayerInputData>>,
-    send_client_w: MessageWriter<'w, OnSendToClientReq<PlayerData, PlayerInputData>>,
+    send_host_w: MessageWriter<'w, OnSendToHostReq<PlayerData, PlayerInputData, Instantiations>>,
+    send_all_w: MessageWriter<'w, OnSendToAllReq<PlayerData, PlayerInputData, Instantiations>>,
+    send_client_w:
+        MessageWriter<'w, OnSendToClientReq<PlayerData, PlayerInputData, Instantiations>>,
     kick_w: MessageWriter<'w, OnKickReq>,
+    instantiation_set: ParamSet<
+        'w,
+        's,
+        (
+            MessageWriter<'w, HandleInstantiation<Instantiations>>,
+            MessageReader<'w, 's, HandleInstantiation<Instantiations>>,
+        ),
+    >,
     state: ResMut<'w, EasyP2PState<PlayerData>>,
     _marker: std::marker::PhantomData<&'s T>,
 }
 
-impl<'w, 's, T: P2PTransport, PlayerData: Default + PartialEq, PlayerInputData>
-    EasyP2P<'w, 's, T, PlayerData, PlayerInputData>
+impl<'w, 's, T: P2PTransport, PlayerData: Default + PartialEq, PlayerInputData, Instantiations>
+    EasyP2P<'w, 's, T, PlayerData, PlayerInputData, Instantiations>
 where
     PlayerData:
         Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
     PlayerInputData:
+        Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
+    Instantiations:
         Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
 {
     pub fn create_lobby(&mut self) {
@@ -224,6 +306,32 @@ where
         );
         self.send_client_w.write(OnSendToClientReq(client_id, msg));
     }
+    pub fn instantiate(&mut self, instantiation: Instantiations, transform: Transform) {
+        // Emit local instantiation event
+        self.instantiation_set
+            .p0()
+            .write(HandleInstantiation(InstantiationData {
+                transform: transform.clone(),
+                instantiation: instantiation.clone(),
+            }));
+        // Broadcast to clients if host
+        if self.state.is_host {
+            let net: InstantiationDataNet<Instantiations> =
+                InstantiationDataNet::from(&InstantiationData {
+                    transform,
+                    instantiation,
+                });
+            self.send_all_w
+                .write(OnSendToAllReq(P2PData::HostInstantiation(net)));
+        }
+    }
+    pub fn get_instantiations(&mut self) -> Vec<InstantiationData<Instantiations>> {
+        self.instantiation_set
+            .p1()
+            .read()
+            .map(|inst| inst.0.clone())
+            .collect()
+    }
     pub fn kick(&mut self, client_id: ClientId) {
         self.kick_w.write(OnKickReq(client_id));
     }
@@ -240,8 +348,7 @@ where
         self.state.local_player_data = data;
     }
     pub fn get_player_data(&self, id: NetworkedId) -> PlayerData {
-        self.state
-            .players
+        self.get_players()
             .iter()
             .find(|player| player.id == id)
             .unwrap()
@@ -250,19 +357,20 @@ where
     }
 }
 
-pub struct EasyP2PPlugin<T: P2PTransport, PlayerData, PlayerInputData>(
-    std::marker::PhantomData<(T, PlayerData, PlayerInputData)>,
+pub struct EasyP2PPlugin<T: P2PTransport, PlayerData, PlayerInputData, Instantiations>(
+    std::marker::PhantomData<(T, PlayerData, PlayerInputData, Instantiations)>,
 );
 
-impl<T: P2PTransport, PlayerData, PlayerInputData> Default
-    for EasyP2PPlugin<T, PlayerData, PlayerInputData>
+impl<T: P2PTransport, PlayerData, PlayerInputData, Instantiations> Default
+    for EasyP2PPlugin<T, PlayerData, PlayerInputData, Instantiations>
 {
     fn default() -> Self {
         Self(std::marker::PhantomData)
     }
 }
 
-impl<T, PlayerData, PlayerInputData> Plugin for EasyP2PPlugin<T, PlayerData, PlayerInputData>
+impl<T, PlayerData, PlayerInputData, Instantiations> Plugin
+    for EasyP2PPlugin<T, PlayerData, PlayerInputData, Instantiations>
 where
     T: P2PTransport,
     PlayerData: Serialize
@@ -276,6 +384,8 @@ where
         + PartialEq,
     PlayerInputData:
         Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
+    Instantiations:
+        Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
 {
     fn build(&self, app: &mut App) {
         app.init_resource::<EasyP2PState<PlayerData>>()
@@ -285,9 +395,9 @@ where
             // Request channel messages
             .add_message::<OnCreateLobbyReq>()
             .add_message::<OnJoinLobbyReq>()
-            .add_message::<OnSendToHostReq<PlayerData, PlayerInputData>>()
-            .add_message::<OnSendToAllReq<PlayerData, PlayerInputData>>()
-            .add_message::<OnSendToClientReq<PlayerData, PlayerInputData>>()
+            .add_message::<OnSendToHostReq<PlayerData, PlayerInputData, Instantiations>>()
+            .add_message::<OnSendToAllReq<PlayerData, PlayerInputData, Instantiations>>()
+            .add_message::<OnSendToClientReq<PlayerData, PlayerInputData, Instantiations>>()
             .add_message::<OnExitLobbyReq>()
             .add_message::<OnKickReq>()
             .add_message::<OnLobbyCreated>()
@@ -295,8 +405,8 @@ where
             .add_message::<OnLobbyEntered>()
             .add_message::<OnClientMessageReceived>()
             .add_message::<OnHostMessageReceived>()
-            .add_message::<OnInternalClientData<PlayerData, PlayerInputData>>()
-            .add_message::<OnInternalHostData<PlayerData, PlayerInputData>>()
+            .add_message::<OnInternalClientData<PlayerData, PlayerInputData, Instantiations>>()
+            .add_message::<OnInternalHostData<PlayerData, PlayerInputData, Instantiations>>()
             .add_message::<OnLobbyExit>()
             .add_message::<OnTransportRosterChanged>()
             .add_message::<OnTransportSendToHost>()
@@ -306,19 +416,24 @@ where
             .add_message::<OnTransportIncomingFromClient>()
             .add_message::<OnTransportIncomingFromHost>()
             .add_message::<OnRosterUpdate<PlayerData>>()
-            .add_message::<OnRelayToAllExcept<PlayerData, PlayerInputData>>()
+            .add_message::<OnRelayToAllExcept<PlayerData, PlayerInputData, Instantiations>>()
+            .add_message::<HandleInstantiation<Instantiations>>()
             .add_systems(
                 Update,
                 ((
                     (state_update_system::<PlayerData>),
                     (
                         on_external_lobby_exit::<PlayerData>,
-                        intercept_data_messages::<PlayerData, PlayerInputData>,
-                        send_local_data_after_enter::<PlayerData, PlayerInputData>,
-                        handle_client_data_update_on_host::<PlayerData, PlayerInputData>,
-                        broadcast_roster_on_host::<PlayerData, PlayerInputData>,
-                        encode_outgoing::<PlayerData, PlayerInputData>,
-                        decode_incoming::<PlayerData, PlayerInputData>,
+                        intercept_data_messages::<PlayerData, PlayerInputData, Instantiations>,
+                        send_local_data_after_enter::<PlayerData, PlayerInputData, Instantiations>,
+                        handle_client_data_update_on_host::<
+                            PlayerData,
+                            PlayerInputData,
+                            Instantiations,
+                        >,
+                        broadcast_roster_on_host::<PlayerData, PlayerInputData, Instantiations>,
+                        encode_outgoing::<PlayerData, PlayerInputData, Instantiations>,
+                        decode_incoming::<PlayerData, PlayerInputData, Instantiations>,
                     ),
                 )
                     .chain(),),
@@ -371,13 +486,17 @@ pub struct OnCreateLobbyReq;
 #[derive(Message, Clone)]
 pub struct OnJoinLobbyReq(pub String);
 #[derive(Message, Clone)]
-pub struct OnSendToHostReq<PlayerData, PlayerInputData>(pub P2PData<PlayerData, PlayerInputData>);
+pub struct OnSendToHostReq<PlayerData, PlayerInputData, Instantiations>(
+    pub P2PData<PlayerData, PlayerInputData, Instantiations>,
+);
 #[derive(Message, Clone)]
-pub struct OnSendToAllReq<PlayerData, PlayerInputData>(pub P2PData<PlayerData, PlayerInputData>);
+pub struct OnSendToAllReq<PlayerData, PlayerInputData, Instantiations>(
+    pub P2PData<PlayerData, PlayerInputData, Instantiations>,
+);
 #[derive(Message, Clone)]
-pub struct OnSendToClientReq<PlayerData, PlayerInputData>(
+pub struct OnSendToClientReq<PlayerData, PlayerInputData, Instantiations>(
     pub ClientId,
-    pub P2PData<PlayerData, PlayerInputData>,
+    pub P2PData<PlayerData, PlayerInputData, Instantiations>,
 );
 #[derive(Message, Clone)]
 pub struct OnExitLobbyReq;
@@ -426,9 +545,10 @@ fn broadcast_roster_on_host<
         + Default
         + PartialEq,
     PlayerInputData: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
+    Instantiations: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
 >(
     mut info_r: MessageReader<OnTransportRosterChanged>,
-    mut w_send_all: MessageWriter<OnSendToAllReq<PlayerData, PlayerInputData>>,
+    mut w_send_all: MessageWriter<OnSendToAllReq<PlayerData, PlayerInputData, Instantiations>>,
     mut state: ResMut<EasyP2PState<PlayerData>>,
 ) {
     if !state.is_host {
@@ -462,11 +582,14 @@ fn encode_outgoing<
         + Default
         + PartialEq,
     PlayerInputData: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
+    Instantiations: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
 >(
-    mut to_host_r: MessageReader<OnSendToHostReq<PlayerData, PlayerInputData>>,
-    mut to_all_r: MessageReader<OnSendToAllReq<PlayerData, PlayerInputData>>,
-    mut to_client_r: MessageReader<OnSendToClientReq<PlayerData, PlayerInputData>>,
-    mut relay_except_r: MessageReader<OnRelayToAllExcept<PlayerData, PlayerInputData>>,
+    mut to_host_r: MessageReader<OnSendToHostReq<PlayerData, PlayerInputData, Instantiations>>,
+    mut to_all_r: MessageReader<OnSendToAllReq<PlayerData, PlayerInputData, Instantiations>>,
+    mut to_client_r: MessageReader<OnSendToClientReq<PlayerData, PlayerInputData, Instantiations>>,
+    mut relay_except_r: MessageReader<
+        OnRelayToAllExcept<PlayerData, PlayerInputData, Instantiations>,
+    >,
     mut w_send_host: MessageWriter<OnTransportSendToHost>,
     mut w_send_all: MessageWriter<OnTransportSendToAll>,
     mut w_send_client: MessageWriter<OnTransportSendToClient>,
@@ -505,19 +628,24 @@ fn decode_incoming<
         + Default
         + PartialEq,
     PlayerInputData: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
+    Instantiations: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
 >(
     mut from_client_r: MessageReader<OnTransportIncomingFromClient>,
     mut from_host_r: MessageReader<OnTransportIncomingFromHost>,
-    mut ev_client: MessageWriter<OnInternalClientData<PlayerData, PlayerInputData>>,
-    mut ev_host: MessageWriter<OnInternalHostData<PlayerData, PlayerInputData>>,
+    mut ev_client: MessageWriter<OnInternalClientData<PlayerData, PlayerInputData, Instantiations>>,
+    mut ev_host: MessageWriter<OnInternalHostData<PlayerData, PlayerInputData, Instantiations>>,
 ) {
     for OnTransportIncomingFromClient(cid, text) in from_client_r.read() {
-        if let Ok(data) = serde_json::from_str::<P2PData<PlayerData, PlayerInputData>>(text) {
+        if let Ok(data) =
+            serde_json::from_str::<P2PData<PlayerData, PlayerInputData, Instantiations>>(text)
+        {
             ev_client.write(OnInternalClientData(*cid, data));
         }
     }
     for OnTransportIncomingFromHost(text) in from_host_r.read() {
-        if let Ok(data) = serde_json::from_str::<P2PData<PlayerData, PlayerInputData>>(text) {
+        if let Ok(data) =
+            serde_json::from_str::<P2PData<PlayerData, PlayerInputData, Instantiations>>(text)
+        {
             ev_host.write(OnInternalHostData(data));
         }
     }
@@ -566,20 +694,27 @@ fn state_update_system<
     }
 }
 
-fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData>(
+fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData, Instantiations>(
     mut commands: Commands,
-    mut internal_client_r: MessageReader<OnInternalClientData<PlayerData, PlayerInputData>>,
-    mut internal_host_r: MessageReader<OnInternalHostData<PlayerData, PlayerInputData>>,
+    mut internal_client_r: MessageReader<
+        OnInternalClientData<PlayerData, PlayerInputData, Instantiations>,
+    >,
+    mut internal_host_r: MessageReader<
+        OnInternalHostData<PlayerData, PlayerInputData, Instantiations>,
+    >,
     mut client_w: MessageWriter<OnClientMessageReceived>,
     mut host_w: MessageWriter<OnHostMessageReceived>,
     mut roster_w: MessageWriter<OnRosterUpdate<PlayerData>>,
-    mut relay_w: MessageWriter<OnRelayToAllExcept<PlayerData, PlayerInputData>>,
+    mut relay_w: MessageWriter<OnRelayToAllExcept<PlayerData, PlayerInputData, Instantiations>>,
+    mut inst_w: MessageWriter<HandleInstantiation<Instantiations>>,
     mut state: ResMut<EasyP2PState<PlayerData>>,
     register: Res<SyncedStateRegister>,
 ) where
     PlayerData:
         Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
     PlayerInputData:
+        Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
+    Instantiations:
         Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
 {
     for OnInternalClientData(cid, data) in internal_client_r.read() {
@@ -607,6 +742,11 @@ fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData>(
                     .data = data.clone();
             }
             P2PData::StateSync(_, _) => {}
+            P2PData::HostInstantiation(inst) => {
+                // Clients receive broadcasted instantiation; emit local event
+                let local: InstantiationData<Instantiations> = InstantiationData::from(&*inst);
+                inst_w.write(HandleInstantiation(local));
+            }
         }
     }
     for OnInternalHostData(data) in internal_host_r.read() {
@@ -634,6 +774,11 @@ fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData>(
             }
             P2PData::ClientInput(_) => {}
             P2PData::ClientDataUpdate(_) => {}
+            P2PData::HostInstantiation(inst) => {
+                // Host receiving own broadcast is unusual, but if transport loops back, handle it
+                let local: InstantiationData<Instantiations> = InstantiationData::from(&*inst);
+                inst_w.write(HandleInstantiation(local));
+            }
         }
     }
 }
@@ -649,10 +794,11 @@ fn send_local_data_after_enter<
         + Default
         + PartialEq,
     PlayerInputData: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
+    Instantiations: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
 >(
     mut entered_r: MessageReader<OnLobbyEntered>,
     state: Res<EasyP2PState<PlayerData>>,
-    mut w_send_host: MessageWriter<OnSendToHostReq<PlayerData, PlayerInputData>>,
+    mut w_send_host: MessageWriter<OnSendToHostReq<PlayerData, PlayerInputData, Instantiations>>,
 ) {
     for OnLobbyEntered(_code) in entered_r.read() {
         if state.is_host {
@@ -739,7 +885,8 @@ fn host_broadcast_state_change<S>(
     *last = Some(current_value.clone());
     if let Some(index) = register.indexes.get(&TypeId::of::<S>()) {
         if let Ok(text) = serde_json::to_string(&current_value) {
-            if let Ok(payload) = serde_json::to_string(&P2PData::<(), ()>::StateSync(*index, text))
+            if let Ok(payload) =
+                serde_json::to_string(&P2PData::<(), (), ()>::StateSync(*index, text))
             {
                 w_send_all.write(OnTransportSendToAll(payload));
             }
@@ -762,10 +909,13 @@ fn handle_client_data_update_on_host<
         + Default
         + PartialEq,
     PlayerInputData: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
+    Instantiations: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
 >(
-    mut internal_client_r: MessageReader<OnInternalClientData<PlayerData, PlayerInputData>>,
+    mut internal_client_r: MessageReader<
+        OnInternalClientData<PlayerData, PlayerInputData, Instantiations>,
+    >,
     mut state: ResMut<EasyP2PState<PlayerData>>,
-    mut w_send_all: MessageWriter<OnSendToAllReq<PlayerData, PlayerInputData>>,
+    mut w_send_all: MessageWriter<OnSendToAllReq<PlayerData, PlayerInputData, Instantiations>>,
 ) {
     if !state.is_host {
         return;

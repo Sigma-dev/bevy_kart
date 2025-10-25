@@ -137,6 +137,9 @@ pub struct OnRelayToAllExcept<PlayerData, PlayerInputData, Instantiations>(
     pub P2PData<PlayerData, PlayerInputData, Instantiations>,
 );
 
+#[derive(Message, Clone)]
+pub struct OnClientInput<PlayerInputData>(pub NetworkedId, pub PlayerInputData);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitReason {
     Disconnected,
@@ -207,11 +210,15 @@ impl<
         + PartialEq,
 > EasyP2PState<PlayerData>
 {
-    pub fn get_players(&self) -> Vec<PlayerInfo<PlayerData>> {
-        let mut players = vec![PlayerInfo {
-            id: NetworkedId::Host,
-            data: self.local_player_data.clone(),
-        }];
+    pub fn get_players(&self, add_host: bool) -> Vec<PlayerInfo<PlayerData>> {
+        let mut players = if add_host {
+            vec![PlayerInfo {
+                id: NetworkedId::Host,
+                data: self.local_player_data.clone(),
+            }]
+        } else {
+            vec![]
+        };
         players.extend(self.players.clone());
         players
     }
@@ -252,8 +259,7 @@ pub struct EasyP2P<
     exit_w: MessageWriter<'w, OnExitLobbyReq>,
     send_host_w: MessageWriter<'w, OnSendToHostReq<PlayerData, PlayerInputData, Instantiations>>,
     send_all_w: MessageWriter<'w, OnSendToAllReq<PlayerData, PlayerInputData, Instantiations>>,
-    send_client_w:
-        MessageWriter<'w, OnSendToClientReq<PlayerData, PlayerInputData, Instantiations>>,
+    input_w: MessageWriter<'w, OnClientInput<PlayerInputData>>,
     kick_w: MessageWriter<'w, OnKickReq>,
     instantiation_set: ParamSet<
         'w,
@@ -264,6 +270,8 @@ pub struct EasyP2P<
         ),
     >,
     state: ResMut<'w, EasyP2PState<PlayerData>>,
+    children_q: Query<'w, 's, &'static ChildOf>,
+    network_ids_q: Query<'w, 's, &'static NetworkedId>,
     _marker: std::marker::PhantomData<&'s T>,
 }
 
@@ -290,21 +298,22 @@ where
     }
     pub fn send_message_to_host(&mut self, text: String) {
         let msg = P2PData::ClientLobbyChatMessage(text.clone(), NetworkedId::ClientId(0));
-        info!("sending message to host (typed JSON): {:?}", &msg);
+        info!("sending message to host: {:?}", &msg);
         self.send_host_w.write(OnSendToHostReq(msg));
     }
     pub fn send_message_all(&mut self, text: String) {
         let msg = P2PData::ClientLobbyChatMessage(text.clone(), NetworkedId::Host);
-        info!("sending message to all (typed JSON): {:?}", &msg);
+        info!("sending message to all: {:?}", &msg);
         self.send_all_w.write(OnSendToAllReq(msg));
     }
-    pub fn send_message_to_client(&mut self, client_id: ClientId, text: String) {
-        let msg = P2PData::ClientLobbyChatMessage(text.clone(), NetworkedId::Host);
-        info!(
-            "sending message to client {} (typed JSON): {:?}",
-            client_id, &msg
-        );
-        self.send_client_w.write(OnSendToClientReq(client_id, msg));
+    pub fn send_inputs(&mut self, input: PlayerInputData) {
+        let msg = P2PData::ClientInput(input.clone());
+        if self.is_host() {
+            self.input_w
+                .write(OnClientInput(NetworkedId::Host, input.clone()));
+        } else {
+            self.send_host_w.write(OnSendToHostReq(msg));
+        }
     }
     pub fn instantiate(&mut self, instantiation: Instantiations, transform: Transform) {
         // Emit local instantiation event
@@ -339,7 +348,7 @@ where
         self.state.is_host
     }
     pub fn get_players(&self) -> Vec<PlayerInfo<PlayerData>> {
-        self.state.get_players()
+        self.state.get_players(self.is_host())
     }
     pub fn get_local_player_data(&self) -> PlayerData {
         self.state.local_player_data.clone()
@@ -354,6 +363,22 @@ where
             .unwrap()
             .data
             .clone()
+    }
+    pub fn get_closest_networked_id(&self, entity: Entity) -> Option<NetworkedId> {
+        if self.network_ids_q.contains(entity) {
+            return Some(self.network_ids_q.get(entity).unwrap().clone());
+        }
+        let ancestor = self
+            .children_q
+            .iter_ancestors(entity)
+            .find(|a| self.network_ids_q.contains(*a))?;
+        Some(self.network_ids_q.get(ancestor).unwrap().clone())
+    }
+    pub fn inputs_belong_to_player(&self, entity: Entity, id: &NetworkedId) -> bool {
+        let Some(ancestor) = self.get_closest_networked_id(entity) else {
+            return false;
+        };
+        ancestor == *id
     }
 }
 
@@ -407,6 +432,7 @@ where
             .add_message::<OnHostMessageReceived>()
             .add_message::<OnInternalClientData<PlayerData, PlayerInputData, Instantiations>>()
             .add_message::<OnInternalHostData<PlayerData, PlayerInputData, Instantiations>>()
+            .add_message::<OnClientInput<PlayerInputData>>()
             .add_message::<OnLobbyExit>()
             .add_message::<OnTransportRosterChanged>()
             .add_message::<OnTransportSendToHost>()
@@ -565,8 +591,7 @@ fn broadcast_roster_on_host<
         });
 
         // Broadcast updated roster (host + filtered clients)
-        let players = state.get_players();
-        info!("broadcast_roster_on_host: {:?}", players);
+        let players = state.get_players(state.is_host);
         w_send_all.write(OnSendToAllReq(P2PData::HostLobbyInfoUpdate(players)));
     }
 }
@@ -685,7 +710,6 @@ fn state_update_system<
         lobby_state.set(P2PLobbyState::InLobby);
     }
     for OnExitLobbyReq in exit_r.read() {
-        info!("exiting lobby...");
         state.is_host = false;
         state.lobby_code.clear();
         state.players.clear();
@@ -708,6 +732,7 @@ fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData, Ins
     mut relay_w: MessageWriter<OnRelayToAllExcept<PlayerData, PlayerInputData, Instantiations>>,
     mut inst_w: MessageWriter<HandleInstantiation<Instantiations>>,
     mut state: ResMut<EasyP2PState<PlayerData>>,
+    mut input_w: MessageWriter<OnClientInput<PlayerInputData>>,
     register: Res<SyncedStateRegister>,
 ) where
     PlayerData:
@@ -731,7 +756,11 @@ fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData, Ins
             P2PData::HostLobbyInfoUpdate(_) => {
                 // Host should not receive this; ignore
             }
-            P2PData::ClientInput(_) => {}
+            P2PData::ClientInput(input) => {
+                if state.is_host {
+                    input_w.write(OnClientInput(NetworkedId::ClientId(*cid), input.clone()));
+                }
+            }
             P2PData::ClientDataUpdate(data) => {
                 info!("received client data update: {:?}", data);
                 state
@@ -742,11 +771,7 @@ fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData, Ins
                     .data = data.clone();
             }
             P2PData::StateSync(_, _) => {}
-            P2PData::HostInstantiation(inst) => {
-                // Clients receive broadcasted instantiation; emit local event
-                let local: InstantiationData<Instantiations> = InstantiationData::from(&*inst);
-                inst_w.write(HandleInstantiation(local));
-            }
+            P2PData::HostInstantiation(_) => {}
         }
     }
     for OnInternalHostData(data) in internal_host_r.read() {
@@ -776,6 +801,8 @@ fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData, Ins
             P2PData::ClientDataUpdate(_) => {}
             P2PData::HostInstantiation(inst) => {
                 // Host receiving own broadcast is unusual, but if transport loops back, handle it
+                info!("HostInstantiation: {:?}", inst);
+                info!("aaa: {:?}", state.get_players(state.is_host));
                 let local: InstantiationData<Instantiations> = InstantiationData::from(&*inst);
                 inst_w.write(HandleInstantiation(local));
             }
@@ -939,7 +966,7 @@ fn handle_client_data_update_on_host<
                 });
             }
 
-            let payload = state.get_players();
+            let payload = state.get_players(state.is_host);
             info!("sending local data to all after enter: {:?}", payload);
             w_send_all.write(OnSendToAllReq(P2PData::HostLobbyInfoUpdate(payload)));
         }

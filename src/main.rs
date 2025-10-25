@@ -1,7 +1,9 @@
+use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy_easy_p2p::{
-    EasyP2P, EasyP2PPlugin, EasyP2PState, OnClientMessageReceived, OnHostMessageReceived,
-    OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyJoined, OnRosterUpdate, P2PLobbyState,
+    EasyP2P, EasyP2PPlugin, EasyP2PState, OnClientInput, OnClientMessageReceived,
+    OnHostMessageReceived, OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyJoined,
+    OnRosterUpdate, P2PLobbyState,
 };
 use bevy_easy_p2p::{NetworkedId, NetworkedStatesExt};
 use bevy_firestore_p2p::FirestoreP2PPlugin;
@@ -50,7 +52,6 @@ fn current_base_url() -> Option<String> {
 
 fn extract_query_param(target: &str) -> Option<String> {
     let href = get_url()?;
-    info!("href: {}", href);
     let no_hash = href.split('#').next().unwrap_or(href.as_str());
     let query = no_hash.split('?').nth(1)?;
     for pair in query.split('&') {
@@ -64,6 +65,20 @@ fn extract_query_param(target: &str) -> Option<String> {
     None
 }
 
+fn send_inputs(
+    mut easy: EasyP2P<
+        FirestoreWebRtcTransport,
+        AppPlayerData,
+        AppPlayerInputData,
+        AppInstantiations,
+    >,
+    keyboard: Res<ButtonInput<KeyCode>>,
+) {
+    easy.send_inputs(AppPlayerInputData {
+        forward: keyboard.pressed(KeyCode::KeyW),
+    });
+}
+
 fn auto_join_from_url(
     mut easy: EasyP2P<
         FirestoreWebRtcTransport,
@@ -72,9 +87,8 @@ fn auto_join_from_url(
         AppInstantiations,
     >,
 ) {
-    info!("auto_join_from_url");
     if let Some(room) = extract_query_param("room") {
-        info!("room: {}", room);
+        info!("room code in url: {}", room);
         if !room.trim().is_empty() {
             easy.join_lobby(&room);
         }
@@ -137,6 +151,8 @@ fn on_instantiation(
                 let id = commands
                     .spawn((
                         DespawnOnExit(AppState::Game),
+                        RigidBody::Dynamic,
+                        Collider::rectangle(6., 8.),
                         Sprite::from_atlas_image(
                             texture,
                             TextureAtlas {
@@ -146,6 +162,7 @@ fn on_instantiation(
                         ),
                         data.transform,
                         id.clone(),
+                        CarController,
                     ))
                     .id();
                 commands.spawn((
@@ -165,6 +182,29 @@ fn on_instantiation(
 
 struct FollowTransform(Entity);
 
+#[derive(Component)]
+struct CarController;
+
+fn car_controller(
+    mut cars: Query<(Forces, Entity, &Transform), With<CarController>>,
+    mut param_set: ParamSet<(
+        EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
+        MessageReader<OnClientInput<AppPlayerInputData>>,
+    )>,
+) {
+    let inputs = param_set.p1().read().cloned().collect::<Vec<_>>();
+    for OnClientInput(target, input) in inputs {
+        for (mut force, entity, transform) in cars.iter_mut() {
+            if !param_set.p0().inputs_belong_to_player(entity, &target) {
+                continue;
+            }
+            if input.forward {
+                force.apply_force(transform.up().xy() * 1000.);
+            }
+        }
+    }
+}
+
 fn follow_transform(
     transforms: Query<&Transform, Without<FollowTransform>>,
     mut follow_transforms: Query<(&mut Transform, &FollowTransform)>,
@@ -183,14 +223,11 @@ fn on_client_message_received(
     easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
 ) {
     for OnClientMessageReceived(cid, text) in r.read() {
-        info!("Client message received: {:?}: {}", cid, text);
-        if !text.starts_with("__") {
-            history.add(format!(
-                "{}: {}",
-                easy.get_player_data(NetworkedId::ClientId(*cid)).name,
-                text
-            ));
-        }
+        history.add(format!(
+            "{}: {}",
+            easy.get_player_data(NetworkedId::ClientId(*cid)).name,
+            text
+        ));
     }
 }
 
@@ -200,20 +237,22 @@ fn on_host_message_received(
     easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
 ) {
     for OnHostMessageReceived(text) in r.read() {
-        info!("Host message received: {}", text);
-        if !text.starts_with("__") {
-            history.add(format!(
-                "{}: {}",
-                easy.get_player_data(NetworkedId::Host).name,
-                text
-            ));
-        }
+        history.add(format!(
+            "{}: {}",
+            easy.get_player_data(NetworkedId::Host).name,
+            text
+        ));
     }
 }
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
+        .add_plugins((
+            DefaultPlugins.set(ImagePlugin::default_nearest()),
+            PhysicsPlugins::default(),
+            PhysicsDebugPlugin::default(),
+        ))
+        .insert_resource(Gravity::ZERO)
         .add_plugins((
             EasyP2PPlugin::<
                 FirestoreWebRtcTransport,
@@ -246,6 +285,7 @@ fn main() {
         .add_systems(
             Update,
             (
+                send_inputs,
                 follow_transform,
                 lobby_code,
                 lobby_chat_input_history,
@@ -253,6 +293,7 @@ fn main() {
                 spawn_client_players_buttons,
             ),
         )
+        .add_systems(FixedUpdate, (car_controller,))
         .run();
 }
 
@@ -539,7 +580,7 @@ fn spawn_lobby(
         .spawn((
             // Accepts a `String` or any type that converts into a `String`, such as `&str`
             Text::new(""),
-            TextInput::new(false, false),
+            TextInput::new(false, false, true),
             Node {
                 position_type: PositionType::Absolute,
                 bottom: px(5),
@@ -700,7 +741,7 @@ fn spawn_menu(
         .id();
     let code_input = commands
         .spawn((
-            TextInput::new(true, true),
+            TextInput::new(true, true, true),
             Node {
                 position_type: PositionType::Absolute,
                 top: px(15),
@@ -729,7 +770,7 @@ fn spawn_menu(
         .id();
     let name_input = commands
         .spawn((
-            TextInput::new(false, false).with_max_characters(10),
+            TextInput::new(false, false, false).with_max_characters(10),
             Text::new(easy.get_local_player_data().name.clone()),
             Node {
                 position_type: PositionType::Absolute,

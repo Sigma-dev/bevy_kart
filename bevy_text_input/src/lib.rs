@@ -54,14 +54,16 @@ pub struct TextInput {
     capitalize: bool,
     no_spaces: bool,
     max_characters: Option<usize>,
+    can_submit: bool,
 }
 
 impl TextInput {
-    pub fn new(capitalize: bool, no_spaces: bool) -> Self {
+    pub fn new(capitalize: bool, no_spaces: bool, can_submit: bool) -> Self {
         Self {
             capitalize,
             no_spaces,
             max_characters: None,
+            can_submit,
         }
     }
 
@@ -108,6 +110,9 @@ fn handle_inputs(
             match &ev.logical_key {
                 // Handle pressing Enter to finish the input
                 Key::Enter => {
+                    if !input_field.can_submit {
+                        continue;
+                    }
                     commands.entity(entity).trigger(|entity| InputFieldSubmit {
                         entity: entity,
                         text: input.0.clone(),

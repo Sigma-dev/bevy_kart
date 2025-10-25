@@ -37,6 +37,8 @@ pub enum P2PData<PlayerData, PlayerInputData, Instantiations> {
     HostLobbyInfoUpdate(Vec<PlayerInfo<PlayerData>>),
     // Generic state sync payload: (registered type index, serialized JSON payload)
     StateSync(u8, String),
+    // Generic event sync payload: (registered type index, serialized JSON payload)
+    EventSync(u8, String),
     HostInstantiation(InstantiationDataNet<Instantiations>),
 }
 
@@ -416,6 +418,7 @@ where
         app.init_resource::<EasyP2PState<PlayerData>>()
             .init_resource::<IsHost>()
             .init_resource::<SyncedStateRegister>()
+            .init_resource::<SyncedEventRegister>()
             .init_state::<P2PLobbyState>() // Alternatively we could use .insert_state(AppState::Menu)
             // Request channel messages
             .add_message::<OnCreateLobbyReq>()
@@ -497,6 +500,40 @@ impl SyncedStateRegister {
         self.readers.push(|payload: &str, commands: &mut Commands| {
             if let Ok(value) = serde_json::from_str::<S>(payload) {
                 commands.set_state::<S>(value);
+            }
+        });
+    }
+}
+
+// Registry for synced events that can be re-emitted as messages locally
+#[derive(Resource, Default)]
+pub struct SyncedEventRegister {
+    pub readers: Vec<fn(&str, &mut World) -> ()>,
+    pub indexes: HashMap<TypeId, u8>,
+    pub counter: u8,
+}
+
+impl SyncedEventRegister {
+    pub fn register_event<E>(&mut self)
+    where
+        E: Serialize
+            + for<'de> Deserialize<'de>
+            + Clone
+            + Send
+            + Sync
+            + core::fmt::Debug
+            + 'static
+            + Message,
+    {
+        if self.indexes.contains_key(&TypeId::of::<E>()) {
+            return;
+        }
+        let idx = self.counter;
+        self.indexes.insert(TypeId::of::<E>(), idx);
+        self.counter = self.counter.wrapping_add(1);
+        self.readers.push(|payload: &str, world: &mut World| {
+            if let Ok(value) = serde_json::from_str::<E>(payload) {
+                world.write_message(value);
             }
         });
     }
@@ -734,6 +771,7 @@ fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData, Ins
     mut state: ResMut<EasyP2PState<PlayerData>>,
     mut input_w: MessageWriter<OnClientInput<PlayerInputData>>,
     register: Res<SyncedStateRegister>,
+    event_register: Res<SyncedEventRegister>,
 ) where
     PlayerData:
         Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
@@ -771,6 +809,7 @@ fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData, Ins
                     .data = data.clone();
             }
             P2PData::StateSync(_, _) => {}
+            P2PData::EventSync(_, _) => {}
             P2PData::HostInstantiation(_) => {}
         }
     }
@@ -795,6 +834,16 @@ fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData, Ins
                 if idx < register.readers.len() {
                     let reader = register.readers[idx];
                     reader(payload, &mut commands);
+                }
+            }
+            P2PData::EventSync(type_index, payload) => {
+                let idx = *type_index as usize;
+                info!("EventSync: {:?}", idx);
+                if idx < event_register.readers.len() {
+                    commands.queue(EmitSyncedEvent {
+                        index: *type_index,
+                        payload: payload.clone(),
+                    });
                 }
             }
             P2PData::ClientInput(_) => {}
@@ -882,6 +931,97 @@ impl NetworkedStatesExt for App {
         // Systems: host broadcasts changes; clients queue an OnApplyState<S> via registry reader
         self.add_systems(Update, host_broadcast_state_change::<S>);
         self
+    }
+}
+
+// App extension to initialize and register a networked event and systems
+pub trait NetworkedEventsExt {
+    fn init_networked_event<E>(&mut self) -> &mut Self
+    where
+        E: Serialize
+            + for<'de> Deserialize<'de>
+            + Clone
+            + Send
+            + Sync
+            + core::fmt::Debug
+            + 'static
+            + Message;
+}
+
+impl NetworkedEventsExt for App {
+    fn init_networked_event<E>(&mut self) -> &mut Self
+    where
+        E: Serialize
+            + for<'de> Deserialize<'de>
+            + Clone
+            + Send
+            + Sync
+            + core::fmt::Debug
+            + 'static
+            + Message,
+    {
+        // Ensure message type exists and register it for network sync
+        self.add_message::<E>();
+        {
+            let mut reg = self
+                .world_mut()
+                .get_resource_mut::<SyncedEventRegister>()
+                .expect("SyncedEventRegister not initialized");
+            reg.register_event::<E>();
+        }
+        // Host broadcasts events; clients directly re-emit via intercept using Commands.add
+        self.add_systems(Update, host_broadcast_event::<E>);
+        self
+    }
+}
+
+fn host_broadcast_event<E>(
+    host_flag: Res<IsHost>,
+    mut events: MessageReader<E>,
+    register: Res<SyncedEventRegister>,
+    mut w_send_all: MessageWriter<OnTransportSendToAll>,
+) where
+    E: Serialize
+        + for<'de> Deserialize<'de>
+        + Clone
+        + Send
+        + Sync
+        + core::fmt::Debug
+        + 'static
+        + Message,
+{
+    if !host_flag.0 {
+        return;
+    }
+    for e in events.read() {
+        if let Some(index) = register.indexes.get(&TypeId::of::<E>()) {
+            if let Ok(text) = serde_json::to_string(e) {
+                if let Ok(payload) =
+                    serde_json::to_string(&P2PData::<(), (), ()>::EventSync(*index, text))
+                {
+                    w_send_all.write(OnTransportSendToAll(payload));
+                }
+            }
+        }
+    }
+}
+
+// Command that re-emits a synced event payload into the world immediately when applied
+struct EmitSyncedEvent {
+    index: u8,
+    payload: String,
+}
+
+impl bevy::ecs::system::Command for EmitSyncedEvent {
+    fn apply(self, world: &mut World) {
+        let Some(register) = world.get_resource::<SyncedEventRegister>() else {
+            return;
+        };
+        let idx = self.index as usize;
+        if idx < register.readers.len() {
+            let reader = register.readers[idx];
+            reader(&self.payload, world);
+        }
     }
 }
 

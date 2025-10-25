@@ -1,9 +1,9 @@
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy_easy_p2p::{
-    EasyP2P, EasyP2PPlugin, EasyP2PState, OnClientInput, OnClientMessageReceived,
-    OnHostMessageReceived, OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyJoined,
-    OnRosterUpdate, P2PLobbyState,
+    EasyP2P, EasyP2PPlugin, EasyP2PState, NetworkedEventsExt, OnClientInput,
+    OnClientMessageReceived, OnHostMessageReceived, OnLobbyCreated, OnLobbyEntered, OnLobbyExit,
+    OnLobbyJoined, OnRosterUpdate, P2PLobbyState,
 };
 use bevy_easy_p2p::{NetworkedId, NetworkedStatesExt};
 use bevy_firestore_p2p::FirestoreP2PPlugin;
@@ -161,6 +161,7 @@ fn on_instantiation(
                             },
                         ),
                         data.transform,
+                        NetworkedTransform,
                         id.clone(),
                         CarController,
                     ))
@@ -279,6 +280,7 @@ fn main() {
             ),
         )
         .insert_resource(LobbyChatInputHistory(Vec::new()))
+        .init_networked_event::<OnNetworkedTransformUpdate>()
         .add_systems(OnEnter(P2PLobbyState::OutOfLobby), spawn_menu)
         .add_systems(OnEnter(P2PLobbyState::InLobby), spawn_lobby)
         .add_systems(OnEnter(AppState::Game), spawn_track)
@@ -291,6 +293,8 @@ fn main() {
                 lobby_chat_input_history,
                 spawn_lobby_players_buttons,
                 spawn_client_players_buttons,
+                networked_transform,
+                apply_networked_transform,
             ),
         )
         .add_systems(FixedUpdate, (car_controller,))
@@ -494,6 +498,51 @@ fn spawn_track(
             Transform::from_translation(position)
                 .with_rotation(Quat::from_rotation_z(-90_f32.to_radians())),
         );
+    }
+}
+
+#[derive(Component)]
+struct NetworkedTransform;
+
+#[derive(Message, Clone, Debug, Serialize, Deserialize)]
+struct OnNetworkedTransformUpdate(NetworkedId, (Vec3, Quat));
+
+fn networked_transform(
+    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
+    mut transforms: Query<(Entity, &mut Transform), With<NetworkedTransform>>,
+    mut events_w: MessageWriter<OnNetworkedTransformUpdate>,
+) {
+    if !easy.is_host() {
+        return;
+    }
+    for (entity, transform) in transforms.iter_mut() {
+        let Some(networked_id) = easy.get_closest_networked_id(entity) else {
+            continue;
+        };
+        events_w.write(OnNetworkedTransformUpdate(
+            networked_id,
+            (transform.translation, transform.rotation),
+        ));
+    }
+}
+
+fn apply_networked_transform(
+    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
+    mut transforms: Query<(Entity, &mut Transform), With<NetworkedTransform>>,
+    mut events_r: MessageReader<OnNetworkedTransformUpdate>,
+) {
+    if easy.is_host() {
+        return;
+    }
+    for OnNetworkedTransformUpdate(networked_id, (new_translation, new_rotation)) in events_r.read()
+    {
+        for (entity, mut transform) in transforms.iter_mut() {
+            let closest_networked_id = easy.get_closest_networked_id(entity);
+            if closest_networked_id == Some(networked_id.clone()) {
+                transform.translation = *new_translation;
+                transform.rotation = *new_rotation;
+            }
+        }
     }
 }
 

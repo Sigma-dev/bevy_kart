@@ -1,5 +1,6 @@
 use avian2d::prelude::*;
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use bevy_easy_p2p::{
     EasyP2P, EasyP2PPlugin, EasyP2PState, NetworkedEventsExt, OnClientMessageReceived,
     OnHostMessageReceived, OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyJoined,
@@ -149,7 +150,7 @@ fn on_instantiation(
                         DespawnOnExit(AppState::Game),
                         Mass(1.),
                         RigidBody::Dynamic,
-                        Collider::rectangle(6., 8.),
+                        Collider::rectangle(4., 8.),
                         Sprite::from_atlas_image(
                             texture,
                             TextureAtlas {
@@ -287,6 +288,7 @@ fn main() {
                 spawn_client_players_buttons,
                 networked_transform,
                 apply_networked_transform,
+                cursor_positon_log,
             ),
         )
         .run();
@@ -455,7 +457,61 @@ fn spawn_client_players_buttons(
     }
 }
 
-fn spawn_track(mut commands: Commands, asset_server: Res<AssetServer>, mut easy: KartEasyP2P) {
+fn spawn_barriers(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    red_material: Handle<ColorMaterial>,
+    white_material: Handle<ColorMaterial>,
+    points: Vec<Vec2>,
+) {
+    for (i, (a, b)) in points.iter().zip(points.iter().cycle().skip(1)).enumerate() {
+        let material = if i % 2 == 0 {
+            red_material.clone()
+        } else {
+            white_material.clone()
+        };
+        let middle = (*a + *b) / 2.;
+        let length = (*a - *b).length();
+        let angle = (*a - *b).y.atan2((*a - *b).x);
+        commands.spawn((
+            RigidBody::Static,
+            Mesh2d(meshes.add(Rectangle::new(length, 2.))),
+            MeshMaterial2d(material.clone()),
+            Collider::rectangle(length, 2.),
+            Transform::from_translation(middle.extend(100.))
+                .with_rotation(Quat::from_rotation_z(angle)),
+        ));
+    }
+}
+
+fn cursor_positon_log(
+    q_window: Query<&Window, With<PrimaryWindow>>,
+    q_camera: Query<(&Camera, &GlobalTransform)>,
+    button_input: Res<ButtonInput<MouseButton>>,
+) {
+    let (camera, camera_transform) = q_camera.single().unwrap();
+    let window = q_window.single().unwrap();
+    if let Some(world_position) = window
+        .cursor_position()
+        .and_then(|cursor| Some(camera.viewport_to_world(camera_transform, cursor)))
+        .map(|ray| ray.unwrap().origin.truncate())
+    {
+        if button_input.just_pressed(MouseButton::Left) {
+            info!(
+                "World coords: Vec2::new({},{})",
+                world_position.x, world_position.y
+            );
+        }
+    }
+}
+
+fn spawn_track(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut easy: KartEasyP2P,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
     commands.spawn((
         DespawnOnExit(AppState::Game),
         Sprite::from_image(asset_server.load("sprites/track.png")),
@@ -476,6 +532,101 @@ fn spawn_track(mut commands: Commands, asset_server: Res<AssetServer>, mut easy:
                 .with_rotation(Quat::from_rotation_z(-90_f32.to_radians())),
         );
     }
+
+    let red_material = materials.add(ColorMaterial::from(Color::srgb(0.68, 0.13, 0.20)));
+    let white_material = materials.add(ColorMaterial::from(Color::srgb(1., 1., 1.)));
+    let outer_ring = vec![
+        Vec2::new(-97., -61.5),
+        Vec2::new(33., -57.2),
+        Vec2::new(48.2, -47.4),
+        Vec2::new(55.7, -38.),
+        Vec2::new(61.6, -26.),
+        Vec2::new(66., -25.6),
+        Vec2::new(76.6, -45.8),
+        Vec2::new(86., -54.),
+        Vec2::new(99.8, -54.2),
+        Vec2::new(106.5, -51.4),
+        Vec2::new(114.6, -43.4),
+        Vec2::new(119.2, -27.),
+        Vec2::new(119.6, 4.2),
+        Vec2::new(115.4, 48.),
+        Vec2::new(110.6, 57.4),
+        Vec2::new(100.2, 63.2),
+        Vec2::new(87.8, 63.6),
+        Vec2::new(69.3, 53.),
+        Vec2::new(53.4, 41.6),
+        Vec2::new(14., 0.),
+        Vec2::new(7., -1.4),
+        Vec2::new(0.1, -5.5),
+        Vec2::new(-54.2, -10.6),
+        Vec2::new(-63., -6.5),
+        Vec2::new(-59.6, -0.2),
+        Vec2::new(-35.1, 0.2),
+        Vec2::new(-9.6, 2.4),
+        Vec2::new(9.8, 11.),
+        Vec2::new(23.2, 22.6),
+        Vec2::new(27., 31.2),
+        Vec2::new(27., 39.),
+        Vec2::new(13.8, 54.6),
+        Vec2::new(-10., 60.),
+        Vec2::new(-47.2, 58.2),
+        Vec2::new(-90., 57.8),
+        Vec2::new(-106.6, 50.),
+        Vec2::new(-119.6, 37.2),
+        Vec2::new(-124., 26.2),
+        Vec2::new(-123.8, -34.8),
+        Vec2::new(-120.6, -45.6),
+        Vec2::new(-109., -57.8),
+    ];
+    let inner_ring = vec![
+        Vec2::new(-92., -37.8),
+        Vec2::new(-50.6, -35.2),
+        Vec2::new(15.8, -33.2),
+        Vec2::new(31.8, -32.),
+        Vec2::new(41.8, -13.8),
+        Vec2::new(54.4, -1.4),
+        Vec2::new(72.4, -1.6),
+        Vec2::new(85.4, -11.8),
+        Vec2::new(94.5, -29.),
+        Vec2::new(95.4, -1.4),
+        Vec2::new(92.4, 20.6),
+        Vec2::new(93.6, 36.4),
+        Vec2::new(89.4, 40.),
+        Vec2::new(83., 33.8),
+        Vec2::new(62.6, 17.8),
+        Vec2::new(26.2, -21.),
+        Vec2::new(5.6, -29.8),
+        Vec2::new(-20.2, -31.2),
+        Vec2::new(-77.6, -30.8),
+        Vec2::new(-84.7, -25.8),
+        Vec2::new(-90.2, -18.8),
+        Vec2::new(-90.4, 5.),
+        Vec2::new(-84.6, 14.8),
+        Vec2::new(-69.8, 23.6),
+        Vec2::new(-26.1, 25.2),
+        Vec2::new(-13., 28.),
+        Vec2::new(-0.8, 31.4),
+        Vec2::new(-0.2, 34.8),
+        Vec2::new(-27.4, 35.6),
+        Vec2::new(-87.2, 33.),
+        Vec2::new(-98.6, 25.8),
+        Vec2::new(-100.6, -22.2),
+        Vec2::new(-98.4, -35.2),
+    ];
+    spawn_barriers(
+        &mut commands,
+        &mut meshes,
+        red_material.clone(),
+        white_material.clone(),
+        outer_ring,
+    );
+    spawn_barriers(
+        &mut commands,
+        &mut meshes,
+        red_material.clone(),
+        white_material.clone(),
+        inner_ring,
+    );
 }
 
 #[derive(Component)]

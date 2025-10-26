@@ -1,9 +1,9 @@
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy_easy_p2p::{
-    EasyP2P, EasyP2PPlugin, EasyP2PState, NetworkedEventsExt, OnClientInput,
-    OnClientMessageReceived, OnHostMessageReceived, OnLobbyCreated, OnLobbyEntered, OnLobbyExit,
-    OnLobbyJoined, OnRosterUpdate, P2PLobbyState,
+    EasyP2P, EasyP2PPlugin, EasyP2PState, NetworkedEventsExt, OnClientMessageReceived,
+    OnHostMessageReceived, OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyJoined,
+    OnRosterUpdate, P2PLobbyState,
 };
 use bevy_easy_p2p::{NetworkedId, NetworkedStatesExt};
 use bevy_firestore_p2p::FirestoreP2PPlugin;
@@ -11,8 +11,16 @@ use bevy_firestore_p2p::FirestoreWebRtcTransport;
 use bevy_text_input::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::car_controller_2d::{CarController2d, CarController2dWheel};
+
+pub mod car_controller_2d;
+use car_controller_2d::CarController2dPlugin;
+
+pub type KartEasyP2P<'w, 's> =
+    EasyP2P<'w, 's, FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
-struct AppPlayerData {
+pub struct AppPlayerData {
     pub name: String,
 }
 
@@ -30,12 +38,15 @@ impl From<String> for AppPlayerData {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct AppPlayerInputData {
+pub struct AppPlayerInputData {
     pub forward: bool,
+    pub backward: bool,
+    pub left: bool,
+    pub right: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-enum AppInstantiations {
+pub enum AppInstantiations {
     Kart(NetworkedId),
 }
 
@@ -65,28 +76,16 @@ fn extract_query_param(target: &str) -> Option<String> {
     None
 }
 
-fn send_inputs(
-    mut easy: EasyP2P<
-        FirestoreWebRtcTransport,
-        AppPlayerData,
-        AppPlayerInputData,
-        AppInstantiations,
-    >,
-    keyboard: Res<ButtonInput<KeyCode>>,
-) {
+fn send_inputs(mut easy: KartEasyP2P, keyboard: Res<ButtonInput<KeyCode>>) {
     easy.send_inputs(AppPlayerInputData {
         forward: keyboard.pressed(KeyCode::KeyW),
+        backward: keyboard.pressed(KeyCode::KeyS),
+        left: keyboard.pressed(KeyCode::KeyA),
+        right: keyboard.pressed(KeyCode::KeyD),
     });
 }
 
-fn auto_join_from_url(
-    mut easy: EasyP2P<
-        FirestoreWebRtcTransport,
-        AppPlayerData,
-        AppPlayerInputData,
-        AppInstantiations,
-    >,
-) {
+fn auto_join_from_url(mut easy: KartEasyP2P) {
     if let Some(room) = extract_query_param("room") {
         info!("room code in url: {}", room);
         if !room.trim().is_empty() {
@@ -134,12 +133,7 @@ fn on_instantiation(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
-    mut easy: EasyP2P<
-        FirestoreWebRtcTransport,
-        AppPlayerData,
-        AppPlayerInputData,
-        AppInstantiations,
-    >,
+    mut easy: KartEasyP2P,
 ) {
     for data in easy.get_instantiations() {
         match &data.instantiation {
@@ -148,6 +142,8 @@ fn on_instantiation(
                 let texture = asset_server.load("sprites/karts.png");
                 let layout = TextureAtlasLayout::from_grid(UVec2::splat(8), 8, 1, None, None);
                 let texture_atlas_layout = texture_atlas_layouts.add(layout);
+                let half_car_width = 3.;
+                let half_car_length = 4.;
                 let id = commands
                     .spawn((
                         DespawnOnExit(AppState::Game),
@@ -163,7 +159,25 @@ fn on_instantiation(
                         data.transform,
                         NetworkedTransform,
                         id.clone(),
-                        CarController,
+                        CarController2d::new(1.),
+                        children![
+                            (
+                                Transform::from_xyz(half_car_width, half_car_length, 0.),
+                                CarController2dWheel::new(true, true)
+                            ),
+                            (
+                                Transform::from_xyz(-half_car_width, half_car_length, 0.),
+                                CarController2dWheel::new(true, true)
+                            ),
+                            (
+                                Transform::from_xyz(half_car_width, -half_car_length, 0.),
+                                CarController2dWheel::new(false, false)
+                            ),
+                            (
+                                Transform::from_xyz(-half_car_width, -half_car_length, 0.),
+                                CarController2dWheel::new(false, false)
+                            ),
+                        ],
                     ))
                     .id();
                 commands.spawn((
@@ -183,29 +197,6 @@ fn on_instantiation(
 
 struct FollowTransform(Entity);
 
-#[derive(Component)]
-struct CarController;
-
-fn car_controller(
-    mut cars: Query<(Forces, Entity, &Transform), With<CarController>>,
-    mut param_set: ParamSet<(
-        EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
-        MessageReader<OnClientInput<AppPlayerInputData>>,
-    )>,
-) {
-    let inputs = param_set.p1().read().cloned().collect::<Vec<_>>();
-    for OnClientInput(target, input) in inputs {
-        for (mut force, entity, transform) in cars.iter_mut() {
-            if !param_set.p0().inputs_belong_to_player(entity, &target) {
-                continue;
-            }
-            if input.forward {
-                force.apply_force(transform.up().xy() * 1000.);
-            }
-        }
-    }
-}
-
 fn follow_transform(
     transforms: Query<&Transform, Without<FollowTransform>>,
     mut follow_transforms: Query<(&mut Transform, &FollowTransform)>,
@@ -221,7 +212,7 @@ fn follow_transform(
 fn on_client_message_received(
     mut r: MessageReader<OnClientMessageReceived>,
     mut history: ResMut<LobbyChatInputHistory>,
-    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
+    easy: KartEasyP2P,
 ) {
     for OnClientMessageReceived(cid, text) in r.read() {
         history.add(format!(
@@ -235,7 +226,7 @@ fn on_client_message_received(
 fn on_host_message_received(
     mut r: MessageReader<OnHostMessageReceived>,
     mut history: ResMut<LobbyChatInputHistory>,
-    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
+    easy: KartEasyP2P,
 ) {
     for OnHostMessageReceived(text) in r.read() {
         history.add(format!(
@@ -263,6 +254,7 @@ fn main() {
             >::default(),
             FirestoreP2PPlugin,
             TextInputPlugin,
+            CarController2dPlugin,
         ))
         .add_systems(Startup, (auto_join_from_url, setup))
         .init_state::<AppState>()
@@ -297,7 +289,6 @@ fn main() {
                 apply_networked_transform,
             ),
         )
-        .add_systems(FixedUpdate, (car_controller,))
         .run();
 }
 
@@ -389,12 +380,7 @@ fn players_buttons(
                 ))
                 .observe(
                     |trigger: On<Pointer<Press>>,
-                     mut easy: EasyP2P<
-                        FirestoreWebRtcTransport,
-                        AppPlayerData,
-                        AppPlayerInputData,
-                        AppInstantiations,
-                    >,
+                     mut easy: KartEasyP2P,
                      kick_targets: Query<&KickTarget>| {
                         let target = kick_targets.get(trigger.entity).unwrap();
                         if let NetworkedId::ClientId(cid) = target.0 {
@@ -437,7 +423,7 @@ fn players_buttons(
 fn spawn_lobby_players_buttons(
     mut commands: Commands,
     buttons: Query<(Entity, Option<&Children>), With<LobbyPlayersButtons>>,
-    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
+    easy: KartEasyP2P,
 ) {
     if !easy.is_host() {
         return;
@@ -456,7 +442,7 @@ fn spawn_client_players_buttons(
     mut commands: Commands,
     buttons: Query<Entity, With<LobbyPlayersButtons>>,
     mut roster_r: MessageReader<OnRosterUpdate<AppPlayerData>>,
-    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
+    easy: KartEasyP2P,
 ) {
     if easy.is_host() {
         return;
@@ -469,16 +455,7 @@ fn spawn_client_players_buttons(
     }
 }
 
-fn spawn_track(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut easy: EasyP2P<
-        FirestoreWebRtcTransport,
-        AppPlayerData,
-        AppPlayerInputData,
-        AppInstantiations,
-    >,
-) {
+fn spawn_track(mut commands: Commands, asset_server: Res<AssetServer>, mut easy: KartEasyP2P) {
     commands.spawn((
         DespawnOnExit(AppState::Game),
         Sprite::from_image(asset_server.load("sprites/track.png")),
@@ -508,7 +485,7 @@ struct NetworkedTransform;
 struct OnNetworkedTransformUpdate(NetworkedId, (Vec3, Quat));
 
 fn networked_transform(
-    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
+    easy: KartEasyP2P,
     mut transforms: Query<(Entity, &mut Transform), With<NetworkedTransform>>,
     mut events_w: MessageWriter<OnNetworkedTransformUpdate>,
 ) {
@@ -527,7 +504,7 @@ fn networked_transform(
 }
 
 fn apply_networked_transform(
-    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
+    easy: KartEasyP2P,
     mut transforms: Query<(Entity, &mut Transform), With<NetworkedTransform>>,
     mut events_r: MessageReader<OnNetworkedTransformUpdate>,
 ) {
@@ -546,10 +523,7 @@ fn apply_networked_transform(
     }
 }
 
-fn spawn_lobby(
-    mut commands: Commands,
-    easy: EasyP2P<FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>,
-) {
+fn spawn_lobby(mut commands: Commands, easy: KartEasyP2P) {
     let is_host = easy.is_host();
     let lobby = commands
         .spawn((
@@ -589,17 +563,9 @@ fn spawn_lobby(
                 TextShadow::default(),
             )],
         ))
-        .observe(
-            |_trigger: On<Pointer<Press>>,
-             mut easy: EasyP2P<
-                FirestoreWebRtcTransport,
-                AppPlayerData,
-                AppPlayerInputData,
-                AppInstantiations,
-            >| {
-                easy.exit_lobby();
-            },
-        )
+        .observe(|_trigger: On<Pointer<Press>>, mut easy: KartEasyP2P| {
+            easy.exit_lobby();
+        })
         .id();
 
     let lobby_code_text = commands
@@ -639,12 +605,7 @@ fn spawn_lobby(
         ))
         .observe(
             |trigger: On<InputFieldSubmit>,
-             mut easy: EasyP2P<
-                FirestoreWebRtcTransport,
-                AppPlayerData,
-                AppPlayerInputData,
-                AppInstantiations,
-            >,
+             mut easy: KartEasyP2P,
              mut history: ResMut<LobbyChatInputHistory>| {
                 if easy.is_host() {
                     easy.send_message_all(trigger.text().to_string());
@@ -724,15 +685,7 @@ fn spawn_lobby(
     ]);
 }
 
-fn spawn_menu(
-    mut commands: Commands,
-    mut easy: EasyP2P<
-        FirestoreWebRtcTransport,
-        AppPlayerData,
-        AppPlayerInputData,
-        AppInstantiations,
-    >,
-) {
+fn spawn_menu(mut commands: Commands, mut easy: KartEasyP2P) {
     if easy.get_local_player_data().name.is_empty() {
         easy.set_local_player_data(AppPlayerData {
             name: "YOUR_NAME".to_string(),
@@ -776,17 +729,9 @@ fn spawn_menu(
                 TextShadow::default(),
             )],
         ))
-        .observe(
-            |_trigger: On<Pointer<Press>>,
-             mut easy: EasyP2P<
-                FirestoreWebRtcTransport,
-                AppPlayerData,
-                AppPlayerInputData,
-                AppInstantiations,
-            >| {
-                easy.create_lobby();
-            },
-        )
+        .observe(|_trigger: On<Pointer<Press>>, mut easy: KartEasyP2P| {
+            easy.create_lobby();
+        })
         .id();
     let code_input = commands
         .spawn((
@@ -805,17 +750,9 @@ fn spawn_menu(
                 color: Color::WHITE,
             },
         ))
-        .observe(
-            |trigger: On<InputFieldSubmit>,
-             mut easy: EasyP2P<
-                FirestoreWebRtcTransport,
-                AppPlayerData,
-                AppPlayerInputData,
-                AppInstantiations,
-            >| {
-                easy.join_lobby(&trigger.text().to_string());
-            },
-        )
+        .observe(|trigger: On<InputFieldSubmit>, mut easy: KartEasyP2P| {
+            easy.join_lobby(&trigger.text().to_string());
+        })
         .id();
     let name_input = commands
         .spawn((
@@ -834,19 +771,11 @@ fn spawn_menu(
                 color: Color::WHITE,
             },
         ))
-        .observe(
-            |trigger: On<InputFieldChange>,
-             mut easy: EasyP2P<
-                FirestoreWebRtcTransport,
-                AppPlayerData,
-                AppPlayerInputData,
-                AppInstantiations,
-            >| {
-                easy.set_local_player_data(AppPlayerData {
-                    name: trigger.text().to_string(),
-                });
-            },
-        )
+        .observe(|trigger: On<InputFieldChange>, mut easy: KartEasyP2P| {
+            easy.set_local_player_data(AppPlayerData {
+                name: trigger.text().to_string(),
+            });
+        })
         .id();
     commands
         .entity(menu)

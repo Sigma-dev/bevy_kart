@@ -147,6 +147,7 @@ fn on_instantiation(
                 let id = commands
                     .spawn((
                         DespawnOnExit(AppState::Game),
+                        Mass(1.),
                         RigidBody::Dynamic,
                         Collider::rectangle(6., 8.),
                         Sprite::from_atlas_image(
@@ -242,7 +243,6 @@ fn main() {
         .add_plugins((
             DefaultPlugins.set(ImagePlugin::default_nearest()),
             PhysicsPlugins::default(),
-            PhysicsDebugPlugin::default(),
         ))
         .insert_resource(Gravity::ZERO)
         .add_plugins((

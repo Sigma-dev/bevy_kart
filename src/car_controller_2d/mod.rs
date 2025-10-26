@@ -7,7 +7,14 @@ pub struct CarController2dPlugin;
 
 impl Plugin for CarController2dPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, (car_controller_power, car_controller_steering));
+        app.add_systems(
+            FixedUpdate,
+            (
+                car_controller_power,
+                car_controller_steering,
+                car_controller_traction,
+            ),
+        );
     }
 }
 
@@ -41,7 +48,6 @@ fn car_controller_power(
         KartEasyP2P,
         MessageReader<OnClientInput<AppPlayerInputData>>,
     )>,
-    mut gizmos: Gizmos,
 ) {
     let inputs = param_set.p1().read().cloned().collect::<Vec<_>>();
     for OnClientInput(target, input) in inputs {
@@ -60,7 +66,7 @@ fn car_controller_power(
                 continue;
             };
 
-            let base_mult = 500.;
+            let base_mult = 8.;
             for child in children.iter() {
                 let Ok((global_transform, wheel)) = wheels.get(child) else {
                     continue;
@@ -69,11 +75,6 @@ fn car_controller_power(
                 if !wheel.powered {
                     continue;
                 }
-                gizmos.circle_2d(
-                    global_transform.up().xy() + global_transform.translation().xy(),
-                    1.,
-                    Color::srgb(1., 0., 0.),
-                );
                 force.apply_force_at_point(power, global_transform.translation().xy());
             }
         }
@@ -102,7 +103,7 @@ fn car_controller_steering(
                 dir = -1.;
             }
 
-            let rotation = Quat::from_rotation_z((dir * 30.).to_radians());
+            let rotation = Quat::from_rotation_z((dir * 45.).to_radians());
 
             for child in children.iter() {
                 let Ok((mut transform, wheel)) = wheels.get_mut(child) else {
@@ -114,5 +115,24 @@ fn car_controller_steering(
                 transform.rotation = rotation;
             }
         }
+    }
+}
+
+fn car_controller_traction(
+    time: Res<Time>,
+    wheels: Query<(&GlobalTransform, &CarController2dWheel, &ChildOf)>,
+    mut cars: Query<Forces>,
+) {
+    for (global_transform, _wheel, child_of) in wheels.iter() {
+        let Ok(mut forces) = cars.get_mut(child_of.0) else {
+            continue;
+        };
+        let steering_dir = global_transform.right().as_vec3().xy();
+        let velocity = forces.velocity_at_point(global_transform.translation().xy());
+        let steering_vel = steering_dir.dot(velocity);
+        let desired_vel_change = -steering_vel * 1. * 0.0002;
+        let desired_accel = desired_vel_change / time.delta_secs();
+        let force = steering_dir * desired_accel;
+        forces.apply_linear_impulse_at_point(force, global_transform.translation().xy());
     }
 }

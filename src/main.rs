@@ -1,3 +1,5 @@
+use audio_manager::prelude::PlayAudio2D;
+use audio_manager::{AudioManager, AudioManagerPlugin};
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -12,7 +14,7 @@ use bevy_firestore_p2p::FirestoreWebRtcTransport;
 use bevy_text_input::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::car_controller_2d::{CarController2d, CarController2dWheel};
+use crate::car_controller_2d::{CarController2d, CarController2dWheel, CarControllerDisabled};
 
 pub mod car_controller_2d;
 use car_controller_2d::CarController2dPlugin;
@@ -162,6 +164,7 @@ fn on_instantiation(
                         NetworkedTransform,
                         id.clone(),
                         CarController2d::new(1.),
+                        CarControllerDisabled,
                         children![
                             (
                                 Transform::from_xyz(half_car_width, half_car_length, 0.),
@@ -256,6 +259,7 @@ fn main() {
             FirestoreP2PPlugin,
             TextInputPlugin,
             CarController2dPlugin,
+            AudioManagerPlugin::default(),
         ))
         .add_systems(Startup, (auto_join_from_url, setup))
         .init_state::<AppState>()
@@ -288,6 +292,7 @@ fn main() {
                 spawn_client_players_buttons,
                 networked_transform,
                 apply_networked_transform,
+                start_light,
                 cursor_positon_log,
             ),
         )
@@ -506,11 +511,14 @@ fn cursor_positon_log(
 }
 
 fn spawn_track(
+    time: Res<Time>,
     mut commands: Commands,
+    mut audio_manager: AudioManager,
     asset_server: Res<AssetServer>,
     mut easy: KartEasyP2P,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
     commands.spawn((
         DespawnOnExit(AppState::Game),
@@ -627,10 +635,62 @@ fn spawn_track(
         white_material.clone(),
         inner_ring,
     );
+
+    let texture = asset_server.load("sprites/start_light.png");
+    let layout = TextureAtlasLayout::from_grid(UVec2::new(15, 7), 5, 1, None, None);
+    let texture_atlas_layout = texture_atlas_layouts.add(layout);
+    commands.spawn((
+        DespawnOnExit(AppState::Game),
+        Transform::from_translation(Vec3::new(-28., 64., 100.)),
+        Sprite::from_atlas_image(
+            texture,
+            TextureAtlas {
+                layout: texture_atlas_layout,
+                index: 1,
+            },
+        ),
+        StartLight,
+    ));
+    commands.insert_resource(RaceStarted(time.elapsed_secs()));
+    audio_manager.play_sound(PlayAudio2D::new_once("sounds/countdown.wav"));
 }
 
 #[derive(Component)]
 struct NetworkedTransform;
+
+#[derive(Component)]
+struct StartLight;
+
+#[derive(Resource)]
+struct RaceStarted(f32);
+
+fn start_light(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut lights: Query<&mut Sprite, With<StartLight>>,
+    race_started: Option<Res<RaceStarted>>,
+    disabled_cars: Query<Entity, With<CarControllerDisabled>>,
+) {
+    let Some(race) = race_started else {
+        return;
+    };
+    let time_since_start = time.elapsed_secs() - race.0;
+    for mut light in lights.iter_mut() {
+        let Some(texture_atlas) = &mut light.texture_atlas else {
+            continue;
+        };
+        let new_index = time_since_start.floor() as usize + 1;
+        if new_index > 4 {
+            continue;
+        }
+        texture_atlas.index = new_index;
+    }
+    if time_since_start > 4. {
+        for entity in disabled_cars.iter() {
+            commands.entity(entity).remove::<CarControllerDisabled>();
+        }
+    }
+}
 
 #[derive(Message, Clone, Debug, Serialize, Deserialize)]
 struct OnNetworkedTransformUpdate(NetworkedId, (Vec3, Quat));

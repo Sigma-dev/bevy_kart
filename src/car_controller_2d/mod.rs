@@ -19,6 +19,9 @@ impl Plugin for CarController2dPlugin {
 }
 
 #[derive(Component)]
+pub struct CarControllerDisabled;
+
+#[derive(Component)]
 pub struct CarController2d {
     pub engine_force: f32,
 }
@@ -42,7 +45,13 @@ impl CarController2d {
 }
 
 fn car_controller_power(
-    mut cars: Query<(Forces, Entity, &Children, &CarController2d), Without<CarController2dWheel>>,
+    mut cars: Query<
+        (Forces, Entity, &Children, &CarController2d),
+        (
+            Without<CarController2dWheel>,
+            Without<CarControllerDisabled>,
+        ),
+    >,
     wheels: Query<(&GlobalTransform, &CarController2dWheel)>,
     mut param_set: ParamSet<(
         KartEasyP2P,

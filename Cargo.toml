@@ -8,7 +8,8 @@ bevy_text_input = { path = "bevy_text_input" }
 bevy_webrtc = { path = "bevy_webrtc" }
 bevy_easy_p2p = { path = "bevy_easy_p2p" }
 bevy_firestore_p2p = { path = "bevy_firestore_p2p" }
-bevy = "0.17"
+audio_manager = { path = "audio_manager" }
+bevy = { version = "0.17", features = ["wav"] }
 avian2d = "0.4"
 serde = { version = "1", features = ["derive"] }
 # Browser API access used directly by this crate

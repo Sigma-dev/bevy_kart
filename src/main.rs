@@ -1,12 +1,13 @@
 use audio_manager::prelude::PlayAudio2D;
 use audio_manager::{AudioManager, AudioManagerPlugin};
 use avian2d::prelude::*;
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_easy_p2p::{
     EasyP2P, EasyP2PPlugin, EasyP2PState, NetworkedEventsExt, OnClientMessageReceived,
     OnHostMessageReceived, OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyJoined,
-    OnRosterUpdate, P2PLobbyState,
+    P2PLobbyState,
 };
 use bevy_easy_p2p::{NetworkedId, NetworkedStatesExt};
 use bevy_firestore_p2p::FirestoreP2PPlugin;
@@ -165,6 +166,7 @@ fn on_instantiation(
                         id.clone(),
                         CarController2d::new(1.),
                         CarControllerDisabled,
+                        LapsCounter(0),
                         children![
                             (
                                 Transform::from_xyz(half_car_width, half_car_length, 0.),
@@ -186,6 +188,7 @@ fn on_instantiation(
                     ))
                     .id();
                 commands.spawn((
+                    DespawnOnExit(AppState::Game),
                     FollowTransform(id),
                     children![(
                         Text2d::new(player.name),
@@ -264,6 +267,9 @@ fn main() {
         .add_systems(Startup, (auto_join_from_url, setup))
         .init_state::<AppState>()
         .init_networked_state::<AppState>()
+        .insert_resource(FinishTimes {
+            times: HashMap::new(),
+        })
         .add_systems(
             Update,
             (
@@ -278,9 +284,11 @@ fn main() {
         )
         .insert_resource(LobbyChatInputHistory(Vec::new()))
         .init_networked_event::<OnNetworkedTransformUpdate>()
+        .init_networked_event::<OnFinishTimeUpdate>()
         .add_systems(OnEnter(P2PLobbyState::OutOfLobby), spawn_menu)
         .add_systems(OnEnter(P2PLobbyState::InLobby), spawn_lobby)
         .add_systems(OnEnter(AppState::Game), spawn_track)
+        .add_systems(OnExit(AppState::Game), spawn_lobby)
         .add_systems(
             Update,
             (
@@ -289,11 +297,13 @@ fn main() {
                 lobby_code,
                 lobby_chat_input_history,
                 spawn_lobby_players_buttons,
-                spawn_client_players_buttons,
                 networked_transform,
                 apply_networked_transform,
                 start_light,
                 cursor_positon_log,
+                handle_end_race,
+                on_receive_finish_times,
+                end_with_delay,
             ),
         )
         .run();
@@ -355,8 +365,13 @@ fn players_buttons(
     parent: Entity,
     players: Vec<bevy_easy_p2p::PlayerInfo<AppPlayerData>>,
     is_host: bool,
+    finish_times: &FinishTimes,
 ) {
     for player in players {
+        let mut player_name_and_rank = player.data.name.clone();
+        if let Some(rank) = finish_times.get_player_rank(player.id) {
+            player_name_and_rank += &format!(" {}", rank);
+        }
         let is_person_host = player.id == NetworkedId::Host;
         if is_person_host == false && is_host {
             let button = commands
@@ -376,7 +391,7 @@ fn players_buttons(
                     BackgroundColor(Color::linear_rgb(0.94, 0.00, 0.00)),
                     KickTarget(player.id),
                     children![(
-                        Text::new(player.data.name.clone()),
+                        Text::new(&player_name_and_rank),
                         TextFont {
                             font_size: 33.0,
                             ..default()
@@ -415,7 +430,7 @@ fn players_buttons(
             BorderRadius::MAX,
             BackgroundColor(Color::linear_rgb(0.00, 0.00, 0.00)),
             children![(
-                Text::new(player.data.name.clone()),
+                Text::new(&player_name_and_rank),
                 TextFont {
                     font_size: 33.0,
                     ..default()
@@ -427,38 +442,28 @@ fn players_buttons(
     }
 }
 
-fn spawn_lobby_players_buttons(
-    mut commands: Commands,
-    buttons: Query<(Entity, Option<&Children>), With<LobbyPlayersButtons>>,
-    easy: KartEasyP2P,
-) {
-    if !easy.is_host() {
-        return;
-    }
-    for (button, children) in buttons.iter() {
-        let players = easy.get_players();
-        if children.map(|c| c.len()).unwrap_or(0) == players.len() {
-            continue;
-        }
-        commands.entity(button).despawn_children();
-        players_buttons(&mut commands, button, players, easy.is_host());
+fn on_receive_finish_times(mut commands: Commands, mut r: MessageReader<OnFinishTimeUpdate>) {
+    for OnFinishTimeUpdate(finish_times) in r.read() {
+        commands.insert_resource(finish_times.clone());
     }
 }
 
-fn spawn_client_players_buttons(
+fn spawn_lobby_players_buttons(
     mut commands: Commands,
     buttons: Query<Entity, With<LobbyPlayersButtons>>,
-    mut roster_r: MessageReader<OnRosterUpdate<AppPlayerData>>,
     easy: KartEasyP2P,
+    finish_times: Res<FinishTimes>,
 ) {
-    if easy.is_host() {
-        return;
-    }
-    for OnRosterUpdate(list) in roster_r.read() {
-        for button in buttons.iter() {
-            commands.entity(button).despawn_children();
-            players_buttons(&mut commands, button, list.clone(), false);
-        }
+    for button in buttons.iter() {
+        let players = easy.get_players();
+        commands.entity(button).despawn_children();
+        players_buttons(
+            &mut commands,
+            button,
+            players,
+            easy.is_host(),
+            &finish_times,
+        );
     }
 }
 
@@ -479,6 +484,7 @@ fn spawn_barriers(
         let length = (*a - *b).length();
         let angle = (*a - *b).y.atan2((*a - *b).x);
         commands.spawn((
+            DespawnOnExit(AppState::Game),
             RigidBody::Static,
             Mesh2d(meshes.add(Rectangle::new(length, 2.))),
             MeshMaterial2d(material.clone()),
@@ -510,7 +516,10 @@ fn cursor_positon_log(
     }
 }
 
+const LAPS_TO_WIN: u32 = 3;
+
 fn spawn_track(
+    mut finish_times: ResMut<FinishTimes>,
     time: Res<Time>,
     mut commands: Commands,
     mut audio_manager: AudioManager,
@@ -520,27 +529,11 @@ fn spawn_track(
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
+    finish_times.times.clear();
     commands.spawn((
         DespawnOnExit(AppState::Game),
         Sprite::from_image(asset_server.load("sprites/track.png")),
     ));
-    if !easy.is_host() {
-        return;
-    }
-    for (i, player) in easy.get_players().iter().enumerate() {
-        let i = i as i32;
-        let position: Vec3 = Vec3::new(
-            (-25 + (i / 3) * -10) as f32,
-            (-39 + (i % 3) * -7) as f32,
-            10.,
-        );
-        easy.instantiate(
-            AppInstantiations::Kart(player.id.clone()),
-            Transform::from_translation(position)
-                .with_rotation(Quat::from_rotation_z(-90_f32.to_radians())),
-        );
-    }
-
     let red_material = materials.add(ColorMaterial::from(Color::srgb(0.68, 0.13, 0.20)));
     let white_material = materials.add(ColorMaterial::from(Color::srgb(1., 1., 1.)));
     let outer_ring = vec![
@@ -635,13 +628,12 @@ fn spawn_track(
         white_material.clone(),
         inner_ring,
     );
-
     let texture = asset_server.load("sprites/start_light.png");
     let layout = TextureAtlasLayout::from_grid(UVec2::new(15, 7), 5, 1, None, None);
     let texture_atlas_layout = texture_atlas_layouts.add(layout);
     commands.spawn((
         DespawnOnExit(AppState::Game),
-        Transform::from_translation(Vec3::new(-28., 64., 100.)),
+        Transform::from_translation(Vec3::new(-28., -64., 100.)),
         Sprite::from_atlas_image(
             texture,
             TextureAtlas {
@@ -651,9 +643,106 @@ fn spawn_track(
         ),
         StartLight,
     ));
-    commands.insert_resource(RaceStarted(time.elapsed_secs()));
     audio_manager.play_sound(PlayAudio2D::new_once("sounds/countdown.wav"));
+    commands.insert_resource(RaceStarted(time.elapsed_secs()));
+    if !easy.is_host() {
+        return;
+    }
+    for (i, player) in easy.get_players().iter().enumerate() {
+        let i = i as i32;
+        let position: Vec3 = Vec3::new(
+            (-25 + (i / 3) * -10) as f32,
+            (-39 + (i % 3) * -7) as f32,
+            10.,
+        );
+        easy.instantiate(
+            AppInstantiations::Kart(player.id.clone()),
+            Transform::from_translation(position)
+                .with_rotation(Quat::from_rotation_z(-90_f32.to_radians())),
+        );
+    }
+
+    commands
+        .spawn((
+            DespawnOnExit(AppState::Game),
+            Transform::from_translation(Vec3::new(-60., -47.5, 100.)),
+            Collider::rectangle(10., 30.),
+            Sensor,
+            CollisionEventsEnabled,
+        ))
+        .observe(
+            |trigger: On<CollisionStart>,
+             mut commands: Commands,
+             can_finish_lap: Query<Entity, With<HasPassedPostStart>>| {
+                if let Ok(entity) = can_finish_lap.get(trigger.collider2) {
+                    commands.entity(entity).insert(CanFinishLap);
+                }
+            },
+        );
+
+    commands
+        .spawn((
+            DespawnOnExit(AppState::Game),
+            Transform::from_translation(Vec3::new(-18., -47.5, 100.)),
+            Collider::rectangle(10., 30.),
+            Sensor,
+            CollisionEventsEnabled,
+        ))
+        .observe(
+            |trigger: On<CollisionStart>,
+             time: Res<Time>,
+             mut car: Query<(Entity, &mut LapsCounter, Option<&CanFinishLap>)>,
+             mut commands: Commands,
+             mut finish_times: ResMut<FinishTimes>,
+             easy: KartEasyP2P| {
+                if let Ok((entity, mut lap_counter, maybe_can_finish_lap)) =
+                    car.get_mut(trigger.collider2)
+                {
+                    commands.entity(entity).remove::<HasPassedPostStart>();
+                    commands.entity(entity).remove::<CanFinishLap>();
+                    if maybe_can_finish_lap.is_none() {
+                        return;
+                    }
+                    lap_counter.0 += 1;
+                    if lap_counter.0 == LAPS_TO_WIN {
+                        commands.entity(entity).insert(CarControllerDisabled);
+                        finish_times.times.insert(
+                            easy.get_closest_networked_id(entity).unwrap().clone(),
+                            time.elapsed_secs(),
+                        );
+                    }
+                }
+            },
+        );
+
+    commands
+        .spawn((
+            DespawnOnExit(AppState::Game),
+            Transform::from_translation(Vec3::new(-2., -47.5, 100.)),
+            Collider::rectangle(10., 30.),
+            Sensor,
+            CollisionEventsEnabled,
+        ))
+        .observe(
+            |trigger: On<CollisionStart>,
+             car: Query<Entity, With<LapsCounter>>,
+             mut commands: Commands| {
+                if let Ok(entity) = car.get(trigger.collider2) {
+                    commands.entity(entity).insert(HasPassedPostStart);
+                } else {
+                }
+            },
+        );
 }
+
+#[derive(Component)]
+struct HasPassedPostStart;
+
+#[derive(Component)]
+struct CanFinishLap;
+
+#[derive(Component)]
+struct LapsCounter(u32);
 
 #[derive(Component)]
 struct NetworkedTransform;
@@ -663,6 +752,90 @@ struct StartLight;
 
 #[derive(Resource)]
 struct RaceStarted(f32);
+
+#[derive(Resource, Clone, Debug, Serialize, Deserialize)]
+struct FinishTimes {
+    #[serde(serialize_with = "ser_times", deserialize_with = "de_times")]
+    pub times: HashMap<NetworkedId, f32>,
+}
+
+fn ser_times<S>(map: &HashMap<NetworkedId, f32>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let as_vec: Vec<(NetworkedId, f32)> = map.iter().map(|(k, v)| (*k, *v)).collect();
+    as_vec.serialize(serializer)
+}
+
+fn de_times<'de, D>(deserializer: D) -> Result<HashMap<NetworkedId, f32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let vec: Vec<(NetworkedId, f32)> = Vec::deserialize(deserializer)?;
+    Ok(vec.into_iter().collect())
+}
+
+impl FinishTimes {
+    fn get_player_rank(&self, player_id: NetworkedId) -> Option<usize> {
+        let mut all_times = self
+            .times
+            .iter()
+            .map(|(id, time)| (id.clone(), *time))
+            .collect::<Vec<_>>();
+        all_times.sort_by(|(_, time), (_, time2)| time.partial_cmp(time2).unwrap());
+        let rank = all_times
+            .iter()
+            .position(|(id, _)| *id == player_id)
+            .map(|index| index + 1)?;
+        Some(rank)
+    }
+}
+
+#[derive(Message, Clone, Debug, Serialize, Deserialize)]
+struct OnFinishTimeUpdate(FinishTimes);
+
+#[derive(Resource)]
+struct RaceEnded(f32);
+
+fn handle_end_race(
+    time: Res<Time>,
+    mut commands: Commands,
+    easy: KartEasyP2P,
+    cars: Query<&LapsCounter>,
+    mut events_w: MessageWriter<OnFinishTimeUpdate>,
+    finish_times: Res<FinishTimes>,
+    race_ended: Option<Res<RaceEnded>>,
+) {
+    if !easy.is_host() {
+        return;
+    }
+    if cars.iter().count() == 0 || cars.iter().any(|car| car.0 != LAPS_TO_WIN) {
+        return;
+    }
+    if race_ended.is_some() {
+        return;
+    }
+    events_w.write(OnFinishTimeUpdate(finish_times.clone()));
+    commands.insert_resource(RaceEnded(time.elapsed_secs()));
+}
+
+fn end_with_delay(
+    time: Res<Time>,
+    race_ended: Option<Res<RaceEnded>>,
+    easy: KartEasyP2P,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    if !easy.is_host() {
+        return;
+    }
+    let Some(race_ended) = race_ended else {
+        return;
+    };
+    if time.elapsed_secs() - race_ended.0 < 3. {
+        return;
+    }
+    next_state.set(AppState::OutOfGame);
+}
 
 fn start_light(
     mut commands: Commands,
@@ -685,7 +858,7 @@ fn start_light(
         }
         texture_atlas.index = new_index;
     }
-    if time_since_start > 4. {
+    if time_since_start > 3. && time_since_start < 4. {
         for entity in disabled_cars.iter() {
             commands.entity(entity).remove::<CarControllerDisabled>();
         }

@@ -17,7 +17,7 @@ pub enum P2PLobbyState {
 }
 
 // Typed transport data
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Component, Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NetworkedId {
     Host,
     ClientId(u64),
@@ -838,7 +838,6 @@ fn intercept_data_messages<PlayerData: Default + PartialEq, PlayerInputData, Ins
             }
             P2PData::EventSync(type_index, payload) => {
                 let idx = *type_index as usize;
-                info!("EventSync: {:?}", idx);
                 if idx < event_register.readers.len() {
                     commands.queue(EmitSyncedEvent {
                         index: *type_index,
@@ -995,11 +994,16 @@ fn host_broadcast_event<E>(
     }
     for e in events.read() {
         if let Some(index) = register.indexes.get(&TypeId::of::<E>()) {
-            if let Ok(text) = serde_json::to_string(e) {
-                if let Ok(payload) =
-                    serde_json::to_string(&P2PData::<(), (), ()>::EventSync(*index, text))
-                {
-                    w_send_all.write(OnTransportSendToAll(payload));
+            match serde_json::to_string(e) {
+                Ok(text) => {
+                    if let Ok(payload) =
+                        serde_json::to_string(&P2PData::<(), (), ()>::EventSync(*index, text))
+                    {
+                        w_send_all.write(OnTransportSendToAll(payload));
+                    }
+                }
+                Err(e) => {
+                    info!("Error serializing event: {:?}", e);
                 }
             }
         }

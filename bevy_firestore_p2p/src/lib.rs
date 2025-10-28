@@ -249,7 +249,6 @@ fn handle_send_requests(
 ) {
     for OnTransportSendToAll(text) in send_all_r.read() {
         for (_, c) in q_conns.iter() {
-            info!("Sending to {:?}: {}", c.id, text);
             w_send.write(SendData {
                 id: c.id,
                 text: text.clone(),

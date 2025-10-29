@@ -824,6 +824,7 @@ fn handle_end_race(
 }
 
 fn end_with_delay(
+    mut commands: Commands,
     time: Res<Time>,
     race_ended: Option<Res<RaceEnded>>,
     easy: KartEasyP2P,
@@ -839,6 +840,7 @@ fn end_with_delay(
         return;
     }
     next_state.set(AppState::OutOfGame);
+    commands.remove_resource::<RaceEnded>();
 }
 
 fn start_light(

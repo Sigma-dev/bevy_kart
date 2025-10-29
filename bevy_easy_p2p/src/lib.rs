@@ -3,6 +3,9 @@ use core::any::TypeId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod networked_transform;
+pub mod prelude;
+
 pub type ClientId = u64;
 
 #[derive(Clone, Copy, Default, Eq, PartialEq, Debug, Hash, States)]
@@ -479,7 +482,13 @@ where
                     ),
                 )
                     .chain(),),
-            );
+            )
+            .add_plugins(networked_transform::NetworkedTransformPlugin::<
+                T,
+                PlayerData,
+                PlayerInputData,
+                Instantiations,
+            >::default());
     }
 }
 

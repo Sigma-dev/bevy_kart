@@ -96,8 +96,9 @@ impl Plugin for FirestoreP2PPlugin {
 
 fn generate_room_code() -> String {
     const ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    let mut out = String::with_capacity(6);
-    for _ in 0..6 {
+    let code_length = 4;
+    let mut out = String::with_capacity(code_length);
+    for _ in 0..code_length {
         let r = (js_sys::Math::random() * (ALPHABET.len() as f64)).floor() as usize;
         out.push(ALPHABET.as_bytes()[r] as char);
     }

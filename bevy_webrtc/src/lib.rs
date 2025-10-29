@@ -171,6 +171,78 @@ async fn await_ice_complete(pc: RtcPeerConnection) {
     closure.forget();
 }
 
+// Ensure local tab/window closing proactively closes PC/DC so remote detects it immediately
+fn register_unload_close(pc: RtcPeerConnection, dc: Option<RtcDataChannel>) {
+    if let Some(window) = web_sys::window() {
+        // pagehide
+        let pc_ph = pc.clone();
+        let dc_ph = dc.clone();
+        let on_pagehide = Closure::wrap(Box::new(move |_ev: web_sys::Event| {
+            if let Some(ref ch) = dc_ph {
+                let _ = ch.close();
+            }
+            pc_ph.close();
+        }) as Box<dyn FnMut(web_sys::Event)>);
+        let _ = window
+            .add_event_listener_with_callback("pagehide", on_pagehide.as_ref().unchecked_ref());
+        on_pagehide.forget();
+
+        // beforeunload
+        let pc_bu = pc.clone();
+        let dc_bu = dc.clone();
+        let on_beforeunload = Closure::wrap(Box::new(move |_ev: web_sys::Event| {
+            if let Some(ref ch) = dc_bu {
+                let _ = ch.close();
+            }
+            pc_bu.close();
+        }) as Box<dyn FnMut(web_sys::Event)>);
+        let _ = window.add_event_listener_with_callback(
+            "beforeunload",
+            on_beforeunload.as_ref().unchecked_ref(),
+        );
+        on_beforeunload.forget();
+    }
+}
+
+// Hook RTCPeerConnection state changes to detect disconnects in addition to DataChannel onclose
+fn hook_peer_connection(pending_closed: Rc<Cell<bool>>, pc: &RtcPeerConnection) {
+    // Fallback to string-based state reads for broader web-sys compatibility
+    let flag_conn = pending_closed.clone();
+    let pc_conn = pc.clone();
+    let conn_state_closure = Closure::wrap(Box::new(move || {
+        let target: JsValue = JsValue::from(pc_conn.clone());
+        if let Ok(state_val) = js_sys::Reflect::get(&target, &JsValue::from_str("connectionState"))
+        {
+            if let Some(state) = state_val.as_string() {
+                info!("pc.connectionState={}", state);
+                if state == "disconnected" || state == "failed" || state == "closed" {
+                    info!("pc.connectionState indicates closed/disconnected/failed -> mark closed");
+                    flag_conn.set(true);
+                }
+            }
+        }
+    }) as Box<dyn FnMut()>);
+    pc.set_onconnectionstatechange(Some(conn_state_closure.as_ref().unchecked_ref()));
+    conn_state_closure.forget();
+
+    let flag_ice = pending_closed.clone();
+    let pc_ice = pc.clone();
+    let ice_state_closure = Closure::wrap(Box::new(move || {
+        let target: JsValue = JsValue::from(pc_ice.clone());
+        if let Ok(state_val) =
+            js_sys::Reflect::get(&target, &JsValue::from_str("iceConnectionState"))
+        {
+            if let Some(state) = state_val.as_string() {
+                if state == "disconnected" || state == "failed" || state == "closed" {
+                    flag_ice.set(true);
+                }
+            }
+        }
+    }) as Box<dyn FnMut()>);
+    pc.set_oniceconnectionstatechange(Some(ice_state_closure.as_ref().unchecked_ref()));
+    ice_state_closure.forget();
+}
+
 // Setup data channel callbacks and store channel
 fn hook_data_channel(
     pending_open: Rc<Cell<bool>>,
@@ -233,6 +305,9 @@ fn handle_create_offer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<Cr
             }
         };
 
+        // Detect disconnects via peer connection state changes
+        hook_peer_connection(state.pending_closed.clone(), &pc);
+
         // Create data channel immediately (offerer)
         let dc = pc.create_data_channel("data");
         hook_data_channel(
@@ -241,6 +316,9 @@ fn handle_create_offer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<Cr
             state.pending_messages.clone(),
             &dc,
         );
+
+        // Proactively close on page unload (offerer side has DC now)
+        register_unload_close(pc.clone(), Some(dc.clone()));
 
         // Prepare to emit local SDP after ICE completes
         let sdp_buf = state.pending_local_sdp.clone();
@@ -297,6 +375,11 @@ fn handle_create_answer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<C
         };
 
         // Listen for datachannel from offerer
+        // Also detect disconnects via peer connection state changes
+        hook_peer_connection(state.pending_closed.clone(), &pc);
+        let pc_for_dc = pc.clone();
+        // Proactively close on page unload (answerer may not have DC yet)
+        register_unload_close(pc.clone(), None);
         let on_dc_ctx_open = state.pending_open.clone();
         let on_dc_ctx_closed = state.pending_closed.clone();
         let on_dc_ctx_msgs = state.pending_messages.clone();
@@ -310,6 +393,10 @@ fn handle_create_answer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<C
                 &channel,
             );
             dc_slot.borrow_mut().replace(channel);
+            // Register unload close with concrete channel on answerer side too
+            if let Some(pc_ref) = Some(pc_for_dc.clone()) {
+                register_unload_close(pc_ref, dc_slot.borrow().as_ref().cloned());
+            }
         }) as Box<dyn FnMut(RtcDataChannelEvent)>);
         pc.set_ondatachannel(Some(on_dc.as_ref().unchecked_ref()));
         on_dc.forget();

@@ -1,7 +1,4 @@
-use bevy::{
-    ecs::system::SystemParam, platform::collections::HashSet, prelude::*,
-    state::state::FreelyMutableState,
-};
+use bevy::{ecs::system::SystemParam, prelude::*, state::state::FreelyMutableState};
 use core::any::TypeId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -17,10 +14,25 @@ pub enum P2PLobbyState {
 }
 
 // Typed transport data
-#[derive(Component, Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NetworkedId {
     Host,
     ClientId(u64),
+}
+
+#[derive(Component)]
+pub struct NetworkedEntity {
+    id: NetworkedId,
+    despawn_on_leave: bool,
+}
+
+impl NetworkedEntity {
+    pub fn new(id: NetworkedId) -> Self {
+        Self {
+            id,
+            despawn_on_leave: true,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -273,7 +285,7 @@ pub struct EasyP2P<
     >,
     state: ResMut<'w, EasyP2PState<PlayerData>>,
     children_q: Query<'w, 's, &'static ChildOf>,
-    network_ids_q: Query<'w, 's, &'static NetworkedId>,
+    network_entities_q: Query<'w, 's, &'static NetworkedEntity>,
     _marker: std::marker::PhantomData<&'s T>,
 }
 
@@ -367,14 +379,14 @@ where
             .clone()
     }
     pub fn get_closest_networked_id(&self, entity: Entity) -> Option<NetworkedId> {
-        if self.network_ids_q.contains(entity) {
-            return Some(self.network_ids_q.get(entity).unwrap().clone());
+        if self.network_entities_q.contains(entity) {
+            return Some(self.network_entities_q.get(entity).unwrap().id);
         }
         let ancestor = self
             .children_q
             .iter_ancestors(entity)
-            .find(|a| self.network_ids_q.contains(*a))?;
-        Some(self.network_ids_q.get(ancestor).unwrap().clone())
+            .find(|a| self.network_entities_q.contains(*a))?;
+        Some(self.network_entities_q.get(ancestor).unwrap().id)
     }
     pub fn inputs_belong_to_player(&self, entity: Entity, id: &NetworkedId) -> bool {
         let Some(ancestor) = self.get_closest_networked_id(entity) else {
@@ -463,6 +475,7 @@ where
                         broadcast_roster_on_host::<PlayerData, PlayerInputData, Instantiations>,
                         encode_outgoing::<PlayerData, PlayerInputData, Instantiations>,
                         decode_incoming::<PlayerData, PlayerInputData, Instantiations>,
+                        despawn_on_leave::<PlayerData>,
                     ),
                 )
                     .chain(),),
@@ -611,6 +624,7 @@ fn broadcast_roster_on_host<
     Instantiations: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
 >(
     mut info_r: MessageReader<OnTransportRosterChanged>,
+    mut roster_w: MessageWriter<OnRosterUpdate<PlayerData>>,
     mut w_send_all: MessageWriter<OnSendToAllReq<PlayerData, PlayerInputData, Instantiations>>,
     mut state: ResMut<EasyP2PState<PlayerData>>,
 ) {
@@ -618,18 +632,48 @@ fn broadcast_roster_on_host<
         return;
     }
     for OnTransportRosterChanged(list) in info_r.read() {
-        // Build allowed set from transport’s joined client ids
-        let allowed: HashSet<u64> = list.iter().filter_map(|s| s.parse::<u64>().ok()).collect();
-
         // Prune clients not in the transport roster
         state.players.retain(|p| match p.id {
-            NetworkedId::ClientId(cid) => allowed.contains(&cid),
+            NetworkedId::ClientId(cid) => list.contains(&cid.to_string()),
             NetworkedId::Host => true,
         });
 
         // Broadcast updated roster (host + filtered clients)
         let players = state.get_players(state.is_host);
+        // Emit local roster update for the host
+        let _ = roster_w.write(OnRosterUpdate(players.clone()));
+        // Broadcast to all peers
         w_send_all.write(OnSendToAllReq(P2PData::HostLobbyInfoUpdate(players)));
+    }
+}
+
+fn despawn_on_leave<
+    PlayerData: Serialize
+        + for<'de> Deserialize<'de>
+        + Clone
+        + Send
+        + Sync
+        + core::fmt::Debug
+        + 'static
+        + Default
+        + PartialEq,
+>(
+    mut commands: Commands,
+    mut on_roster_update: MessageReader<OnRosterUpdate<PlayerData>>,
+    network_entities_q: Query<(Entity, &NetworkedEntity)>,
+) {
+    for OnRosterUpdate(list) in on_roster_update.read() {
+        for (entity, networked) in network_entities_q.iter() {
+            let should_despawn = match networked.id {
+                NetworkedId::ClientId(cid) => {
+                    !list.iter().any(|p| p.id == NetworkedId::ClientId(cid))
+                }
+                NetworkedId::Host => false,
+            };
+            if should_despawn && networked.despawn_on_leave {
+                commands.entity(entity).despawn();
+            }
+        }
     }
 }
 

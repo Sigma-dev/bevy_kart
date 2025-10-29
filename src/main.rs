@@ -5,9 +5,9 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_easy_p2p::{
-    EasyP2P, EasyP2PPlugin, EasyP2PState, NetworkedEventsExt, OnClientMessageReceived,
-    OnHostMessageReceived, OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyJoined,
-    P2PLobbyState,
+    EasyP2P, EasyP2PPlugin, EasyP2PState, NetworkedEntity, NetworkedEventsExt,
+    OnClientMessageReceived, OnHostMessageReceived, OnLobbyCreated, OnLobbyEntered, OnLobbyExit,
+    OnLobbyJoined, P2PLobbyState,
 };
 use bevy_easy_p2p::{NetworkedId, NetworkedStatesExt};
 use bevy_firestore_p2p::FirestoreP2PPlugin;
@@ -163,7 +163,7 @@ fn on_instantiation(
                         ),
                         data.transform,
                         NetworkedTransform,
-                        id.clone(),
+                        NetworkedEntity::new(id.clone()),
                         CarController2d::new(1.),
                         CarControllerDisabled,
                         LapsCounter(0),
@@ -206,12 +206,16 @@ fn on_instantiation(
 struct FollowTransform(Entity);
 
 fn follow_transform(
+    mut commands: Commands,
     transforms: Query<&Transform, Without<FollowTransform>>,
-    mut follow_transforms: Query<(&mut Transform, &FollowTransform)>,
+    mut follow_transforms: Query<(Entity, &mut Transform, &FollowTransform)>,
 ) {
-    for (mut transform, follow_transform) in follow_transforms.iter_mut() {
-        let target_transform = transforms.get(follow_transform.0).unwrap();
-        transform.translation = target_transform.translation;
+    for (entity, mut transform, follow_transform) in follow_transforms.iter_mut() {
+        if let Ok(target_transform) = transforms.get(follow_transform.0) {
+            transform.translation = target_transform.translation;
+        } else {
+            commands.entity(entity).despawn();
+        }
     }
 }
 

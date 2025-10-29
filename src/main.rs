@@ -983,7 +983,8 @@ fn spawn_lobby(mut commands: Commands, easy: KartEasyP2P) {
             Node {
                 position_type: PositionType::Absolute,
                 bottom: px(5),
-                left: px(5),
+                right: px(5),
+                height: px(25),
                 ..default()
             },
         ))
@@ -1121,38 +1122,34 @@ fn spawn_menu(mut commands: Commands, mut easy: KartEasyP2P) {
         .spawn((
             TextInput::new(true, true, true),
             Node {
-                position_type: PositionType::Absolute,
-                top: px(15),
-                left: px(15),
                 height: px(25),
                 width: px(150),
                 ..default()
-            },
-            Outline {
-                width: px(6),
-                offset: px(6),
-                color: Color::WHITE,
             },
         ))
         .observe(|trigger: On<InputFieldSubmit>, mut easy: KartEasyP2P| {
             easy.join_lobby(&trigger.text().to_string());
         })
         .id();
+    let mut code_parent = commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(15),
+            left: px(15),
+            column_gap: px(10),
+            ..default()
+        },
+        children![(Text::new("Lobby Code:"))],
+    ));
+    code_parent.add_child(code_input);
+    let code_parent_id = code_parent.id();
     let name_input = commands
         .spawn((
             TextInput::new(false, false, false).with_max_characters(10),
             Text::new(easy.get_local_player_data().name.clone()),
             Node {
-                position_type: PositionType::Absolute,
-                top: px(15),
-                right: px(15),
                 height: px(25),
                 ..default()
-            },
-            Outline {
-                width: px(6),
-                offset: px(6),
-                color: Color::WHITE,
             },
         ))
         .observe(|trigger: On<InputFieldChange>, mut easy: KartEasyP2P| {
@@ -1161,7 +1158,19 @@ fn spawn_menu(mut commands: Commands, mut easy: KartEasyP2P) {
             });
         })
         .id();
+    let mut name_parent = commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(15),
+            right: px(15),
+            column_gap: px(10),
+            ..default()
+        },
+        children![(Text::new("Name:"),)],
+    ));
+    name_parent.add_child(name_input);
+    let name_parent_id = name_parent.id();
     commands
         .entity(menu)
-        .add_children(&[button, code_input, name_input]);
+        .add_children(&[button, code_parent_id, name_parent_id]);
 }

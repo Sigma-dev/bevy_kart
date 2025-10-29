@@ -19,6 +19,7 @@ impl Plugin for TextInputPlugin {
                 handle_default_focus,
                 handle_focus,
                 handle_inputs_size,
+                handle_focus_styling,
             ),
         );
     }
@@ -184,5 +185,31 @@ fn handle_focus(
         if inputs.contains(pointer.entity) {
             commands.insert_resource(TextInputFocus(pointer.entity));
         }
+    }
+}
+
+fn handle_focus_styling(
+    mut commands: Commands,
+    focus: Option<Res<TextInputFocus>>,
+    inputs: Query<Entity, With<TextInput>>,
+) {
+    for entity in inputs.iter() {
+        if focus
+            .as_ref()
+            .map(|focus| focus.0 == entity)
+            .unwrap_or(false)
+        {
+            commands.entity(entity).insert(Outline {
+                width: px(6),
+                offset: px(6),
+                color: Color::linear_rgb(0.30, 0.30, 0.30),
+            });
+            continue;
+        }
+        commands.entity(entity).insert(Outline {
+            width: px(6),
+            offset: px(6),
+            color: Color::WHITE,
+        });
     }
 }

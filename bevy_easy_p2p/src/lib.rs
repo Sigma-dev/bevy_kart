@@ -17,7 +17,7 @@ pub enum P2PLobbyState {
 }
 
 // Typed transport data
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Component, Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NetworkedId {
     Host,
     ClientId(u64),
@@ -290,6 +290,7 @@ pub struct EasyP2P<
     children_q: Query<'w, 's, &'static ChildOf>,
     network_entities_q: Query<'w, 's, &'static NetworkedEntity>,
     _marker: std::marker::PhantomData<&'s T>,
+    roster_w: MessageWriter<'w, OnRosterUpdate<PlayerData>>,
 }
 
 impl<'w, 's, T: P2PTransport, PlayerData: Default + PartialEq, PlayerInputData, Instantiations>
@@ -371,7 +372,16 @@ where
         self.state.local_player_data.clone()
     }
     pub fn set_local_player_data(&mut self, data: PlayerData) {
-        self.state.local_player_data = data;
+        self.state.local_player_data = data.clone();
+        if self.state.is_host {
+            let players = self.state.get_players(self.state.is_host);
+            let _ = self.roster_w.write(OnRosterUpdate(players.clone()));
+            self.send_all_w
+                .write(OnSendToAllReq(P2PData::HostLobbyInfoUpdate(players)));
+        } else {
+            self.send_host_w
+                .write(OnSendToHostReq(P2PData::ClientDataUpdate(data)));
+        }
     }
     pub fn get_player_data(&self, id: NetworkedId) -> PlayerData {
         self.get_players()
@@ -1140,6 +1150,7 @@ fn handle_client_data_update_on_host<
     >,
     mut state: ResMut<EasyP2PState<PlayerData>>,
     mut w_send_all: MessageWriter<OnSendToAllReq<PlayerData, PlayerInputData, Instantiations>>,
+    mut roster_w: MessageWriter<OnRosterUpdate<PlayerData>>,
 ) {
     if !state.is_host {
         return;
@@ -1166,6 +1177,9 @@ fn handle_client_data_update_on_host<
             let payload = state.get_players(state.is_host);
             info!("sending local data to all after enter: {:?}", payload);
             w_send_all.write(OnSendToAllReq(P2PData::HostLobbyInfoUpdate(payload)));
+            // Emit local roster update for the host as well
+            let players = state.get_players(state.is_host);
+            let _ = roster_w.write(OnRosterUpdate(players));
         }
     }
 }

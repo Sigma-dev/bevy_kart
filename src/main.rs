@@ -27,6 +27,31 @@ pub type KartEasyP2P<'w, 's> =
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct AppPlayerData {
     pub name: String,
+    pub kart_color: KartColor,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct KartColor(u32);
+
+impl KartColor {
+    fn new() -> Self {
+        Self(0)
+    }
+
+    fn right(&self) -> KartColor {
+        Self((self.0 + 1) % CAR_COLORS_COUNT)
+    }
+
+    fn left(&self) -> KartColor {
+        if self.0 == 0 {
+            return Self(CAR_COLORS_COUNT - 1);
+        }
+        Self(self.0 - 1)
+    }
+
+    fn to_u32(&self) -> u32 {
+        self.0
+    }
 }
 
 #[derive(States, Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -36,18 +61,17 @@ enum AppState {
     Game,
 }
 
-impl From<String> for AppPlayerData {
-    fn from(value: String) -> Self {
-        Self { name: value }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppPlayerInputData {
     pub forward: bool,
     pub backward: bool,
     pub left: bool,
     pub right: bool,
+}
+
+#[derive(Resource)]
+struct AssetHandles {
+    karts_texture: Handle<Image>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -113,15 +137,14 @@ fn on_lobby_created(mut r: MessageReader<OnLobbyCreated>) {
 
 fn on_instantiation(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
     mut easy: KartEasyP2P,
+    asset_handles: Res<AssetHandles>,
 ) {
     for data in easy.get_instantiations() {
         match &data.instantiation {
             AppInstantiations::Kart(id) => {
                 let player = easy.get_player_data(id.clone());
-                let texture = asset_server.load("sprites/karts.png");
                 let layout =
                     TextureAtlasLayout::from_grid(UVec2::splat(8), CAR_COLORS_COUNT, 1, None, None);
                 let texture_atlas_layout = texture_atlas_layouts.add(layout);
@@ -134,10 +157,10 @@ fn on_instantiation(
                         RigidBody::Dynamic,
                         Collider::rectangle(4., 8.),
                         Sprite::from_atlas_image(
-                            texture,
+                            asset_handles.karts_texture.clone(),
                             TextureAtlas {
                                 layout: texture_atlas_layout,
-                                index: 0,
+                                index: player.kart_color.to_u32() as usize,
                             },
                         ),
                         data.transform,
@@ -224,6 +247,9 @@ fn main() {
         .insert_resource(FinishTimes {
             times: HashMap::new(),
         })
+        .insert_resource(AssetHandles {
+            karts_texture: Handle::default(),
+        })
         .add_systems(Update, (on_lobby_created, on_instantiation))
         .add_systems(OnEnter(P2PLobbyState::OutOfLobby), spawn_menu)
         .add_systems(OnEnter(P2PLobbyState::InLobby), spawn_lobby)
@@ -233,13 +259,18 @@ fn main() {
         .run();
 }
 
-fn setup(mut commands: Commands) {
+fn setup(
+    mut commands: Commands,
+    mut handles: ResMut<AssetHandles>,
+    asset_server: Res<AssetServer>,
+) {
     let mut projection = OrthographicProjection::default_2d();
     projection.scaling_mode = bevy::camera::ScalingMode::Fixed {
         width: 256.,
         height: 144.,
     };
     commands.spawn((Camera2d, Projection::Orthographic(projection)));
+    handles.karts_texture = asset_server.load("sprites/karts.png");
 }
 
 fn cursor_positon_log(

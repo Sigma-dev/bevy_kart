@@ -1,4 +1,4 @@
-use crate::{AppPlayerData, AppState, KartEasyP2P};
+use crate::{AppPlayerData, AppState, KartColor, KartEasyP2P};
 use bevy::prelude::*;
 use bevy_easy_p2p::prelude::*;
 use bevy_text_input::prelude::*;
@@ -7,6 +7,7 @@ pub fn spawn_menu(mut commands: Commands, mut easy: KartEasyP2P) {
     if easy.get_local_player_data().name.is_empty() {
         easy.set_local_player_data(AppPlayerData {
             name: "YOUR_NAME".to_string(),
+            kart_color: KartColor::new(),
         });
     }
     let menu = commands
@@ -88,6 +89,7 @@ pub fn spawn_menu(mut commands: Commands, mut easy: KartEasyP2P) {
         .observe(|trigger: On<InputFieldChange>, mut easy: KartEasyP2P| {
             easy.set_local_player_data(AppPlayerData {
                 name: trigger.text().to_string(),
+                kart_color: KartColor::new(),
             });
         })
         .id();

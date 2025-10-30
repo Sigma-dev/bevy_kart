@@ -5,7 +5,7 @@ use bevy_easy_p2p::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AppInstantiations, AppState, FinishTimes, KartEasyP2P, LAPS_TO_WIN, LapsCounter,
+    AppInstantiations, AppState, FinishTimes, KartEasyP2P, LAPS_TO_WIN, LapsCounter, SpriteLayers,
     car_controller_2d::CarControllerDisabled,
 };
 
@@ -66,7 +66,7 @@ fn spawn_barriers(
             Mesh2d(meshes.add(Rectangle::new(length, 2.))),
             MeshMaterial2d(material.clone()),
             Collider::rectangle(length, 2.),
-            Transform::from_translation(middle.extend(100.))
+            Transform::from_translation(middle.extend(SpriteLayers::Car.to_z()))
                 .with_rotation(Quat::from_rotation_z(angle)),
         ));
     }
@@ -187,7 +187,7 @@ pub(crate) fn spawn_track(
     let texture_atlas_layout = texture_atlas_layouts.add(layout);
     commands.spawn((
         DespawnOnExit(AppState::Game),
-        Transform::from_translation(Vec3::new(-28., -64., 100.)),
+        Transform::from_translation(Vec3::new(-28., -64., SpriteLayers::Car.to_z())),
         Sprite::from_atlas_image(
             texture,
             TextureAtlas {
@@ -207,7 +207,7 @@ pub(crate) fn spawn_track(
         let position: Vec3 = Vec3::new(
             (-25 + (i / 3) * -10) as f32,
             (-39 + (i % 3) * -7) as f32,
-            10.,
+            SpriteLayers::Car.to_z(),
         );
         easy.instantiate(
             AppInstantiations::Kart(player.id.clone()),
@@ -237,7 +237,7 @@ pub(crate) fn spawn_track(
     commands
         .spawn((
             DespawnOnExit(AppState::Game),
-            Transform::from_translation(Vec3::new(-18., -47.5, 100.)),
+            Transform::from_translation(Vec3::new(-18., -47.5, 0.)),
             Collider::rectangle(10., 30.),
             Sensor,
             CollisionEventsEnabled,
@@ -272,7 +272,7 @@ pub(crate) fn spawn_track(
     commands
         .spawn((
             DespawnOnExit(AppState::Game),
-            Transform::from_translation(Vec3::new(-2., -47.5, 100.)),
+            Transform::from_translation(Vec3::new(-2., -47.5, 0.)),
             Collider::rectangle(10., 30.),
             Sensor,
             CollisionEventsEnabled,

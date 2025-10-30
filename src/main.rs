@@ -3,8 +3,8 @@ use avian2d::prelude::*;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_easy_p2p::prelude::*;
 use bevy_easy_p2p::{NetworkedId, NetworkedStatesExt};
+use bevy_easy_p2p::{OnClientInput, prelude::*};
 use bevy_firestore_p2p::FirestoreP2PPlugin;
 use bevy_firestore_p2p::FirestoreWebRtcTransport;
 use bevy_text_input::prelude::*;
@@ -72,6 +72,7 @@ pub struct AppPlayerInputData {
 #[derive(Resource)]
 struct AssetHandles {
     karts_texture: Handle<Image>,
+    wheel_texture: Handle<Image>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -81,6 +82,138 @@ pub enum AppInstantiations {
 
 #[derive(Component)]
 struct LapsCounter(u32);
+
+pub enum SpriteLayers {
+    Background,
+    OnGround,
+    Wheels,
+    Car,
+    AboveCar,
+}
+
+impl SpriteLayers {
+    fn to_z(&self) -> f32 {
+        match self {
+            SpriteLayers::Background => -100.,
+            SpriteLayers::OnGround => -10.,
+            SpriteLayers::Wheels => -1.,
+            SpriteLayers::Car => 10.,
+            SpriteLayers::AboveCar => 100.,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum WheelRotation {
+    Left,
+    Right,
+    Straight,
+}
+
+#[derive(Message, Clone, Debug, Serialize, Deserialize)]
+struct WheelPositionUpdate(NetworkedId, WheelRotation);
+
+const LAPS_TO_WIN: u32 = 3;
+const CAR_COLORS_COUNT: u32 = 10;
+const CAR_SIZE: UVec2 = UVec2::new(4, 8);
+
+fn main() {
+    App::new()
+        .add_plugins((
+            DefaultPlugins.set(ImagePlugin::default_nearest()),
+            PhysicsPlugins::default(),
+        ))
+        .insert_resource(Gravity::ZERO)
+        .add_plugins((
+            EasyP2PPlugin::<
+                FirestoreWebRtcTransport,
+                AppPlayerData,
+                AppPlayerInputData,
+                AppInstantiations,
+            >::default(),
+            FirestoreP2PPlugin,
+            TextInputPlugin,
+            CarController2dPlugin,
+            AudioManagerPlugin::default(),
+        ))
+        .add_plugins((MenuPlugin, TrackPlugin))
+        .add_systems(Startup, (auto_join_from_url, setup))
+        .init_state::<AppState>()
+        .init_networked_state::<AppState>()
+        .init_networked_event::<WheelPositionUpdate>()
+        .insert_resource(FinishTimes {
+            times: HashMap::new(),
+        })
+        .insert_resource(AssetHandles {
+            karts_texture: Handle::default(),
+            wheel_texture: Handle::default(),
+        })
+        .add_systems(Update, (on_lobby_created, on_instantiation))
+        .add_systems(OnEnter(P2PLobbyState::OutOfLobby), spawn_menu)
+        .add_systems(OnEnter(P2PLobbyState::InLobby), spawn_lobby)
+        .add_systems(OnEnter(AppState::Game), spawn_track)
+        .add_systems(OnExit(AppState::Game), spawn_lobby)
+        .add_systems(
+            Update,
+            (
+                send_inputs,
+                follow_transform,
+                cursor_positon_log,
+                sync_wheel_rotation,
+                receive_wheel_rotation,
+            ),
+        )
+        .run();
+}
+
+fn sync_wheel_rotation(
+    mut r: MessageReader<OnClientInput<AppPlayerInputData>>,
+    mut w: MessageWriter<WheelPositionUpdate>,
+) {
+    for OnClientInput(target, input) in r.read() {
+        let update = WheelPositionUpdate(
+            target.clone(),
+            if input.right {
+                WheelRotation::Right
+            } else if input.left {
+                WheelRotation::Left
+            } else {
+                WheelRotation::Straight
+            },
+        );
+        w.write(update);
+    }
+}
+
+fn receive_wheel_rotation(
+    easy: KartEasyP2P,
+    mut r: MessageReader<WheelPositionUpdate>,
+    mut wheels: Query<(Entity, &mut Transform, &CarController2dWheel)>,
+) {
+    if easy.is_host() {
+        return;
+    }
+    for WheelPositionUpdate(target, rotation) in r.read() {
+        for (entity, mut transform, wheel) in wheels.iter_mut() {
+            if easy.get_closest_networked_id(entity) != Some(target.clone()) {
+                continue;
+            }
+            if wheel.steerable {
+                match rotation {
+                    WheelRotation::Left => {
+                        transform.rotation = Quat::from_rotation_z(45_f32.to_radians());
+                    }
+                    WheelRotation::Right => {
+                        transform.rotation = Quat::from_rotation_z(-45_f32.to_radians());
+                    }
+                    WheelRotation::Straight => {
+                        transform.rotation = Quat::from_rotation_z(0_f32.to_radians());
+                    }
+                }
+            }
+        }
+    }
+}
 
 fn get_url() -> Option<String> {
     web_sys::window()?.location().href().ok()
@@ -146,10 +279,10 @@ fn on_instantiation(
             AppInstantiations::Kart(id) => {
                 let player = easy.get_player_data(id.clone());
                 let layout =
-                    TextureAtlasLayout::from_grid(UVec2::splat(8), CAR_COLORS_COUNT, 1, None, None);
+                    TextureAtlasLayout::from_grid(CAR_SIZE, CAR_COLORS_COUNT, 1, None, None);
                 let texture_atlas_layout = texture_atlas_layouts.add(layout);
-                let half_car_width = 3.;
-                let half_car_length = 4.;
+                let half_car_width = 2.5;
+                let half_car_length = 3.;
                 let id = commands
                     .spawn((
                         DespawnOnExit(AppState::Game),
@@ -171,20 +304,40 @@ fn on_instantiation(
                         LapsCounter(0),
                         children![
                             (
-                                Transform::from_xyz(half_car_width, half_car_length, 0.),
-                                CarController2dWheel::new(true, true)
+                                Transform::from_xyz(
+                                    half_car_width,
+                                    half_car_length - 1.,
+                                    SpriteLayers::Wheels.to_z()
+                                ),
+                                CarController2dWheel::new(true, true),
+                                Sprite::from_image(asset_handles.wheel_texture.clone()),
                             ),
                             (
-                                Transform::from_xyz(-half_car_width, half_car_length, 0.),
-                                CarController2dWheel::new(true, true)
+                                Transform::from_xyz(
+                                    -half_car_width,
+                                    half_car_length - 1.,
+                                    SpriteLayers::Wheels.to_z()
+                                ),
+                                CarController2dWheel::new(true, true),
+                                Sprite::from_image(asset_handles.wheel_texture.clone()),
                             ),
                             (
-                                Transform::from_xyz(half_car_width, -half_car_length, 0.),
-                                CarController2dWheel::new(false, false)
+                                Transform::from_xyz(
+                                    half_car_width,
+                                    -half_car_length,
+                                    SpriteLayers::Wheels.to_z()
+                                ),
+                                CarController2dWheel::new(false, false),
+                                Sprite::from_image(asset_handles.wheel_texture.clone()),
                             ),
                             (
-                                Transform::from_xyz(-half_car_width, -half_car_length, 0.),
-                                CarController2dWheel::new(false, false)
+                                Transform::from_xyz(
+                                    -half_car_width,
+                                    -half_car_length,
+                                    SpriteLayers::Wheels.to_z()
+                                ),
+                                CarController2dWheel::new(false, false),
+                                Sprite::from_image(asset_handles.wheel_texture.clone()),
                             ),
                         ],
                     ))
@@ -194,7 +347,8 @@ fn on_instantiation(
                     FollowTransform(id),
                     children![(
                         Text2d::new(player.name),
-                        Transform::from_xyz(0., 5., 100.).with_scale(Vec3::splat(0.1)),
+                        Transform::from_xyz(0., 5., SpriteLayers::AboveCar.to_z())
+                            .with_scale(Vec3::splat(0.1)),
                     )],
                 ));
             }
@@ -221,44 +375,6 @@ fn follow_transform(
     }
 }
 
-fn main() {
-    App::new()
-        .add_plugins((
-            DefaultPlugins.set(ImagePlugin::default_nearest()),
-            PhysicsPlugins::default(),
-        ))
-        .insert_resource(Gravity::ZERO)
-        .add_plugins((
-            EasyP2PPlugin::<
-                FirestoreWebRtcTransport,
-                AppPlayerData,
-                AppPlayerInputData,
-                AppInstantiations,
-            >::default(),
-            FirestoreP2PPlugin,
-            TextInputPlugin,
-            CarController2dPlugin,
-            AudioManagerPlugin::default(),
-        ))
-        .add_plugins((MenuPlugin, TrackPlugin))
-        .add_systems(Startup, (auto_join_from_url, setup))
-        .init_state::<AppState>()
-        .init_networked_state::<AppState>()
-        .insert_resource(FinishTimes {
-            times: HashMap::new(),
-        })
-        .insert_resource(AssetHandles {
-            karts_texture: Handle::default(),
-        })
-        .add_systems(Update, (on_lobby_created, on_instantiation))
-        .add_systems(OnEnter(P2PLobbyState::OutOfLobby), spawn_menu)
-        .add_systems(OnEnter(P2PLobbyState::InLobby), spawn_lobby)
-        .add_systems(OnEnter(AppState::Game), spawn_track)
-        .add_systems(OnExit(AppState::Game), spawn_lobby)
-        .add_systems(Update, (send_inputs, follow_transform, cursor_positon_log))
-        .run();
-}
-
 fn setup(
     mut commands: Commands,
     mut handles: ResMut<AssetHandles>,
@@ -271,6 +387,7 @@ fn setup(
     };
     commands.spawn((Camera2d, Projection::Orthographic(projection)));
     handles.karts_texture = asset_server.load("sprites/karts.png");
+    handles.wheel_texture = asset_server.load("sprites/wheel.png");
 }
 
 fn cursor_positon_log(
@@ -293,9 +410,6 @@ fn cursor_positon_log(
         }
     }
 }
-
-const LAPS_TO_WIN: u32 = 3;
-const CAR_COLORS_COUNT: u32 = 8;
 
 #[derive(Resource, Clone, Debug, Serialize, Deserialize)]
 struct FinishTimes {

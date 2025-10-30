@@ -2,6 +2,7 @@ use crate::AppPlayerData;
 use crate::AppState;
 use crate::AssetHandles;
 use crate::CAR_COLORS_COUNT;
+use crate::CAR_SIZE;
 use crate::FinishTimes;
 use crate::KartColor;
 use crate::KartEasyP2P;
@@ -468,11 +469,18 @@ fn handle_kart_preview_add(
 ) {
     for entity in karts.iter() {
         let texture_atlas =
-            TextureAtlasLayout::from_grid(UVec2::splat(8), CAR_COLORS_COUNT, 1, None, None);
+            TextureAtlasLayout::from_grid(CAR_SIZE, CAR_COLORS_COUNT, 1, None, None);
         let texture_atlas_handle = texture_atlases.add(texture_atlas);
-        commands.entity(entity).insert(ImageNode::from_atlas_image(
-            handles.karts_texture.clone(),
-            TextureAtlas::from(texture_atlas_handle),
+        commands.entity(entity).insert((
+            ImageNode::from_atlas_image(
+                handles.karts_texture.clone(),
+                TextureAtlas::from(texture_atlas_handle),
+            ),
+            Node {
+                width: px(CAR_SIZE.x * 10),
+                height: px(CAR_SIZE.y * 10),
+                ..default()
+            },
         ));
     }
 }

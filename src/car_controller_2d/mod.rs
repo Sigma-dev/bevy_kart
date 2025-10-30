@@ -1,7 +1,7 @@
-use crate::{AppPlayerInputData, KartEasyP2P};
+use crate::{AppP2PUpdate, KartEasyP2P};
 use avian2d::prelude::*;
 use bevy::prelude::*;
-use bevy_easy_p2p::OnClientInput;
+use bevy_easy_p2p::EasyP2PUpdate;
 
 pub struct CarController2dPlugin;
 
@@ -53,15 +53,19 @@ fn car_controller_power(
         ),
     >,
     wheels: Query<(&GlobalTransform, &CarController2dWheel)>,
-    mut param_set: ParamSet<(
-        KartEasyP2P,
-        MessageReader<OnClientInput<AppPlayerInputData>>,
-    )>,
+    mut param_set: ParamSet<(KartEasyP2P, MessageReader<AppP2PUpdate>)>,
 ) {
-    let inputs = param_set.p1().read().cloned().collect::<Vec<_>>();
-    for OnClientInput(target, input) in inputs {
+    let inputs = param_set
+        .p1()
+        .read()
+        .filter_map(|AppP2PUpdate(update)| match update {
+            EasyP2PUpdate::ClientInput { sender, input } => Some((sender.clone(), input.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for (sender, input) in inputs {
         for (mut force, entity, children, car) in cars.iter_mut() {
-            if !param_set.p0().inputs_belong_to_player(entity, &target) {
+            if !param_set.p0().inputs_belong_to_player(entity, &sender) {
                 continue;
             }
             let mut dir = None;
@@ -93,15 +97,19 @@ fn car_controller_power(
 fn car_controller_steering(
     mut cars: Query<(Entity, &Children), With<CarController2d>>,
     mut wheels: Query<(&mut Transform, &CarController2dWheel)>,
-    mut param_set: ParamSet<(
-        KartEasyP2P,
-        MessageReader<OnClientInput<AppPlayerInputData>>,
-    )>,
+    mut param_set: ParamSet<(KartEasyP2P, MessageReader<AppP2PUpdate>)>,
 ) {
-    let inputs = param_set.p1().read().cloned().collect::<Vec<_>>();
-    for OnClientInput(target, input) in inputs {
+    let inputs = param_set
+        .p1()
+        .read()
+        .filter_map(|AppP2PUpdate(update)| match update {
+            EasyP2PUpdate::ClientInput { sender, input } => Some((sender.clone(), input.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for (sender, input) in inputs {
         for (entity, children) in cars.iter_mut() {
-            if !param_set.p0().inputs_belong_to_player(entity, &target) {
+            if !param_set.p0().inputs_belong_to_player(entity, &sender) {
                 continue;
             }
             let mut dir: f32 = 0.;

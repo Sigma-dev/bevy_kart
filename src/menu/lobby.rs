@@ -1,13 +1,10 @@
-use crate::AppPlayerData;
-use crate::AppState;
-use crate::AssetHandles;
-use crate::CAR_COLORS_COUNT;
-use crate::CAR_SIZE;
-use crate::FinishTimes;
-use crate::KartColor;
-use crate::KartEasyP2P;
+use crate::{
+    AppP2PUpdate, AppPlayerData, AppState, AssetHandles, CAR_COLORS_COUNT, CAR_SIZE, FinishTimes,
+    KartColor, KartEasyP2P,
+};
 use bevy::prelude::*;
 use bevy_easy_p2p::prelude::*;
+use bevy_easy_p2p::{EasyP2PSystemSet, EasyP2PUpdate, NetworkedId};
 use bevy_text_input::prelude::*;
 
 pub struct LobbyPlugin;
@@ -28,7 +25,8 @@ impl Plugin for LobbyPlugin {
                     handle_kart_preview,
                     handle_local_kart_preview,
                 )
-                    .chain(),
+                    .chain()
+                    .after(EasyP2PSystemSet::Emit),
             )
             .insert_resource(LobbyChatInputHistory(Vec::new()));
     }
@@ -92,30 +90,34 @@ fn lobby_chat_input_history(
 }
 
 fn on_client_message_received(
-    mut r: MessageReader<OnClientMessageReceived>,
+    mut events: MessageReader<AppP2PUpdate>,
     mut history: ResMut<LobbyChatInputHistory>,
     easy: KartEasyP2P,
 ) {
-    for OnClientMessageReceived(cid, text) in r.read() {
-        history.add(format!(
-            "{}: {}",
-            easy.get_player_data(NetworkedId::ClientId(*cid)).name,
-            text
-        ));
+    for AppP2PUpdate(update) in events.read() {
+        if let EasyP2PUpdate::ClientChat { client_id, text } = update {
+            history.add(format!(
+                "{}: {}",
+                easy.get_player_data(NetworkedId::ClientId(*client_id)).name,
+                text
+            ));
+        }
     }
 }
 
 fn on_host_message_received(
-    mut r: MessageReader<OnHostMessageReceived>,
+    mut events: MessageReader<AppP2PUpdate>,
     mut history: ResMut<LobbyChatInputHistory>,
     easy: KartEasyP2P,
 ) {
-    for OnHostMessageReceived(text) in r.read() {
-        history.add(format!(
-            "{}: {}",
-            easy.get_player_data(NetworkedId::Host).name,
-            text
-        ));
+    for AppP2PUpdate(update) in events.read() {
+        if let EasyP2PUpdate::HostChat { text } = update {
+            history.add(format!(
+                "{}: {}",
+                easy.get_player_data(NetworkedId::Host).name,
+                text
+            ));
+        }
     }
 }
 
@@ -123,16 +125,18 @@ fn on_host_message_received(
 struct KickTarget(NetworkedId);
 
 fn on_lobby_exit(
-    mut r: MessageReader<OnLobbyExit>,
+    mut events: MessageReader<AppP2PUpdate>,
     mut inputs: Query<&mut Text, With<TextInput>>,
     mut history: ResMut<LobbyChatInputHistory>,
 ) {
-    for OnLobbyExit(reason) in r.read() {
-        info!("Lobby exit: {:?}", reason);
-        for mut input in inputs.iter_mut() {
-            input.0.clear();
+    for AppP2PUpdate(update) in events.read() {
+        if let EasyP2PUpdate::LobbyExited { reason } = update {
+            info!("Lobby exit: {:?}", reason);
+            for mut input in inputs.iter_mut() {
+                input.0.clear();
+            }
+            history.0.clear();
         }
-        history.0.clear();
     }
 }
 
@@ -234,18 +238,26 @@ fn players_buttons(
 }
 
 fn spawn_lobby_players_buttons(
-    mut set: ParamSet<(KartEasyP2P, MessageReader<OnRosterUpdate<AppPlayerData>>)>,
+    mut set: ParamSet<(KartEasyP2P, MessageReader<AppP2PUpdate>)>,
     mut commands: Commands,
     buttons: Query<(Entity, Option<&Children>), With<LobbyPlayersButtons>>,
     finish_times: Res<FinishTimes>,
 ) {
+    let has_update = set
+        .p1()
+        .read()
+        .any(|AppP2PUpdate(update)| matches!(update, EasyP2PUpdate::RosterUpdated { .. }));
+    let already_spawned = buttons.iter().all(|(_, children)| children.is_some());
+    if !has_update && already_spawned {
+        return;
+    }
+
     let easy = set.p0();
     let players = easy.get_players();
     let is_host = easy.is_host();
 
-    let mut roster = set.p1();
     for (button, children) in buttons.iter() {
-        if roster.read().len() == 0 && children.is_some() {
+        if players.is_empty() && children.is_some() {
             continue;
         }
         commands.entity(button).despawn_children();

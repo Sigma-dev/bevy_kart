@@ -3,8 +3,8 @@ use avian2d::prelude::*;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_easy_p2p::{NetworkedId, NetworkedStatesExt};
-use bevy_easy_p2p::{OnClientInput, prelude::*};
+use bevy_easy_p2p::prelude::*;
+use bevy_easy_p2p::{EasyP2PSystemSet, EasyP2PUpdate, NetworkedId, NetworkedStatesExt};
 use bevy_firestore_p2p::FirestoreP2PPlugin;
 use bevy_firestore_p2p::FirestoreWebRtcTransport;
 use bevy_text_input::prelude::*;
@@ -113,6 +113,9 @@ pub enum WheelRotation {
 #[derive(Message, Clone, Debug, Serialize, Deserialize)]
 struct WheelPositionUpdate(NetworkedId, WheelRotation);
 
+#[derive(Clone, Message)]
+struct AppP2PUpdate(EasyP2PUpdate<AppPlayerData, AppPlayerInputData, AppInstantiations>);
+
 const LAPS_TO_WIN: u32 = 3;
 const CAR_COLORS_COUNT: u32 = 10;
 const CAR_SIZE: UVec2 = UVec2::new(4, 8);
@@ -131,7 +134,7 @@ fn main() {
                 AppPlayerInputData,
                 AppInstantiations,
             >::default(),
-            FirestoreP2PPlugin,
+            FirestoreP2PPlugin::<AppPlayerData, AppPlayerInputData, AppInstantiations>::default(),
             TextInputPlugin,
             CarController2dPlugin,
             AudioManagerPlugin::default(),
@@ -141,6 +144,7 @@ fn main() {
         .init_state::<AppState>()
         .init_networked_state::<AppState>()
         .init_networked_event::<WheelPositionUpdate>()
+        .add_message::<AppP2PUpdate>()
         .insert_resource(FinishTimes {
             times: HashMap::new(),
         })
@@ -148,40 +152,42 @@ fn main() {
             karts_texture: Handle::default(),
             wheel_texture: Handle::default(),
         })
-        .add_systems(Update, (on_lobby_created, on_instantiation))
+        .add_systems(Update, emit_easy_updates.in_set(EasyP2PSystemSet::Emit))
+        .add_systems(Update, on_lobby_created.after(EasyP2PSystemSet::Emit))
+        .add_systems(Update, on_instantiation.after(EasyP2PSystemSet::Core))
         .add_systems(OnEnter(P2PLobbyState::OutOfLobby), spawn_menu)
         .add_systems(OnEnter(P2PLobbyState::InLobby), spawn_lobby)
         .add_systems(OnEnter(AppState::Game), spawn_track)
         .add_systems(OnExit(AppState::Game), spawn_lobby)
+        .add_systems(Update, (send_inputs, follow_transform, cursor_positon_log))
         .add_systems(
             Update,
             (
-                send_inputs,
-                follow_transform,
-                cursor_positon_log,
-                sync_wheel_rotation,
-                receive_wheel_rotation,
+                sync_wheel_rotation.after(EasyP2PSystemSet::Emit),
+                receive_wheel_rotation.after(EasyP2PSystemSet::Emit),
             ),
         )
         .run();
 }
 
 fn sync_wheel_rotation(
-    mut r: MessageReader<OnClientInput<AppPlayerInputData>>,
+    mut updates: MessageReader<AppP2PUpdate>,
     mut w: MessageWriter<WheelPositionUpdate>,
 ) {
-    for OnClientInput(target, input) in r.read() {
-        let update = WheelPositionUpdate(
-            target.clone(),
-            if input.right {
-                WheelRotation::Right
-            } else if input.left {
-                WheelRotation::Left
-            } else {
-                WheelRotation::Straight
-            },
-        );
-        w.write(update);
+    for AppP2PUpdate(update) in updates.read() {
+        if let EasyP2PUpdate::ClientInput { sender, input } = update {
+            let update = WheelPositionUpdate(
+                sender.clone(),
+                if input.right {
+                    WheelRotation::Right
+                } else if input.left {
+                    WheelRotation::Left
+                } else {
+                    WheelRotation::Straight
+                },
+            );
+            w.write(update);
+        }
     }
 }
 
@@ -259,11 +265,13 @@ fn auto_join_from_url(mut easy: KartEasyP2P) {
     }
 }
 
-fn on_lobby_created(mut r: MessageReader<OnLobbyCreated>) {
-    for OnLobbyCreated(code) in r.read() {
-        info!("Hosting room: {}", code);
-        if let Some(base) = current_base_url() {
-            info!("Share link: {}?room={}", base, code);
+fn on_lobby_created(mut events: MessageReader<AppP2PUpdate>) {
+    for AppP2PUpdate(update) in events.read() {
+        if let EasyP2PUpdate::LobbyCreated { code } = update {
+            info!("Hosting room: {}", code);
+            if let Some(base) = current_base_url() {
+                info!("Share link: {}?room={}", base, code);
+            }
         }
     }
 }
@@ -446,5 +454,11 @@ impl FinishTimes {
             .position(|(id, _)| *id == player_id)
             .map(|index| index + 1)?;
         Some(rank)
+    }
+}
+
+fn emit_easy_updates(mut easy: KartEasyP2P, mut writer: MessageWriter<AppP2PUpdate>) {
+    for update in easy.read_updates() {
+        writer.write(AppP2PUpdate(update));
     }
 }

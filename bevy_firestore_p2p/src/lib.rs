@@ -1,13 +1,7 @@
 use bevy::prelude::*;
-use bevy_easy_p2p::{
-    ClientId, ExitReason, OnCreateLobbyReq, OnExitLobbyReq, OnJoinLobbyReq, OnKickReq,
-    OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyJoined, OnTransportIncomingFromClient,
-    OnTransportIncomingFromHost, OnTransportRelayToAllExcept, OnTransportRosterChanged,
-    OnTransportSendToAll, OnTransportSendToClient, OnTransportSendToHost, P2PTransport,
-};
+use bevy_easy_p2p::{ClientId, EasyP2PSystemSet, P2PTransport};
 use bevy_webrtc::{
-    CloseAllConnections, CloseConnection, ConnectionClosed, ConnectionId, ConnectionOpen,
-    CreateAnswer, CreateOffer, IncomingData, LocalSdpReady, SendData, SetRemote, WebRtcPlugin,
+    ConnectionId, CreateAnswer, CreateOffer, LocalSdpReady, SetRemote, WebRtcPlugin,
 };
 use serde_json::json;
 use std::cell::RefCell;
@@ -17,8 +11,10 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Headers, Request, RequestInit, RequestMode, Response};
 
+mod systems;
+
 thread_local! {
-    static FIRESTORE_INBOX: RefCell<Vec<serde_json::Value>> = RefCell::new(Vec::new());
+    pub(crate) static FIRESTORE_INBOX: RefCell<Vec<serde_json::Value>> = RefCell::new(Vec::new());
 }
 
 #[derive(Resource, Default)]
@@ -72,29 +68,83 @@ struct FirestoreShared {
     room_exists: bool,
 }
 
-pub struct FirestoreP2PPlugin;
+pub struct FirestoreP2PPlugin<PlayerData, PlayerInputData, Instantiations>(
+    std::marker::PhantomData<(PlayerData, PlayerInputData, Instantiations)>,
+);
 
-impl Plugin for FirestoreP2PPlugin {
+impl<PlayerData, PlayerInputData, Instantiations> Default
+    for FirestoreP2PPlugin<PlayerData, PlayerInputData, Instantiations>
+{
+    fn default() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<PlayerData, PlayerInputData, Instantiations> Plugin
+    for FirestoreP2PPlugin<PlayerData, PlayerInputData, Instantiations>
+where
+    PlayerData: Send + Sync + 'static,
+    PlayerInputData: Send + Sync + 'static,
+    Instantiations: Send + Sync + 'static,
+{
     fn build(&self, app: &mut App) {
         app.init_resource::<ConnectionIdAllocator>()
             .init_resource::<FirestoreConfig>()
             .init_resource::<SignalingState>()
             .init_resource::<FirestoreShared>()
             .add_plugins(WebRtcPlugin)
-            .add_systems(Update, handle_create_join_requests)
-            .add_systems(Update, handle_send_requests)
-            .add_systems(Update, handle_exit_requests)
-            .add_systems(Update, handle_kick_requests)
+            .add_systems(
+                Update,
+                (
+                    systems::handle_create_join_requests::<
+                        PlayerData,
+                        PlayerInputData,
+                        Instantiations,
+                    >,
+                    systems::handle_send_requests::<
+                        PlayerData,
+                        PlayerInputData,
+                        Instantiations,
+                    >,
+                    systems::handle_exit_requests::<
+                        PlayerData,
+                        PlayerInputData,
+                        Instantiations,
+                    >,
+                    systems::handle_kick_requests::<
+                        PlayerData,
+                        PlayerInputData,
+                        Instantiations,
+                    >,
+                    systems::log_connection_open::<
+                        PlayerData,
+                        PlayerInputData,
+                        Instantiations,
+                    >,
+                    systems::log_incoming_data::<
+                        PlayerData,
+                        PlayerInputData,
+                        Instantiations,
+                    >,
+                    systems::handle_connection_closed::<
+                        PlayerData,
+                        PlayerInputData,
+                        Instantiations,
+                    >,
+                    systems::on_lobby_exit_cleanup::<
+                        PlayerData,
+                        PlayerInputData,
+                        Instantiations,
+                    >,
+                )
+                    .in_set(EasyP2PSystemSet::Transport),
+            )
             .add_systems(Update, log_local_sdp_ready)
-            .add_systems(Update, log_connection_open)
-            .add_systems(Update, log_incoming_data)
-            .add_systems(Update, handle_connection_closed)
-            .add_systems(Update, firestore_pump)
-            .add_systems(Update, on_lobby_exit_cleanup);
+            .add_systems(Update, firestore_pump);
     }
 }
 
-fn generate_room_code() -> String {
+pub(crate) fn generate_room_code() -> String {
     const ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let code_length = 4;
     let mut out = String::with_capacity(code_length);
@@ -105,21 +155,21 @@ fn generate_room_code() -> String {
     out
 }
 
-fn gen_client_id_num() -> u64 {
+pub(crate) fn gen_client_id_num() -> u64 {
     // 53 bits of randomness via Math.random chunks
     let a = (js_sys::Math::random() * (1u64 << 26) as f64).floor() as u64;
     let b = (js_sys::Math::random() * (1u64 << 27) as f64).floor() as u64;
     (a << 27) | b
 }
 
-fn firestore_room_doc_url(cfg: &FirestoreConfig, room: &str) -> String {
+pub(crate) fn firestore_room_doc_url(cfg: &FirestoreConfig, room: &str) -> String {
     format!(
         "https://firestore.googleapis.com/v1/projects/{}/databases/(default)/documents/rooms/{}",
         cfg.project_id, room
     )
 }
 
-fn firestore_patch_url(cfg: &FirestoreConfig, room: &str, mask: &str) -> String {
+pub(crate) fn firestore_patch_url(cfg: &FirestoreConfig, room: &str, mask: &str) -> String {
     format!(
         "{}?updateMask.fieldPaths={}",
         firestore_room_doc_url(cfg, room),
@@ -127,7 +177,7 @@ fn firestore_patch_url(cfg: &FirestoreConfig, room: &str, mask: &str) -> String 
     )
 }
 
-async fn http_fetch_json(
+pub(crate) async fn http_fetch_json(
     method: &str,
     url: &str,
     body: Option<serde_json::Value>,
@@ -155,7 +205,7 @@ async fn http_fetch_json(
     Some(val)
 }
 
-async fn ensure_room_exists(cfg: &FirestoreConfig, room: &str) {
+pub(crate) async fn ensure_room_exists(cfg: &FirestoreConfig, room: &str) {
     let url = firestore_room_doc_url(cfg, room);
     let body = json!({
         "fields": {
@@ -166,7 +216,7 @@ async fn ensure_room_exists(cfg: &FirestoreConfig, room: &str) {
     let _ = http_fetch_json("PATCH", &url, Some(body)).await;
 }
 
-async fn write_offer(cfg: &FirestoreConfig, room: &str, client_id: &str, sdp: &str) {
+pub(crate) async fn write_offer(cfg: &FirestoreConfig, room: &str, client_id: &str, sdp: &str) {
     let url = firestore_patch_url(cfg, room, "offers");
     let body = json!({
         "fields": {
@@ -178,7 +228,7 @@ async fn write_offer(cfg: &FirestoreConfig, room: &str, client_id: &str, sdp: &s
     let _ = http_fetch_json("PATCH", &url, Some(body)).await;
 }
 
-async fn write_answer(cfg: &FirestoreConfig, room: &str, client_id: &str, sdp: &str) {
+pub(crate) async fn write_answer(cfg: &FirestoreConfig, room: &str, client_id: &str, sdp: &str) {
     let url = firestore_patch_url(cfg, room, "answers");
     let body = json!({
         "fields": {
@@ -190,190 +240,12 @@ async fn write_answer(cfg: &FirestoreConfig, room: &str, client_id: &str, sdp: &
     let _ = http_fetch_json("PATCH", &url, Some(body)).await;
 }
 
-async fn read_room(cfg: &FirestoreConfig, room: &str) -> Option<serde_json::Value> {
+pub(crate) async fn read_room(cfg: &FirestoreConfig, room: &str) -> Option<serde_json::Value> {
     http_fetch_json("GET", &firestore_room_doc_url(cfg, room), None).await
 }
 
-fn now_ms() -> f64 {
+pub(crate) fn now_ms() -> f64 {
     js_sys::Date::now()
-}
-
-fn handle_create_join_requests(
-    mut create_r: MessageReader<OnCreateLobbyReq>,
-    mut join_r: MessageReader<OnJoinLobbyReq>,
-    mut _w_offer: MessageWriter<CreateOffer>,
-    mut _id_alloc: ResMut<ConnectionIdAllocator>,
-    mut sig: ResMut<SignalingState>,
-    cfg: Res<FirestoreConfig>,
-    mut lobby_created: MessageWriter<OnLobbyCreated>,
-    mut lobby_entered: MessageWriter<OnLobbyEntered>,
-) {
-    for _ in create_r.read() {
-        let room = generate_room_code();
-        sig.room_code = room.clone();
-        sig.is_host = true;
-        sig.answered_clients.clear();
-        lobby_created.write(OnLobbyCreated(room.clone()));
-        lobby_entered.write(OnLobbyEntered(room.clone()));
-        let cfg = cfg.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            ensure_room_exists(&cfg, &room).await;
-            FIRESTORE_INBOX.with(|inbox| {
-                inbox
-                    .borrow_mut()
-                    .push(serde_json::json!({"__status":"created"}))
-            });
-        });
-    }
-
-    for req in join_r.read() {
-        let room = req.0.clone();
-        sig.room_code = room.clone();
-        sig.is_host = false;
-        sig.client_id = Some(gen_client_id_num().to_string());
-        sig.client_answer_applied = false;
-        // Delay entering lobby until we verify the room exists
-        sig.client_join_pending = true;
-        // Do not emit OnLobbyJoined/OnLobbyEntered or create an offer yet
-        // The offer will be created in firestore_pump once the room is confirmed to exist
-    }
-}
-
-fn handle_send_requests(
-    mut send_host_r: MessageReader<OnTransportSendToHost>,
-    mut send_all_r: MessageReader<OnTransportSendToAll>,
-    mut send_client_r: MessageReader<OnTransportSendToClient>,
-    mut relay_except_r: MessageReader<OnTransportRelayToAllExcept>,
-    mut w_send: MessageWriter<SendData>,
-    q_conns: Query<(Entity, &NetConnection)>,
-    sig: Res<SignalingState>,
-) {
-    for OnTransportSendToAll(text) in send_all_r.read() {
-        for (_, c) in q_conns.iter() {
-            w_send.write(SendData {
-                id: c.id,
-                text: text.clone(),
-            });
-        }
-    }
-
-    for OnTransportSendToHost(text) in send_host_r.read() {
-        if let Some(single) = only_connection_ids(&q_conns) {
-            w_send.write(SendData {
-                id: single,
-                text: text.clone(),
-            });
-        }
-    }
-
-    // Send to specific client (host only)
-    for OnTransportSendToClient(client_id, text) in send_client_r.read() {
-        if !sig.is_host {
-            continue;
-        }
-        let target = client_id.to_string();
-        // Find the connection mapped to this client id
-        if let Some((&conn_raw, _)) = sig
-            .host_connection_to_client_id
-            .iter()
-            .find(|(_, cid)| *cid == &target)
-        {
-            let id = ConnectionId(conn_raw);
-            w_send.write(SendData {
-                id,
-                text: text.clone(),
-            });
-        }
-    }
-
-    // Relay to all except the sender (host only)
-    for OnTransportRelayToAllExcept(sender, text) in relay_except_r.read() {
-        if !sig.is_host {
-            continue;
-        }
-        let sender_str = sender.to_string();
-        for (conn_raw, cid_str) in sig.host_connection_to_client_id.iter() {
-            if cid_str == &sender_str {
-                continue;
-            }
-            w_send.write(SendData {
-                id: ConnectionId(*conn_raw),
-                text: text.clone(),
-            });
-        }
-    }
-}
-
-fn handle_exit_requests(
-    mut commands: Commands,
-    mut exit_r: MessageReader<OnExitLobbyReq>,
-    mut w_close_all: MessageWriter<CloseAllConnections>,
-    mut sig: ResMut<SignalingState>,
-    q_conns: Query<(Entity, &NetConnection)>,
-) {
-    for OnExitLobbyReq in exit_r.read() {
-        w_close_all.write(CloseAllConnections);
-        for (e, _) in q_conns.iter() {
-            commands.entity(e).despawn();
-        }
-        sig.room_code.clear();
-        sig.is_host = false;
-        sig.answered_clients.clear();
-        sig.joined_clients.clear();
-        sig.client_id = None;
-        sig.client_answer_applied = false;
-        sig.offer_conn = None;
-        sig.client_join_pending = false;
-        sig.client_emitted_join = false;
-        sig.host_connection_to_client_id.clear();
-        FIRESTORE_INBOX.with(|inbox| inbox.borrow_mut().clear());
-    }
-}
-
-fn handle_kick_requests(
-    mut commands: Commands,
-    mut kick_r: MessageReader<OnKickReq>,
-    mut w_close_one: MessageWriter<CloseConnection>,
-    mut sig: ResMut<SignalingState>,
-    mut lobby_info_w: MessageWriter<OnTransportRosterChanged>,
-    q_conns: Query<(Entity, &NetConnection)>,
-) {
-    for OnKickReq(client_id) in kick_r.read() {
-        if !sig.is_host {
-            continue;
-        }
-        let target = client_id.to_string();
-        let mut to_remove: Option<u64> = None;
-        for (cid_conn, cid_str) in sig.host_connection_to_client_id.iter() {
-            if cid_str == &target {
-                to_remove = Some(*cid_conn);
-                break;
-            }
-        }
-        let conn_raw = to_remove.unwrap();
-        let conn = ConnectionId(conn_raw);
-        w_close_one.write(CloseConnection { id: conn });
-        for (e, c) in q_conns.iter() {
-            if c.id == conn {
-                commands.entity(e).despawn();
-            }
-        }
-        sig.host_connection_to_client_id.remove(&conn_raw);
-        sig.answered_clients.remove(&target);
-        sig.joined_clients.remove(&target);
-        let list: Vec<String> = sig.joined_clients.iter().cloned().collect();
-        lobby_info_w.write(OnTransportRosterChanged(list));
-    }
-}
-
-fn only_connection_ids(q: &Query<(Entity, &NetConnection)>) -> Option<ConnectionId> {
-    let mut it = q.iter();
-    let first = it.next()?.1;
-    if it.next().is_none() {
-        Some(first.id)
-    } else {
-        None
-    }
 }
 
 fn log_local_sdp_ready(
@@ -408,83 +280,6 @@ fn log_local_sdp_ready(
                     write_answer(&cfg, &room, &client_id, &sdp_text).await;
                 });
             }
-        }
-    }
-}
-
-fn log_connection_open(
-    mut r: MessageReader<ConnectionOpen>,
-    mut sig: ResMut<SignalingState>,
-    mut lobby_info_w: MessageWriter<OnTransportRosterChanged>,
-    mut lobby_joined: MessageWriter<OnLobbyJoined>,
-    mut lobby_entered: MessageWriter<OnLobbyEntered>,
-) {
-    for ConnectionOpen(id) in r.read() {
-        info!("Connection {:?} data channel open", id);
-        if sig.is_host {
-            if let Some(cid_str) = sig.host_connection_to_client_id.get(&id.0).cloned() {
-                sig.joined_clients.insert(cid_str);
-                let list: Vec<String> = sig.joined_clients.iter().cloned().collect();
-                lobby_info_w.write(OnTransportRosterChanged(list));
-            }
-        } else if !sig.client_emitted_join {
-            // Client: emit lobby joined/entered only once when channel becomes ready
-            let room = sig.room_code.clone();
-            lobby_joined.write(OnLobbyJoined(room.clone()));
-            lobby_entered.write(OnLobbyEntered(room));
-            sig.client_emitted_join = true;
-        }
-    }
-}
-
-fn handle_connection_closed(
-    mut commands: Commands,
-    mut r: MessageReader<ConnectionClosed>,
-    mut sig: ResMut<SignalingState>,
-    mut lobby_info_w: MessageWriter<OnTransportRosterChanged>,
-    mut lobby_exit_w: MessageWriter<OnLobbyExit>,
-    q_conns: Query<(Entity, &NetConnection)>,
-) {
-    for ConnectionClosed(id) in r.read() {
-        // Despawn matching NetConnection entity
-        for (e, c) in q_conns.iter() {
-            if c.id == *id {
-                commands.entity(e).despawn();
-            }
-        }
-        if sig.is_host {
-            // Remove client from host maps and emit updated lobby info
-            if let Some(cid_str) = sig.host_connection_to_client_id.remove(&id.0) {
-                sig.answered_clients.remove(&cid_str);
-                sig.joined_clients.remove(&cid_str);
-                let list: Vec<String> = sig.joined_clients.iter().cloned().collect();
-                lobby_info_w.write(OnTransportRosterChanged(list));
-            }
-        } else {
-            // If client's only connection closed, exit lobby (disconnected)
-            // Rely on EasyP2P timeout removal: emit OnLobbyExit here for immediate UX
-            // Keep transport state cleanup to OnLobbyExit handler
-            // Note: We avoid double-cleaning Firestore state here.
-            lobby_exit_w.write(OnLobbyExit(ExitReason::Disconnected));
-        }
-    }
-}
-
-fn log_incoming_data(
-    mut r: MessageReader<IncomingData>,
-    sig: Res<SignalingState>,
-    mut ev_client: MessageWriter<OnTransportIncomingFromClient>,
-    mut ev_host: MessageWriter<OnTransportIncomingFromHost>,
-) {
-    for IncomingData { id, text } in r.read() {
-        if sig.is_host {
-            if let Some(cid_str) = sig.host_connection_to_client_id.get(&id.0) {
-                if let Ok(cid) = cid_str.parse::<u64>() {
-                    ev_client.write(OnTransportIncomingFromClient(cid, text.clone()));
-                }
-            }
-        } else {
-            ev_host.write(OnTransportIncomingFromHost(text.clone()));
         }
     }
 }
@@ -618,42 +413,6 @@ fn apply_firestore_doc(
             }
         }
     }
-}
-
-fn on_lobby_exit_cleanup(
-    mut commands: Commands,
-    mut r: MessageReader<OnLobbyExit>,
-    mut sig: ResMut<SignalingState>,
-    mut shared: ResMut<FirestoreShared>,
-    mut w_close_all: MessageWriter<CloseAllConnections>,
-    q_conns: Query<(Entity, &NetConnection)>,
-) {
-    let mut any = false;
-    for _ in r.read() {
-        any = true;
-    }
-    if !any {
-        return;
-    }
-    w_close_all.write(CloseAllConnections);
-    for (e, _) in q_conns.iter() {
-        commands.entity(e).despawn();
-    }
-    sig.room_code.clear();
-    sig.is_host = false;
-    sig.answered_clients.clear();
-    sig.joined_clients.clear();
-    sig.client_id = None;
-    sig.client_answer_applied = false;
-    sig.offer_conn = None;
-    sig.client_join_pending = false;
-    sig.client_emitted_join = false;
-    sig.host_connection_to_client_id.clear();
-    shared.in_flight = false;
-    shared.next_allowed_fetch_at_ms = 0.0;
-    shared.not_found_logged = false;
-    shared.room_exists = false;
-    FIRESTORE_INBOX.with(|inbox| inbox.borrow_mut().clear());
 }
 
 // Minimal P2PTransport impl (no-ops; actual work driven by systems above)

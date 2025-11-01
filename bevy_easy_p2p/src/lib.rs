@@ -12,7 +12,7 @@ pub mod prelude;
 
 pub use api::{
     EasyP2P, EasyP2PPlugin, EasyP2PSystemSet, EasyP2PTransportIo, ExitReason, OnApplyState,
-    P2PTransport,
+    PingUpdate, P2PTransport,
 };
 pub use state::*;
 pub use updates::{EasyP2PUpdate, EasyP2PUpdateQueue};

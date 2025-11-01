@@ -24,6 +24,7 @@ impl Plugin for LobbyPlugin {
                     handle_kart_preview_add,
                     handle_kart_preview,
                     handle_local_kart_preview,
+                    receive_ping,
                 )
                     .chain()
                     .after(EasyP2PSystemSet::Emit),
@@ -34,6 +35,11 @@ impl Plugin for LobbyPlugin {
 
 #[derive(Component)]
 struct LobbyCodeText;
+
+#[derive(Component)]
+#[require(Text)]
+
+struct PingText;
 
 #[derive(Resource)]
 struct LobbyChatInputHistory(Vec<String>);
@@ -471,6 +477,16 @@ pub fn spawn_lobby(mut commands: Commands, easy: KartEasyP2P) {
         buttons,
         kart_buttons,
     ]);
+
+    commands.spawn((
+        DespawnOnExit(P2PLobbyState::InLobby),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(5),
+            ..default()
+        },
+        PingText,
+    ));
 }
 
 fn handle_kart_preview_add(
@@ -513,5 +529,16 @@ fn handle_local_kart_preview(
     let current_kart = easy.get_local_player_data().kart_color;
     for mut kart in image_nodes.iter_mut() {
         kart.0 = current_kart;
+    }
+}
+
+fn receive_ping(
+    mut updates: MessageReader<PingUpdate>,
+    mut texts: Query<&mut Text, With<PingText>>,
+) {
+    for PingUpdate(ping) in updates.read() {
+        for mut text in texts.iter_mut() {
+            *text = Text::new(format!("Ping: {} ms", ping.as_millis()));
+        }
     }
 }

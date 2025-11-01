@@ -59,6 +59,7 @@ pub enum P2PData<PlayerData, PlayerInputData, Instantiations> {
     StateSync(u8, String),
     EventSync(u8, String),
     HostInstantiation(InstantiationDataNet<Instantiations>),
+    PingRequest(f32),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

@@ -1,6 +1,8 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use bevy::time::common_conditions::on_timer;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use crate::state::{
     InstantiationData, InstantiationDataNet, IsHost, NetworkedEntity, NetworkedId, P2PData,
@@ -100,6 +102,9 @@ pub(crate) struct OnSendToClientReq<PlayerData, PlayerInputData, Instantiations>
 pub(crate) struct OnExitLobbyReq;
 #[derive(Message, Clone)]
 pub(crate) struct OnKickReq(pub ClientId);
+
+#[derive(Message)]
+pub struct PingUpdate(pub std::time::Duration);
 
 pub trait P2PTransport: Send + Sync + 'static {
     type Error;
@@ -466,6 +471,7 @@ where
         .add_message::<OnRosterUpdate<PlayerData>>()
         .add_message::<OnRelayToAllExcept<PlayerData, PlayerInputData, Instantiations>>()
         .add_message::<HandleInstantiation<Instantiations>>()
+        .add_message::<PingUpdate>()
         .add_systems(
             Update,
             (
@@ -499,6 +505,8 @@ where
                     crate::systems::encode_outgoing::<PlayerData, PlayerInputData, Instantiations>,
                     crate::systems::decode_incoming::<PlayerData, PlayerInputData, Instantiations>,
                     crate::systems::despawn_on_leave::<PlayerData>,
+                    crate::systems::send_ping::<PlayerData, PlayerInputData, Instantiations>
+                        .run_if(on_timer(Duration::from_secs(1))),
                 ),
             )
                 .chain()

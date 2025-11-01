@@ -1,4 +1,5 @@
 use core::any::TypeId;
+use std::time::Duration;
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -8,7 +9,7 @@ use crate::api::{
     OnLobbyEntered, OnLobbyExit, OnLobbyJoined, OnRelayToAllExcept, OnRosterUpdate, OnSendToAllReq,
     OnSendToClientReq, OnSendToHostReq, OnTransportIncomingFromClient, OnTransportIncomingFromHost,
     OnTransportRelayToAllExcept, OnTransportRosterChanged, OnTransportSendToAll,
-    OnTransportSendToClient, OnTransportSendToHost,
+    OnTransportSendToClient, OnTransportSendToHost, PingUpdate,
 };
 use crate::state::{
     EasyP2PState, InstantiationData, IsHost, NetworkedEntity, NetworkedId, P2PData, P2PLobbyState,
@@ -257,6 +258,7 @@ pub(crate) fn intercept_data_messages<
     PlayerInputData,
     Instantiations,
 >(
+    time: Res<Time>,
     mut commands: Commands,
     mut internal_client_r: MessageReader<
         OnInternalClientData<PlayerData, PlayerInputData, Instantiations>,
@@ -267,6 +269,10 @@ pub(crate) fn intercept_data_messages<
     mut roster_w: MessageWriter<OnRosterUpdate<PlayerData>>,
     mut relay_w: MessageWriter<OnRelayToAllExcept<PlayerData, PlayerInputData, Instantiations>>,
     mut inst_w: MessageWriter<HandleInstantiation<Instantiations>>,
+    mut w_send_client: MessageWriter<
+        OnSendToClientReq<PlayerData, PlayerInputData, Instantiations>,
+    >,
+    mut ping_w: MessageWriter<PingUpdate>,
     mut state: ResMut<EasyP2PState<PlayerData>>,
     register: Res<SyncedStateRegister>,
     event_register: Res<SyncedEventRegister>,
@@ -314,6 +320,12 @@ pub(crate) fn intercept_data_messages<
             P2PData::StateSync(_, _) => {}
             P2PData::EventSync(_, _) => {}
             P2PData::HostInstantiation(_) => {}
+            P2PData::PingRequest(timestamp) => {
+                // Host receives ping from client, echo it back
+                if state.is_host {
+                    w_send_client.write(OnSendToClientReq(*cid, P2PData::PingRequest(*timestamp)));
+                }
+            }
         }
     }
     for OnInternalHostData(data) in internal_host_r.read() {
@@ -358,6 +370,10 @@ pub(crate) fn intercept_data_messages<
                 let local: InstantiationData<Instantiations> = InstantiationData::from(&*inst);
                 inst_w.write(HandleInstantiation(local.clone()));
                 updates.push(EasyP2PUpdate::Instantiated { data: local });
+            }
+            P2PData::PingRequest(timestamp) => {
+                let elapsed_secs = time.elapsed_secs() - timestamp;
+                ping_w.write(PingUpdate(Duration::from_secs_f32(elapsed_secs)));
             }
         }
     }
@@ -533,4 +549,28 @@ impl bevy::ecs::system::Command for EmitSyncedEvent {
             reader(&self.payload, world);
         }
     }
+}
+
+pub(crate) fn send_ping<
+    PlayerData: Serialize
+        + for<'de> Deserialize<'de>
+        + Clone
+        + Send
+        + Sync
+        + core::fmt::Debug
+        + 'static
+        + Default
+        + PartialEq,
+    PlayerInputData: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
+    Instantiations: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
+>(
+    time: Res<Time>,
+    state: Res<EasyP2PState<PlayerData>>,
+    mut w_send_host: MessageWriter<OnSendToHostReq<PlayerData, PlayerInputData, Instantiations>>,
+) {
+    if state.is_host {
+        return;
+    }
+
+    w_send_host.write(OnSendToHostReq(P2PData::PingRequest(time.elapsed_secs())));
 }

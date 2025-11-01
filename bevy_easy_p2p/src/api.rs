@@ -18,6 +18,13 @@ pub enum EasyP2PSystemSet {
     Emit,
 }
 
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub enum NetworkSystemSet {
+    Receive,
+    Process,
+    Send,
+}
+
 #[derive(Message, Clone)]
 pub(crate) struct OnLobbyCreated(pub String);
 #[derive(Message, Clone)]
@@ -433,11 +440,22 @@ where
         Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
 {
     fn build(&self, app: &mut App) {
+        // Configure Network system sets for PreUpdate (receiving messages early)
         app.configure_sets(
+            PreUpdate,
+            (
+                NetworkSystemSet::Receive,
+                NetworkSystemSet::Process,
+                NetworkSystemSet::Send,
+            )
+                .chain(),
+        )
+        // Configure EasyP2P system sets for Update (core networking logic)
+        .configure_sets(
             Update,
             (
-                EasyP2PSystemSet::Transport,
                 EasyP2PSystemSet::Core,
+                EasyP2PSystemSet::Transport,
                 EasyP2PSystemSet::Emit,
             )
                 .chain(),

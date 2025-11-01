@@ -94,14 +94,24 @@ where
             .init_resource::<FirestoreShared>()
             .add_plugins(WebRtcPlugin)
             .add_systems(
+                PreUpdate,
+                // Receiving: log incoming data from WebRTC (runs right after pump_js_callbacks to process incoming messages early)
+                systems::log_incoming_data::<
+                    PlayerData,
+                    PlayerInputData,
+                    Instantiations,
+                >,
+            )
+            .add_systems(
                 Update,
                 (
-                    systems::handle_create_join_requests::<
+                    // Sending: handle transport send requests (runs after encode_outgoing in Core)
+                    systems::handle_send_requests::<
                         PlayerData,
                         PlayerInputData,
                         Instantiations,
                     >,
-                    systems::handle_send_requests::<
+                    systems::handle_create_join_requests::<
                         PlayerData,
                         PlayerInputData,
                         Instantiations,
@@ -117,11 +127,6 @@ where
                         Instantiations,
                     >,
                     systems::log_connection_open::<
-                        PlayerData,
-                        PlayerInputData,
-                        Instantiations,
-                    >,
-                    systems::log_incoming_data::<
                         PlayerData,
                         PlayerInputData,
                         Instantiations,

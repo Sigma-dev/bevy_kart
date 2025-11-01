@@ -124,13 +124,16 @@ impl Plugin for WebRtcPlugin {
             .add_message::<CloseAllConnections>()
             .add_message::<ConnectionClosed>()
             .add_systems(
+                PreUpdate,
+                pump_js_callbacks,
+            )
+            .add_systems(
                 Update,
                 (
                     handle_create_offer,
                     handle_create_answer,
                     handle_set_remote,
                     handle_send_data,
-                    pump_js_callbacks,
                     handle_close_connection,
                     handle_close_all,
                 ),

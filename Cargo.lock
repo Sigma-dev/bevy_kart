@@ -1051,6 +1051,7 @@ dependencies = [
  "gcloud-sdk",
  "js-sys",
  "miniz_oxide 0.7.4",
+ "rand",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",

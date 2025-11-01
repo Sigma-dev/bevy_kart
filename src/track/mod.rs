@@ -2,6 +2,7 @@ use audio_manager::prelude::*;
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy_easy_p2p::prelude::*;
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -202,7 +203,9 @@ pub(crate) fn spawn_track(
     if !easy.is_host() {
         return;
     }
-    for (i, player) in easy.get_players().iter().enumerate() {
+    let mut players = easy.get_players();
+    players.shuffle(&mut rand::rng());
+    for (i, player) in players.iter().enumerate() {
         let i = i as i32;
         let position: Vec3 = Vec3::new(
             (-25 + (i / 3) * -10) as f32,

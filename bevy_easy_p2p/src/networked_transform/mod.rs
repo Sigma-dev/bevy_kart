@@ -1,4 +1,4 @@
-use crate::{EasyP2P, NetworkedEventsExt, NetworkedId, P2PTransport};
+use crate::{EasyP2P, NetworkedEntity, NetworkedEventsExt, P2PTransport};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -74,7 +74,7 @@ where
 pub struct NetworkedTransform;
 
 #[derive(Message, Clone, Debug, Serialize, Deserialize)]
-struct OnNetworkedTransformUpdate(NetworkedId, (Vec3, Quat));
+struct OnNetworkedTransformUpdate(u64, (Vec3, Quat));
 
 fn networked_transform<
     'w,
@@ -93,18 +93,15 @@ fn networked_transform<
     Instantiations: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
 >(
     easy: EasyP2P<'w, 's, T, PlayerData, PlayerInputData, Instantiations>,
-    mut transforms: Query<(Entity, &mut Transform), With<NetworkedTransform>>,
+    transforms: Query<(&NetworkedEntity, &Transform), With<NetworkedTransform>>,
     mut events_w: MessageWriter<OnNetworkedTransformUpdate>,
 ) {
     if !easy.is_host() {
         return;
     }
-    for (entity, transform) in transforms.iter_mut() {
-        let Some(networked_id) = easy.get_closest_networked_id(entity) else {
-            continue;
-        };
+    for (networked_entity, transform) in transforms.iter() {
         events_w.write(OnNetworkedTransformUpdate(
-            networked_id,
+            networked_entity.uuid(),
             (transform.translation, transform.rotation),
         ));
     }
@@ -127,7 +124,7 @@ fn apply_networked_transform<
     Instantiations: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
 >(
     easy: EasyP2P<'w, 's, T, PlayerData, PlayerInputData, Instantiations>,
-    mut transforms: Query<(Entity, &mut Transform), With<NetworkedTransform>>,
+    mut transforms: Query<(&NetworkedEntity, &mut Transform), With<NetworkedTransform>>,
     mut events_r: MessageReader<OnNetworkedTransformUpdate>,
 ) {
     if easy.is_host() {
@@ -136,8 +133,7 @@ fn apply_networked_transform<
     for OnNetworkedTransformUpdate(networked_id, (new_translation, new_rotation)) in events_r.read()
     {
         for (entity, mut transform) in transforms.iter_mut() {
-            let closest_networked_id = easy.get_closest_networked_id(entity);
-            if closest_networked_id == Some(networked_id.clone()) {
+            if entity.uuid() == *networked_id {
                 transform.translation = *new_translation;
                 transform.rotation = *new_rotation;
             }

@@ -1,6 +1,6 @@
+use crate::kart::{KART_COLORS_COUNT, KART_SIZE};
 use crate::{
-    AppP2PUpdate, AppPlayerData, AppState, AssetHandles, CAR_COLORS_COUNT, CAR_SIZE, FinishTimes,
-    KartColor, KartEasyP2P,
+    AppP2PUpdate, AppPlayerData, AppState, AssetHandles, FinishTimes, KartColor, KartEasyP2P,
 };
 use bevy::prelude::*;
 use bevy_easy_p2p::prelude::*;
@@ -497,7 +497,7 @@ fn handle_kart_preview_add(
 ) {
     for entity in karts.iter() {
         let texture_atlas =
-            TextureAtlasLayout::from_grid(CAR_SIZE, CAR_COLORS_COUNT, 1, None, None);
+            TextureAtlasLayout::from_grid(KART_SIZE, KART_COLORS_COUNT, 1, None, None);
         let texture_atlas_handle = texture_atlases.add(texture_atlas);
         commands.entity(entity).insert((
             ImageNode::from_atlas_image(
@@ -505,8 +505,8 @@ fn handle_kart_preview_add(
                 TextureAtlas::from(texture_atlas_handle),
             ),
             Node {
-                width: px(CAR_SIZE.x * 10),
-                height: px(CAR_SIZE.y * 10),
+                width: px(KART_SIZE.x * 10),
+                height: px(KART_SIZE.y * 10),
                 ..default()
             },
         ));

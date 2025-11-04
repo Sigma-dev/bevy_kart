@@ -17,22 +17,28 @@ pub enum NetworkedId {
     ClientId(u64),
 }
 
-#[derive(Component)]
+#[derive(Component, Clone, Debug, Serialize, Deserialize)]
 pub struct NetworkedEntity {
-    pub(crate) id: NetworkedId,
+    pub(crate) owner_id: NetworkedId,
+    pub(crate) uuid: u64,
     pub(crate) despawn_on_leave: bool,
 }
 
 impl NetworkedEntity {
-    pub fn new(id: NetworkedId) -> Self {
+    pub fn new(owner_id: NetworkedId, uuid: u64) -> Self {
         Self {
-            id,
+            owner_id,
+            uuid,
             despawn_on_leave: true,
         }
     }
 
-    pub fn id(&self) -> NetworkedId {
-        self.id
+    pub fn owner_id(&self) -> NetworkedId {
+        self.owner_id
+    }
+
+    pub fn uuid(&self) -> u64 {
+        self.uuid
     }
 
     pub fn despawn_on_leave(&self) -> bool {
@@ -56,9 +62,11 @@ pub enum P2PData<PlayerData, PlayerInputData, Instantiations> {
     ClientInput(PlayerInputData),
     ClientDataUpdate(PlayerData),
     HostLobbyInfoUpdate(Vec<PlayerInfo<PlayerData>>),
+    ClientIdAssignment(NetworkedId),
     StateSync(u8, String),
     EventSync(u8, String),
     HostInstantiation(InstantiationDataNet<Instantiations>),
+    HostDespawn(u64),
     PingRequest(f32),
 }
 
@@ -95,12 +103,14 @@ impl From<&NetTransform> for Transform {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct InstantiationDataNet<Instantiations> {
     pub transform: NetTransform,
+    pub uuid: u64,
     pub instantiation: Instantiations,
 }
 
 #[derive(Clone, Debug)]
 pub struct InstantiationData<Instantiations> {
     pub transform: Transform,
+    pub uuid: u64,
     pub instantiation: Instantiations,
 }
 
@@ -110,6 +120,7 @@ impl<Instantiations: Clone> From<&InstantiationData<Instantiations>>
     fn from(value: &InstantiationData<Instantiations>) -> Self {
         Self {
             transform: NetTransform::from(&value.transform),
+            uuid: value.uuid,
             instantiation: value.instantiation.clone(),
         }
     }
@@ -121,6 +132,7 @@ impl<Instantiations: Clone> From<&InstantiationDataNet<Instantiations>>
     fn from(value: &InstantiationDataNet<Instantiations>) -> Self {
         Self {
             transform: Transform::from(&value.transform),
+            uuid: value.uuid,
             instantiation: value.instantiation.clone(),
         }
     }
@@ -142,6 +154,8 @@ pub struct EasyP2PState<
     pub is_host: bool,
     pub lobby_code: String,
     pub players: Vec<PlayerInfo<PlayerData>>,
+    pub instantiation_uuid_counter: u64,
+    pub local_networked_id: Option<NetworkedId>,
 }
 
 impl<
@@ -167,6 +181,12 @@ impl<
         };
         players.extend(self.players.clone());
         players
+    }
+
+    pub fn increment_uuid(&mut self) -> u64 {
+        let current = self.instantiation_uuid_counter;
+        self.instantiation_uuid_counter = current + 1;
+        current
     }
 }
 

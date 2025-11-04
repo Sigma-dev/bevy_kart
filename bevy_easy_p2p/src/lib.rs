@@ -12,10 +12,10 @@ pub mod prelude;
 
 pub use api::{
     EasyP2P, EasyP2PPlugin, EasyP2PSystemSet, EasyP2PTransportIo, ExitReason, OnApplyState,
-    PingUpdate, P2PTransport,
+    P2PTransport, PingUpdate,
 };
 pub use state::*;
-pub use updates::{EasyP2PUpdate, EasyP2PUpdateQueue};
+pub use updates::EasyP2PUpdate;
 
 pub type ClientId = u64;
 

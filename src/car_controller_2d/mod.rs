@@ -13,6 +13,7 @@ impl Plugin for CarController2dPlugin {
                 car_controller_power,
                 car_controller_steering,
                 car_controller_traction,
+                handle_boost_effect,
             ),
         );
     }
@@ -44,9 +45,22 @@ impl CarController2d {
     }
 }
 
+#[derive(Component)]
+pub struct BoostEffect {
+    pub multiplier: f32,
+    pub duration: f32,
+    pub start_time: f32,
+}
+
 fn car_controller_power(
     mut cars: Query<
-        (Forces, Entity, &Children, &CarController2d),
+        (
+            Forces,
+            Entity,
+            &Children,
+            &CarController2d,
+            Option<&BoostEffect>,
+        ),
         (
             Without<CarController2dWheel>,
             Without<CarControllerDisabled>,
@@ -64,7 +78,7 @@ fn car_controller_power(
         })
         .collect::<Vec<_>>();
     for (sender, input) in inputs {
-        for (mut force, entity, children, car) in cars.iter_mut() {
+        for (mut force, entity, children, car, maybe_boost_effect) in cars.iter_mut() {
             if !param_set.p0().inputs_belong_to_player(entity, &sender) {
                 continue;
             }
@@ -84,7 +98,11 @@ fn car_controller_power(
                 let Ok((global_transform, wheel)) = wheels.get(child) else {
                     continue;
                 };
-                let power = global_transform.up().xy() * car.engine_force * base_mult * dir;
+                let power = global_transform.up().xy()
+                    * car.engine_force
+                    * base_mult
+                    * maybe_boost_effect.map_or(1., |boost_effect| boost_effect.multiplier)
+                    * dir;
                 if !wheel.powered {
                     continue;
                 }
@@ -151,5 +169,17 @@ fn car_controller_traction(
         let desired_accel = desired_vel_change / time.delta_secs();
         let force = steering_dir * desired_accel;
         forces.apply_linear_impulse_at_point(force, global_transform.translation().xy());
+    }
+}
+
+fn handle_boost_effect(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut boost_effects: Query<(Entity, &BoostEffect)>,
+) {
+    for (car_entity, boost_effect) in boost_effects.iter_mut() {
+        if time.elapsed_secs() - boost_effect.start_time > boost_effect.duration {
+            commands.entity(car_entity).remove::<BoostEffect>();
+        }
     }
 }

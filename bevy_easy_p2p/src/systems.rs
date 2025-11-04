@@ -5,24 +5,24 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
-    HandleInstantiation, OnExitLobbyReq, OnInternalClientData, OnInternalHostData, OnLobbyCreated,
-    OnLobbyEntered, OnLobbyExit, OnLobbyJoined, OnRelayToAllExcept, OnRosterUpdate, OnSendToAllReq,
-    OnSendToClientReq, OnSendToHostReq, OnTransportIncomingFromClient, OnTransportIncomingFromHost,
-    OnTransportRelayToAllExcept, OnTransportRosterChanged, OnTransportSendToAll,
-    OnTransportSendToClient, OnTransportSendToHost, PingUpdate,
+    DespawnEntity, HandleInstantiation, OnExitLobbyReq, OnInternalClientData, OnInternalHostData,
+    OnLobbyCreated, OnLobbyEntered, OnLobbyExit, OnLobbyJoined, OnRelayToAllExcept, OnRosterUpdate,
+    OnSendToAllReq, OnSendToClientReq, OnSendToHostReq, OnTransportIncomingFromClient,
+    OnTransportIncomingFromHost, OnTransportRelayToAllExcept, OnTransportRosterChanged,
+    OnTransportSendToAll, OnTransportSendToClient, OnTransportSendToHost, PingUpdate,
 };
 use crate::state::{
     EasyP2PState, InstantiationData, IsHost, NetworkedEntity, NetworkedId, P2PData, P2PLobbyState,
     PlayerInfo, SyncedEventRegister, SyncedStateRegister,
 };
-use crate::updates::{EasyP2PUpdate, EasyP2PUpdateQueue};
+use crate::updates::EasyP2PUpdate;
 
 pub(crate) fn on_external_lobby_exit<PlayerData, PlayerInputData, Instantiations>(
     mut state: ResMut<EasyP2PState<PlayerData>>,
     mut r: MessageReader<OnLobbyExit>,
     mut lobby_state: ResMut<NextState<P2PLobbyState>>,
     mut host_flag: ResMut<IsHost>,
-    mut updates: ResMut<EasyP2PUpdateQueue<PlayerData, PlayerInputData, Instantiations>>,
+    mut updates: MessageWriter<EasyP2PUpdate<PlayerData, PlayerInputData, Instantiations>>,
 ) where
     PlayerData: Serialize
         + for<'de> Deserialize<'de>
@@ -50,16 +50,20 @@ pub(crate) fn on_external_lobby_exit<PlayerData, PlayerInputData, Instantiations
     host_flag.0 = false;
     state.lobby_code.clear();
     state.players.clear();
+    state.local_networked_id = None;
     lobby_state.set(P2PLobbyState::OutOfLobby);
-    updates.push(EasyP2PUpdate::LobbyExited { reason });
+    updates.write(EasyP2PUpdate::LobbyExited { reason });
 }
 
 pub(crate) fn broadcast_roster_on_host<PlayerData, PlayerInputData, Instantiations>(
     mut info_r: MessageReader<OnTransportRosterChanged>,
     mut roster_w: MessageWriter<OnRosterUpdate<PlayerData>>,
     mut w_send_all: MessageWriter<OnSendToAllReq<PlayerData, PlayerInputData, Instantiations>>,
+    mut w_send_client: MessageWriter<
+        OnSendToClientReq<PlayerData, PlayerInputData, Instantiations>,
+    >,
     mut state: ResMut<EasyP2PState<PlayerData>>,
-    mut updates: ResMut<EasyP2PUpdateQueue<PlayerData, PlayerInputData, Instantiations>>,
+    mut updates: MessageWriter<EasyP2PUpdate<PlayerData, PlayerInputData, Instantiations>>,
 ) where
     PlayerData: Serialize
         + for<'de> Deserialize<'de>
@@ -84,12 +88,22 @@ pub(crate) fn broadcast_roster_on_host<PlayerData, PlayerInputData, Instantiatio
             NetworkedId::Host => true,
         });
 
+        // Send each client their assigned NetworkedId
+        for player in &state.players {
+            if let NetworkedId::ClientId(cid) = player.id {
+                w_send_client.write(OnSendToClientReq(
+                    cid,
+                    P2PData::ClientIdAssignment(player.id),
+                ));
+            }
+        }
+
         let players = state.get_players(state.is_host);
         let _ = roster_w.write(OnRosterUpdate(players.clone()));
         w_send_all.write(OnSendToAllReq(P2PData::HostLobbyInfoUpdate(
             players.clone(),
         )));
-        updates.push(EasyP2PUpdate::RosterUpdated { players });
+        updates.write(EasyP2PUpdate::RosterUpdated { players });
     }
 }
 
@@ -110,7 +124,7 @@ pub(crate) fn despawn_on_leave<
 ) {
     for OnRosterUpdate(list) in on_roster_update.read() {
         for (entity, networked) in network_entities_q.iter() {
-            let should_despawn = match networked.id {
+            let should_despawn = match networked.owner_id {
                 NetworkedId::ClientId(cid) => {
                     !list.iter().any(|p| p.id == NetworkedId::ClientId(cid))
                 }
@@ -211,7 +225,7 @@ pub(crate) fn state_update_system<PlayerData, PlayerInputData, Instantiations>(
     mut exit_r: MessageReader<OnExitLobbyReq>,
     mut lobby_state: ResMut<NextState<P2PLobbyState>>,
     mut host_flag: ResMut<IsHost>,
-    mut updates: ResMut<EasyP2PUpdateQueue<PlayerData, PlayerInputData, Instantiations>>,
+    mut updates: MessageWriter<EasyP2PUpdate<PlayerData, PlayerInputData, Instantiations>>,
 ) where
     PlayerData: Serialize
         + for<'de> Deserialize<'de>
@@ -230,24 +244,26 @@ pub(crate) fn state_update_system<PlayerData, PlayerInputData, Instantiations>(
     for OnLobbyCreated(code) in created_r.read() {
         state.is_host = true;
         state.lobby_code = code.clone();
+        state.local_networked_id = Some(NetworkedId::Host);
         host_flag.0 = true;
-        updates.push(EasyP2PUpdate::LobbyCreated { code: code.clone() });
+        updates.write(EasyP2PUpdate::LobbyCreated { code: code.clone() });
     }
     for OnLobbyJoined(code) in joined_r.read() {
         state.is_host = false;
         state.lobby_code = code.clone();
         host_flag.0 = false;
-        updates.push(EasyP2PUpdate::LobbyJoined { code: code.clone() });
+        updates.write(EasyP2PUpdate::LobbyJoined { code: code.clone() });
     }
     for OnLobbyEntered(code) in entered_r.read() {
         state.lobby_code = code.clone();
         lobby_state.set(P2PLobbyState::InLobby);
-        updates.push(EasyP2PUpdate::LobbyEntered { code: code.clone() });
+        updates.write(EasyP2PUpdate::LobbyEntered { code: code.clone() });
     }
     for _ in exit_r.read() {
         state.is_host = false;
         state.lobby_code.clear();
         state.players.clear();
+        state.local_networked_id = None;
         lobby_state.set(P2PLobbyState::OutOfLobby);
         host_flag.0 = false;
     }
@@ -276,7 +292,8 @@ pub(crate) fn intercept_data_messages<
     mut state: ResMut<EasyP2PState<PlayerData>>,
     register: Res<SyncedStateRegister>,
     event_register: Res<SyncedEventRegister>,
-    mut updates: ResMut<EasyP2PUpdateQueue<PlayerData, PlayerInputData, Instantiations>>,
+    mut updates: MessageWriter<EasyP2PUpdate<PlayerData, PlayerInputData, Instantiations>>,
+    mut despawn_w: MessageWriter<DespawnEntity>,
 ) where
     PlayerData:
         Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
@@ -288,7 +305,7 @@ pub(crate) fn intercept_data_messages<
     for OnInternalClientData(cid, data) in internal_client_r.read() {
         match data {
             P2PData::ClientLobbyChatMessage(text, _sender) => {
-                updates.push(EasyP2PUpdate::ClientChat {
+                updates.write(EasyP2PUpdate::ClientChat {
                     client_id: *cid,
                     text: text.clone(),
                 });
@@ -300,9 +317,13 @@ pub(crate) fn intercept_data_messages<
                 }
             }
             P2PData::HostLobbyInfoUpdate(_) => {}
+            P2PData::ClientIdAssignment(_) => {
+                // ClientIdAssignment is only sent from host to client, not client to host
+                // This case should not occur, but included for exhaustiveness
+            }
             P2PData::ClientInput(input) => {
                 if state.is_host {
-                    updates.push(EasyP2PUpdate::ClientInput {
+                    updates.write(EasyP2PUpdate::ClientInput {
                         sender: NetworkedId::ClientId(*cid),
                         input: input.clone(),
                     });
@@ -320,6 +341,7 @@ pub(crate) fn intercept_data_messages<
             P2PData::StateSync(_, _) => {}
             P2PData::EventSync(_, _) => {}
             P2PData::HostInstantiation(_) => {}
+            P2PData::HostDespawn(_) => {}
             P2PData::PingRequest(timestamp) => {
                 // Host receives ping from client, echo it back
                 if state.is_host {
@@ -332,10 +354,10 @@ pub(crate) fn intercept_data_messages<
         match data {
             P2PData::ClientLobbyChatMessage(text, sender) => match sender {
                 NetworkedId::Host => {
-                    updates.push(EasyP2PUpdate::HostChat { text: text.clone() });
+                    updates.write(EasyP2PUpdate::HostChat { text: text.clone() });
                 }
                 NetworkedId::ClientId(cid) => {
-                    updates.push(EasyP2PUpdate::ClientChat {
+                    updates.write(EasyP2PUpdate::ClientChat {
                         client_id: *cid,
                         text: text.clone(),
                     });
@@ -344,9 +366,12 @@ pub(crate) fn intercept_data_messages<
             P2PData::HostLobbyInfoUpdate(players_data) => {
                 state.players = players_data.clone();
                 let _ = roster_w.write(OnRosterUpdate(players_data.clone()));
-                updates.push(EasyP2PUpdate::RosterUpdated {
+                updates.write(EasyP2PUpdate::RosterUpdated {
                     players: players_data.clone(),
                 });
+            }
+            P2PData::ClientIdAssignment(networked_id) => {
+                state.local_networked_id = Some(*networked_id);
             }
             P2PData::StateSync(type_index, payload) => {
                 let idx = *type_index as usize;
@@ -369,7 +394,10 @@ pub(crate) fn intercept_data_messages<
             P2PData::HostInstantiation(inst) => {
                 let local: InstantiationData<Instantiations> = InstantiationData::from(&*inst);
                 inst_w.write(HandleInstantiation(local.clone()));
-                updates.push(EasyP2PUpdate::Instantiated { data: local });
+                updates.write(EasyP2PUpdate::Instantiated { data: local });
+            }
+            P2PData::HostDespawn(uuid) => {
+                despawn_w.write(DespawnEntity(*uuid));
             }
             P2PData::PingRequest(timestamp) => {
                 let elapsed_secs = time.elapsed_secs() - timestamp;
@@ -412,8 +440,11 @@ pub(crate) fn handle_client_data_update_on_host<PlayerData, PlayerInputData, Ins
     >,
     mut state: ResMut<EasyP2PState<PlayerData>>,
     mut w_send_all: MessageWriter<OnSendToAllReq<PlayerData, PlayerInputData, Instantiations>>,
+    mut w_send_client: MessageWriter<
+        OnSendToClientReq<PlayerData, PlayerInputData, Instantiations>,
+    >,
     mut roster_w: MessageWriter<OnRosterUpdate<PlayerData>>,
-    mut updates: ResMut<EasyP2PUpdateQueue<PlayerData, PlayerInputData, Instantiations>>,
+    mut updates: MessageWriter<EasyP2PUpdate<PlayerData, PlayerInputData, Instantiations>>,
 ) where
     PlayerData: Serialize
         + for<'de> Deserialize<'de>
@@ -450,13 +481,19 @@ pub(crate) fn handle_client_data_update_on_host<PlayerData, PlayerInputData, Ins
                 });
             }
 
+            // Send the client their assigned NetworkedId
+            w_send_client.write(OnSendToClientReq(
+                client_id,
+                P2PData::ClientIdAssignment(NetworkedId::ClientId(client_id)),
+            ));
+
             let payload = state.get_players(state.is_host);
             w_send_all.write(OnSendToAllReq(P2PData::HostLobbyInfoUpdate(
                 payload.clone(),
             )));
             let players = state.get_players(state.is_host);
             let _ = roster_w.write(OnRosterUpdate(players.clone()));
-            updates.push(EasyP2PUpdate::RosterUpdated { players });
+            updates.write(EasyP2PUpdate::RosterUpdated { players });
         }
     }
 }
@@ -573,4 +610,18 @@ pub(crate) fn send_ping<
     }
 
     w_send_host.write(OnSendToHostReq(P2PData::PingRequest(time.elapsed_secs())));
+}
+
+pub(crate) fn despawn_entity(
+    mut commands: Commands,
+    mut despawn_w: MessageReader<DespawnEntity>,
+    network_entities_q: Query<(Entity, &NetworkedEntity)>,
+) {
+    for DespawnEntity(uuid) in despawn_w.read() {
+        for (entity, networked) in network_entities_q.iter() {
+            if networked.uuid == *uuid {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
 }

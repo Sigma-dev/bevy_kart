@@ -1,3 +1,9 @@
+use crate::items::{ItemType, ItemsPlugin, spawn_item_pickup, spawn_rocket};
+use crate::kart::{KartColor, KartPlugin, spawn_kart};
+use crate::menu::MenuPlugin;
+use crate::menu::lobby::spawn_lobby;
+use crate::menu::start::spawn_menu;
+use crate::track::{TrackPlugin, spawn_track};
 use audio_manager::AudioManagerPlugin;
 use avian2d::prelude::*;
 use bevy::platform::collections::HashMap;
@@ -10,15 +16,12 @@ use bevy_firestore_p2p::FirestoreWebRtcTransport;
 use bevy_text_input::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::car_controller_2d::{CarController2d, CarController2dWheel, CarControllerDisabled};
-use crate::menu::MenuPlugin;
-use crate::menu::lobby::spawn_lobby;
-use crate::menu::start::spawn_menu;
-use crate::track::{TrackPlugin, spawn_track};
-
 pub mod car_controller_2d;
+pub mod items;
+pub mod kart;
 pub mod menu;
 pub mod track;
+use bevy_timer::TimerPlugin;
 use car_controller_2d::CarController2dPlugin;
 
 pub type KartEasyP2P<'w, 's> =
@@ -28,30 +31,6 @@ pub type KartEasyP2P<'w, 's> =
 pub struct AppPlayerData {
     pub name: String,
     pub kart_color: KartColor,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
-pub struct KartColor(u32);
-
-impl KartColor {
-    fn new() -> Self {
-        Self(0)
-    }
-
-    fn right(&self) -> KartColor {
-        Self((self.0 + 1) % CAR_COLORS_COUNT)
-    }
-
-    fn left(&self) -> KartColor {
-        if self.0 == 0 {
-            return Self(CAR_COLORS_COUNT - 1);
-        }
-        Self(self.0 - 1)
-    }
-
-    fn to_u32(&self) -> u32 {
-        self.0
-    }
 }
 
 #[derive(States, Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -67,21 +46,23 @@ pub struct AppPlayerInputData {
     pub backward: bool,
     pub left: bool,
     pub right: bool,
+    pub using_item: bool,
 }
 
 #[derive(Resource)]
 struct AssetHandles {
     karts_texture: Handle<Image>,
     wheel_texture: Handle<Image>,
+    crate_texture: Handle<Image>,
+    rocket_texture: Handle<Image>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AppInstantiations {
     Kart(NetworkedId),
+    ItemPickup(ItemType),
+    Rocket,
 }
-
-#[derive(Component)]
-struct LapsCounter(u32);
 
 pub enum SpriteLayers {
     Background,
@@ -103,22 +84,8 @@ impl SpriteLayers {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum WheelRotation {
-    Left,
-    Right,
-    Straight,
-}
-
-#[derive(Message, Clone, Debug, Serialize, Deserialize)]
-struct WheelPositionUpdate(NetworkedId, WheelRotation);
-
 #[derive(Clone, Message)]
 struct AppP2PUpdate(EasyP2PUpdate<AppPlayerData, AppPlayerInputData, AppInstantiations>);
-
-const LAPS_TO_WIN: u32 = 3;
-const CAR_COLORS_COUNT: u32 = 10;
-const CAR_SIZE: UVec2 = UVec2::new(4, 8);
 
 fn main() {
     App::new()
@@ -138,12 +105,12 @@ fn main() {
             TextInputPlugin,
             CarController2dPlugin,
             AudioManagerPlugin::default(),
+            TimerPlugin,
         ))
-        .add_plugins((MenuPlugin, TrackPlugin))
+        .add_plugins((MenuPlugin, TrackPlugin, ItemsPlugin, KartPlugin))
         .add_systems(Startup, (auto_join_from_url, setup))
         .init_state::<AppState>()
         .init_networked_state::<AppState>()
-        .init_networked_event::<WheelPositionUpdate>()
         .add_message::<AppP2PUpdate>()
         .insert_resource(FinishTimes {
             times: HashMap::new(),
@@ -151,6 +118,8 @@ fn main() {
         .insert_resource(AssetHandles {
             karts_texture: Handle::default(),
             wheel_texture: Handle::default(),
+            crate_texture: Handle::default(),
+            rocket_texture: Handle::default(),
         })
         .add_systems(Update, emit_easy_updates.in_set(EasyP2PSystemSet::Emit))
         .add_systems(Update, on_lobby_created.after(EasyP2PSystemSet::Emit))
@@ -159,66 +128,8 @@ fn main() {
         .add_systems(OnEnter(P2PLobbyState::InLobby), spawn_lobby)
         .add_systems(OnEnter(AppState::Game), spawn_track)
         .add_systems(OnExit(AppState::Game), spawn_lobby)
-        .add_systems(Update, (send_inputs, follow_transform, cursor_positon_log))
-        .add_systems(
-            Update,
-            (
-                sync_wheel_rotation.after(EasyP2PSystemSet::Emit),
-                receive_wheel_rotation.after(EasyP2PSystemSet::Emit),
-            ),
-        )
+        .add_systems(Update, (send_inputs, cursor_positon_log))
         .run();
-}
-
-fn sync_wheel_rotation(
-    mut updates: MessageReader<AppP2PUpdate>,
-    mut w: MessageWriter<WheelPositionUpdate>,
-) {
-    for AppP2PUpdate(update) in updates.read() {
-        if let EasyP2PUpdate::ClientInput { sender, input } = update {
-            let update = WheelPositionUpdate(
-                sender.clone(),
-                if input.right {
-                    WheelRotation::Right
-                } else if input.left {
-                    WheelRotation::Left
-                } else {
-                    WheelRotation::Straight
-                },
-            );
-            w.write(update);
-        }
-    }
-}
-
-fn receive_wheel_rotation(
-    easy: KartEasyP2P,
-    mut r: MessageReader<WheelPositionUpdate>,
-    mut wheels: Query<(Entity, &mut Transform, &CarController2dWheel)>,
-) {
-    if easy.is_host() {
-        return;
-    }
-    for WheelPositionUpdate(target, rotation) in r.read() {
-        for (entity, mut transform, wheel) in wheels.iter_mut() {
-            if easy.get_closest_networked_id(entity) != Some(target.clone()) {
-                continue;
-            }
-            if wheel.steerable {
-                match rotation {
-                    WheelRotation::Left => {
-                        transform.rotation = Quat::from_rotation_z(45_f32.to_radians());
-                    }
-                    WheelRotation::Right => {
-                        transform.rotation = Quat::from_rotation_z(-45_f32.to_radians());
-                    }
-                    WheelRotation::Straight => {
-                        transform.rotation = Quat::from_rotation_z(0_f32.to_radians());
-                    }
-                }
-            }
-        }
-    }
 }
 
 fn get_url() -> Option<String> {
@@ -253,6 +164,7 @@ fn send_inputs(mut easy: KartEasyP2P, keyboard: Res<ButtonInput<KeyCode>>) {
         backward: keyboard.pressed(KeyCode::KeyS),
         left: keyboard.pressed(KeyCode::KeyA),
         right: keyboard.pressed(KeyCode::KeyD),
+        using_item: keyboard.pressed(KeyCode::Space),
     });
 }
 
@@ -276,109 +188,32 @@ fn on_lobby_created(mut events: MessageReader<AppP2PUpdate>) {
     }
 }
 
-fn on_instantiation(
-    mut commands: Commands,
-    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
-    mut easy: KartEasyP2P,
-    asset_handles: Res<AssetHandles>,
-) {
+fn on_instantiation(mut commands: Commands, mut easy: KartEasyP2P) {
     for data in easy.get_instantiations() {
         match &data.instantiation {
             AppInstantiations::Kart(id) => {
-                let player = easy.get_player_data(id.clone());
-                let layout =
-                    TextureAtlasLayout::from_grid(CAR_SIZE, CAR_COLORS_COUNT, 1, None, None);
-                let texture_atlas_layout = texture_atlas_layouts.add(layout);
-                let half_car_width = 2.5;
-                let half_car_length = 3.;
-                let id = commands
-                    .spawn((
-                        DespawnOnExit(AppState::Game),
-                        Mass(1.),
-                        RigidBody::Dynamic,
-                        Collider::rectangle(4., 8.),
-                        Sprite::from_atlas_image(
-                            asset_handles.karts_texture.clone(),
-                            TextureAtlas {
-                                layout: texture_atlas_layout,
-                                index: player.kart_color.to_u32() as usize,
-                            },
-                        ),
-                        data.transform,
-                        NetworkedTransform,
-                        NetworkedEntity::new(id.clone()),
-                        CarController2d::new(1.),
-                        CarControllerDisabled,
-                        LapsCounter(0),
-                        children![
-                            (
-                                Transform::from_xyz(
-                                    half_car_width,
-                                    half_car_length - 1.,
-                                    SpriteLayers::Wheels.to_z()
-                                ),
-                                CarController2dWheel::new(true, true),
-                                Sprite::from_image(asset_handles.wheel_texture.clone()),
-                            ),
-                            (
-                                Transform::from_xyz(
-                                    -half_car_width,
-                                    half_car_length - 1.,
-                                    SpriteLayers::Wheels.to_z()
-                                ),
-                                CarController2dWheel::new(true, true),
-                                Sprite::from_image(asset_handles.wheel_texture.clone()),
-                            ),
-                            (
-                                Transform::from_xyz(
-                                    half_car_width,
-                                    -half_car_length,
-                                    SpriteLayers::Wheels.to_z()
-                                ),
-                                CarController2dWheel::new(false, false),
-                                Sprite::from_image(asset_handles.wheel_texture.clone()),
-                            ),
-                            (
-                                Transform::from_xyz(
-                                    -half_car_width,
-                                    -half_car_length,
-                                    SpriteLayers::Wheels.to_z()
-                                ),
-                                CarController2dWheel::new(false, false),
-                                Sprite::from_image(asset_handles.wheel_texture.clone()),
-                            ),
-                        ],
-                    ))
-                    .id();
-                commands.spawn((
-                    DespawnOnExit(AppState::Game),
-                    FollowTransform(id),
-                    children![(
-                        Text2d::new(player.name),
-                        Transform::from_xyz(0., 5., SpriteLayers::AboveCar.to_z())
-                            .with_scale(Vec3::splat(0.1)),
-                    )],
-                ));
+                commands.run_system_cached_with(
+                    spawn_kart,
+                    (NetworkedEntity::new(*id, data.uuid), data.transform),
+                );
             }
-        }
-    }
-}
-
-#[derive(Component)]
-#[require(Transform)]
-
-struct FollowTransform(Entity);
-
-fn follow_transform(
-    mut commands: Commands,
-    transforms: Query<&Transform, Without<FollowTransform>>,
-    mut follow_transforms: Query<(Entity, &mut Transform, &FollowTransform)>,
-) {
-    for (entity, mut transform, follow_transform) in follow_transforms.iter_mut() {
-        if let Ok(target_transform) = transforms.get(follow_transform.0) {
-            transform.translation = target_transform.translation;
-        } else {
-            commands.entity(entity).despawn();
+            AppInstantiations::ItemPickup(item) => {
+                commands.run_system_cached_with(
+                    spawn_item_pickup,
+                    (
+                        *item,
+                        data.transform,
+                        NetworkedEntity::new(NetworkedId::Host, data.uuid),
+                    ),
+                );
+            }
+            AppInstantiations::Rocket => commands.run_system_cached_with(
+                spawn_rocket,
+                (
+                    data.transform,
+                    NetworkedEntity::new(NetworkedId::Host, data.uuid),
+                ),
+            ),
         }
     }
 }
@@ -396,6 +231,8 @@ fn setup(
     commands.spawn((Camera2d, Projection::Orthographic(projection)));
     handles.karts_texture = asset_server.load("sprites/karts.png");
     handles.wheel_texture = asset_server.load("sprites/wheel.png");
+    handles.crate_texture = asset_server.load("sprites/crate.png");
+    handles.rocket_texture = asset_server.load("sprites/rocket.png");
 }
 
 fn cursor_positon_log(

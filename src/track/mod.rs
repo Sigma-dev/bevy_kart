@@ -6,8 +6,10 @@ use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AppInstantiations, AppState, FinishTimes, KartEasyP2P, LAPS_TO_WIN, LapsCounter, SpriteLayers,
+    AppInstantiations, AppState, FinishTimes, KartEasyP2P, SpriteLayers,
     car_controller_2d::CarControllerDisabled,
+    items::{ItemPickedUp, spawn_spawner},
+    kart::LapsCounter,
 };
 
 pub struct TrackPlugin;
@@ -22,10 +24,14 @@ impl Plugin for TrackPlugin {
                 handle_end_race,
                 end_with_delay,
                 start_light,
+                update_held_item_icon,
+                update_on_item_used,
             ),
         );
     }
 }
+
+const LAPS_TO_WIN: u32 = 3;
 
 #[derive(Component)]
 struct HasPassedPostStart;
@@ -44,6 +50,9 @@ struct StartLight;
 
 #[derive(Resource)]
 struct RaceStarted(f32);
+
+#[derive(Component)]
+struct HeldItemIcon;
 
 fn spawn_barriers(
     commands: &mut Commands,
@@ -70,6 +79,12 @@ fn spawn_barriers(
             Transform::from_translation(middle.extend(SpriteLayers::Car.to_z()))
                 .with_rotation(Quat::from_rotation_z(angle)),
         ));
+    }
+}
+
+fn spawn_item_spawners(commands: &mut Commands, points: Vec<Vec2>) {
+    for point in points {
+        spawn_spawner(commands, point);
     }
 }
 
@@ -200,6 +215,35 @@ pub(crate) fn spawn_track(
     ));
     audio_manager.play_sound(PlayAudio2D::new_once("sounds/countdown.wav"));
     commands.insert_resource(RaceStarted(time.elapsed_secs()));
+
+    let texture_handle = asset_server.load("sprites/items.png");
+    let texture_atlas = TextureAtlasLayout::from_grid(UVec2::splat(8), 2, 1, None, None);
+    let texture_atlas_handle = texture_atlas_layouts.add(texture_atlas);
+
+    commands.spawn((
+        DespawnOnExit(AppState::Game),
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(5.),
+            bottom: Val::Px(5.),
+            height: Val::Px(100.),
+            width: Val::Px(100.),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.18039, 0.13333, 0.18431)),
+        children![(
+            ImageNode::from_atlas_image(texture_handle, TextureAtlas::from(texture_atlas_handle)),
+            Node {
+                height: Val::Px(80.),
+                width: Val::Px(80.),
+                ..default()
+            },
+            Visibility::Hidden,
+            HeldItemIcon,
+        )],
+    ));
     if !easy.is_host() {
         return;
     }
@@ -218,6 +262,20 @@ pub(crate) fn spawn_track(
                 .with_rotation(Quat::from_rotation_z(-90_f32.to_radians())),
         );
     }
+
+    spawn_item_spawners(
+        &mut commands,
+        vec![
+            Vec2::new(0., -52.),
+            Vec2::new(-0., -39.8),
+            Vec2::new(101., 3.8),
+            Vec2::new(110., 3.4),
+            Vec2::new(-81., -5.8),
+            Vec2::new(-68.8, -5.7),
+            Vec2::new(-117.2, 21.1),
+            Vec2::new(-106.66667, 20.86859),
+        ],
+    );
 
     commands
         .spawn((
@@ -286,7 +344,6 @@ pub(crate) fn spawn_track(
              mut commands: Commands| {
                 if let Ok(entity) = car.get(trigger.collider2) {
                     commands.entity(entity).insert(HasPassedPostStart);
-                } else {
                 }
             },
         );
@@ -364,6 +421,33 @@ fn start_light(
     if time_since_start > 3. && time_since_start < 4. {
         for entity in disabled_cars.iter() {
             commands.entity(entity).remove::<CarControllerDisabled>();
+        }
+    }
+}
+
+fn update_held_item_icon(
+    easy: KartEasyP2P,
+    mut held_item_icon: Query<(&mut Visibility, &mut ImageNode), With<HeldItemIcon>>,
+    mut pickup_reader: MessageReader<ItemPickedUp>,
+) {
+    for picked_up in pickup_reader.read() {
+        if picked_up.car.owner_id() != easy.get_local_player_id() {
+            continue;
+        }
+        for (mut visibility, mut image_node) in held_item_icon.iter_mut() {
+            *visibility = Visibility::Visible;
+            image_node.texture_atlas.as_mut().unwrap().index = picked_up.item.to_index();
+        }
+    }
+}
+
+fn update_on_item_used(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut held_item_icon: Query<&mut Visibility, With<HeldItemIcon>>,
+) {
+    if keyboard.pressed(KeyCode::Space) {
+        for mut visibility in held_item_icon.iter_mut() {
+            *visibility = Visibility::Hidden;
         }
     }
 }

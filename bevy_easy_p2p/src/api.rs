@@ -8,7 +8,7 @@ use crate::state::{
     InstantiationData, InstantiationDataNet, IsHost, NetworkedEntity, NetworkedId, P2PData,
     P2PLobbyState, PlayerInfo, SyncedEventRegister, SyncedStateRegister,
 };
-use crate::updates::{EasyP2PUpdate, EasyP2PUpdateQueue};
+use crate::updates::EasyP2PUpdate;
 use crate::{ClientId, networked_transform};
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -35,6 +35,9 @@ pub(crate) struct OnLobbyEntered(pub String);
 pub struct OnApplyState<S>(pub S)
 where
     S: States + Clone + Send + Sync + 'static;
+
+#[derive(Message)]
+pub(crate) struct DespawnEntity(pub u64);
 
 #[derive(Message)]
 pub(crate) struct OnRosterUpdate<
@@ -148,6 +151,7 @@ pub struct EasyP2P<
     send_host_w: MessageWriter<'w, OnSendToHostReq<PlayerData, PlayerInputData, Instantiations>>,
     send_all_w: MessageWriter<'w, OnSendToAllReq<PlayerData, PlayerInputData, Instantiations>>,
     kick_w: MessageWriter<'w, OnKickReq>,
+    despawn_w: MessageWriter<'w, DespawnEntity>,
     instantiation_set: ParamSet<
         'w,
         's,
@@ -157,7 +161,14 @@ pub struct EasyP2P<
         ),
     >,
     state: ResMut<'w, crate::state::EasyP2PState<PlayerData>>,
-    updates: ResMut<'w, EasyP2PUpdateQueue<PlayerData, PlayerInputData, Instantiations>>,
+    updates_set: ParamSet<
+        'w,
+        's,
+        (
+            MessageWriter<'w, EasyP2PUpdate<PlayerData, PlayerInputData, Instantiations>>,
+            MessageReader<'w, 's, EasyP2PUpdate<PlayerData, PlayerInputData, Instantiations>>,
+        ),
+    >,
     children_q: Query<'w, 's, &'static ChildOf>,
     network_entities_q: Query<'w, 's, &'static NetworkedEntity>,
     _marker: std::marker::PhantomData<&'s T>,
@@ -199,7 +210,7 @@ where
     pub fn send_inputs(&mut self, input: PlayerInputData) {
         let msg = P2PData::ClientInput(input.clone());
         if self.is_host() {
-            self.updates.push(EasyP2PUpdate::ClientInput {
+            self.updates_set.p0().write(EasyP2PUpdate::ClientInput {
                 sender: NetworkedId::Host,
                 input,
             });
@@ -208,21 +219,29 @@ where
         }
     }
     pub fn instantiate(&mut self, instantiation: Instantiations, transform: Transform) {
+        if !self.state.is_host {
+            return;
+        }
+        let instantiation_data = InstantiationData {
+            transform: transform.clone(),
+            uuid: self.state.increment_uuid(),
+            instantiation: instantiation.clone(),
+        };
         self.instantiation_set
             .p0()
-            .write(HandleInstantiation(InstantiationData {
-                transform: transform.clone(),
-                instantiation: instantiation.clone(),
-            }));
-        if self.state.is_host {
-            let net: InstantiationDataNet<Instantiations> =
-                InstantiationDataNet::from(&InstantiationData {
-                    transform,
-                    instantiation,
-                });
-            self.send_all_w
-                .write(OnSendToAllReq(P2PData::HostInstantiation(net)));
+            .write(HandleInstantiation(instantiation_data.clone()));
+        let net: InstantiationDataNet<Instantiations> =
+            InstantiationDataNet::from(&instantiation_data);
+        self.send_all_w
+            .write(OnSendToAllReq(P2PData::HostInstantiation(net)));
+    }
+    pub fn despawn(&mut self, uuid: u64) {
+        if !self.state.is_host {
+            return;
         }
+        self.send_all_w
+            .write(OnSendToAllReq(P2PData::HostDespawn(uuid)));
+        self.despawn_w.write(DespawnEntity(uuid));
     }
     pub fn get_instantiations(&mut self) -> Vec<InstantiationData<Instantiations>> {
         self.instantiation_set
@@ -237,6 +256,12 @@ where
     pub fn is_host(&self) -> bool {
         self.state.is_host
     }
+    pub fn get_local_player_id(&self) -> NetworkedId {
+        if self.state.is_host {
+            return NetworkedId::Host;
+        }
+        self.state.local_networked_id.unwrap()
+    }
     pub fn get_players(&self) -> Vec<PlayerInfo<PlayerData>> {
         self.state.get_players(self.is_host())
     }
@@ -248,7 +273,7 @@ where
         if self.state.is_host {
             let players = self.state.get_players(self.state.is_host);
             let _ = self.roster_w.write(OnRosterUpdate(players.clone()));
-            self.updates.push(EasyP2PUpdate::RosterUpdated {
+            self.updates_set.p0().write(EasyP2PUpdate::RosterUpdated {
                 players: players.clone(),
             });
             self.send_all_w
@@ -260,8 +285,12 @@ where
     }
     pub fn read_updates(
         &mut self,
-    ) -> impl Iterator<Item = EasyP2PUpdate<PlayerData, PlayerInputData, Instantiations>> {
-        self.updates.drain()
+    ) -> Vec<EasyP2PUpdate<PlayerData, PlayerInputData, Instantiations>> {
+        self.updates_set
+            .p1()
+            .read()
+            .map(|update| update.clone())
+            .collect()
     }
     pub fn get_player_data(&self, id: NetworkedId) -> PlayerData {
         self.get_players()
@@ -273,13 +302,13 @@ where
     }
     pub fn get_closest_networked_id(&self, entity: Entity) -> Option<NetworkedId> {
         if self.network_entities_q.contains(entity) {
-            return Some(self.network_entities_q.get(entity).unwrap().id());
+            return Some(self.network_entities_q.get(entity).unwrap().owner_id());
         }
         let ancestor = self
             .children_q
             .iter_ancestors(entity)
             .find(|a| self.network_entities_q.contains(*a))?;
-        Some(self.network_entities_q.get(ancestor).unwrap().id())
+        Some(self.network_entities_q.get(ancestor).unwrap().owner_id())
     }
     pub fn inputs_belong_to_player(&self, entity: Entity, id: &NetworkedId) -> bool {
         let Some(ancestor) = self.get_closest_networked_id(entity) else {
@@ -464,9 +493,9 @@ where
         .init_resource::<IsHost>()
         .init_resource::<SyncedStateRegister>()
         .init_resource::<SyncedEventRegister>()
-        .init_resource::<EasyP2PUpdateQueue<PlayerData, PlayerInputData, Instantiations>>()
         .init_state::<P2PLobbyState>()
         .add_message::<OnCreateLobbyReq>()
+        .add_message::<EasyP2PUpdate<PlayerData, PlayerInputData, Instantiations>>()
         .add_message::<OnJoinLobbyReq>()
         .add_message::<OnSendToHostReq<PlayerData, PlayerInputData, Instantiations>>()
         .add_message::<OnSendToAllReq<PlayerData, PlayerInputData, Instantiations>>()
@@ -476,6 +505,7 @@ where
         .add_message::<OnLobbyCreated>()
         .add_message::<OnLobbyJoined>()
         .add_message::<OnLobbyEntered>()
+        .add_message::<DespawnEntity>()
         .add_message::<OnInternalClientData<PlayerData, PlayerInputData, Instantiations>>()
         .add_message::<OnInternalHostData<PlayerData, PlayerInputData, Instantiations>>()
         .add_message::<OnLobbyExit>()
@@ -525,6 +555,7 @@ where
                     crate::systems::despawn_on_leave::<PlayerData>,
                     crate::systems::send_ping::<PlayerData, PlayerInputData, Instantiations>
                         .run_if(on_timer(Duration::from_secs(1))),
+                    crate::systems::despawn_entity,
                 ),
             )
                 .chain()

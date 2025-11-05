@@ -445,7 +445,7 @@ fn update_on_item_used(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut held_item_icon: Query<&mut Visibility, With<HeldItemIcon>>,
 ) {
-    if keyboard.pressed(KeyCode::Space) {
+    if keyboard.just_pressed(KeyCode::Space) {
         for mut visibility in held_item_icon.iter_mut() {
             *visibility = Visibility::Hidden;
         }

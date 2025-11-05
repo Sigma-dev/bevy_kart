@@ -134,6 +134,7 @@ fn on_lobby_exit(
     mut events: MessageReader<AppP2PUpdate>,
     mut inputs: Query<&mut Text, With<TextInput>>,
     mut history: ResMut<LobbyChatInputHistory>,
+    mut next_state: ResMut<NextState<AppState>>,
 ) {
     for AppP2PUpdate(update) in events.read() {
         if let EasyP2PUpdate::LobbyExited { reason } = update {
@@ -142,6 +143,7 @@ fn on_lobby_exit(
                 input.0.clear();
             }
             history.0.clear();
+            next_state.set(AppState::OutOfGame);
         }
     }
 }

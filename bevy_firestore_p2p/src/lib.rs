@@ -1,8 +1,6 @@
 use bevy::prelude::*;
 use bevy_easy_p2p::{ClientId, EasyP2PSystemSet, P2PTransport};
-use bevy_webrtc::{
-    ConnectionId, CreateAnswer, CreateOffer, LocalSdpReady, SetRemote, WebRtcPlugin,
-};
+use bevy_webrtc::{ConnectionId, WebRtc, WebRtcPlugin};
 use serde_json::json;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -15,16 +13,6 @@ mod systems;
 
 thread_local! {
     pub(crate) static FIRESTORE_INBOX: RefCell<Vec<serde_json::Value>> = RefCell::new(Vec::new());
-}
-
-#[derive(Resource, Default)]
-struct ConnectionIdAllocator(u64);
-
-impl ConnectionIdAllocator {
-    fn allocate(&mut self) -> ConnectionId {
-        self.0 += 1;
-        ConnectionId(self.0)
-    }
 }
 
 #[derive(Component, Copy, Clone)]
@@ -88,15 +76,13 @@ where
     Instantiations: Send + Sync + 'static,
 {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ConnectionIdAllocator>()
-            .init_resource::<FirestoreConfig>()
+        app.init_resource::<FirestoreConfig>()
             .init_resource::<SignalingState>()
             .init_resource::<FirestoreShared>()
             .add_plugins(WebRtcPlugin)
             .add_systems(
                 PreUpdate,
-                // Receiving: log incoming data from WebRTC (runs right after pump_js_callbacks to process incoming messages early)
-                systems::log_incoming_data::<
+                systems::handle_webrtc_events::<
                     PlayerData,
                     PlayerInputData,
                     Instantiations,
@@ -105,7 +91,6 @@ where
             .add_systems(
                 Update,
                 (
-                    // Sending: handle transport send requests (runs after encode_outgoing in Core)
                     systems::handle_send_requests::<
                         PlayerData,
                         PlayerInputData,
@@ -126,16 +111,6 @@ where
                         PlayerInputData,
                         Instantiations,
                     >,
-                    systems::log_connection_open::<
-                        PlayerData,
-                        PlayerInputData,
-                        Instantiations,
-                    >,
-                    systems::handle_connection_closed::<
-                        PlayerData,
-                        PlayerInputData,
-                        Instantiations,
-                    >,
                     systems::on_lobby_exit_cleanup::<
                         PlayerData,
                         PlayerInputData,
@@ -144,7 +119,6 @@ where
                 )
                     .in_set(EasyP2PSystemSet::Transport),
             )
-            .add_systems(Update, log_local_sdp_ready)
             .add_systems(Update, firestore_pump);
     }
 }
@@ -253,50 +227,11 @@ pub(crate) fn now_ms() -> f64 {
     js_sys::Date::now()
 }
 
-fn log_local_sdp_ready(
-    mut r: MessageReader<LocalSdpReady>,
-    mut commands: Commands,
-    mut sig: ResMut<SignalingState>,
-    cfg: Res<FirestoreConfig>,
-) {
-    for LocalSdpReady { id, sdp } in r.read() {
-        commands.spawn(NetConnection { id: *id });
-        if !sig.is_host && sig.offer_conn.is_none() {
-            sig.offer_conn = Some(*id);
-        }
-        if !sig.room_code.is_empty() && !sig.is_host {
-            if let Some(cid) = sig.client_id.clone() {
-                let cfg = cfg.clone();
-                let room = sig.room_code.clone();
-                let sdp_text = sdp.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    ensure_room_exists(&cfg, &room).await;
-                    write_offer(&cfg, &room, &cid, &sdp_text).await;
-                });
-            }
-        }
-        if sig.is_host {
-            if let Some(client_id) = sig.host_connection_to_client_id.get(&id.0).cloned() {
-                let cfg = cfg.clone();
-                let room = sig.room_code.clone();
-                let sdp_text = sdp.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    ensure_room_exists(&cfg, &room).await;
-                    write_answer(&cfg, &room, &client_id, &sdp_text).await;
-                });
-            }
-        }
-    }
-}
-
 fn firestore_pump(
     mut sig: ResMut<SignalingState>,
     cfg: Res<FirestoreConfig>,
-    mut w_answer: MessageWriter<CreateAnswer>,
-    mut w_set: MessageWriter<SetRemote>,
-    mut id_alloc: ResMut<ConnectionIdAllocator>,
+    mut webrtc: WebRtc,
     mut shared: ResMut<FirestoreShared>,
-    mut w_offer: MessageWriter<CreateOffer>,
 ) {
     if sig.room_code.is_empty() {
         return;
@@ -334,15 +269,14 @@ fn firestore_pump(
             }
         }
         if !doc.is_null() {
-            apply_firestore_doc(&doc, &mut sig, &mut w_answer, &mut w_set, &mut id_alloc);
+            apply_firestore_doc(&doc, &mut sig, &mut webrtc);
             // If we are a client waiting to join and the room exists, create offer only.
             // Delay emitting OnLobbyJoined/OnLobbyEntered until data channel opens.
             if sig.client_join_pending && !sig.is_host {
                 sig.client_join_pending = false;
                 sig.client_emitted_join = false;
-                let id = id_alloc.allocate();
+                let id = webrtc.create_offer();
                 sig.offer_conn = Some(id);
-                w_offer.write(CreateOffer { id });
             }
         }
     }
@@ -368,9 +302,7 @@ fn firestore_pump(
 fn apply_firestore_doc(
     doc: &serde_json::Value,
     sig: &mut SignalingState,
-    w_answer: &mut MessageWriter<CreateAnswer>,
-    w_set: &mut MessageWriter<SetRemote>,
-    id_alloc: &mut ResMut<ConnectionIdAllocator>,
+    webrtc: &mut WebRtc,
 ) {
     let fields = doc.get("fields");
     if let Some(fields) = fields {
@@ -386,11 +318,7 @@ fn apply_firestore_doc(
                             continue;
                         }
                         if let Some(sdp) = val.get("stringValue").and_then(|v| v.as_str()) {
-                            let id = id_alloc.allocate();
-                            w_answer.write(CreateAnswer {
-                                id,
-                                remote_sdp: sdp.to_string(),
-                            });
+                            let id = webrtc.create_answer(sdp.to_string());
                             sig.answered_clients.insert(cid.clone());
                             sig.host_connection_to_client_id.insert(id.0, cid.clone());
                         }
@@ -406,12 +334,12 @@ fn apply_firestore_doc(
                 {
                     if let Some(val) = answers.get(&cid) {
                         if let Some(sdp) = val.get("stringValue").and_then(|v| v.as_str()) {
-                            let target = sig.offer_conn.unwrap_or_else(|| id_alloc.allocate());
-                            w_set.write(SetRemote {
-                                id: target,
-                                sdp: sdp.to_string(),
-                            });
-                            sig.client_answer_applied = true;
+                            if let Some(target) = sig.offer_conn {
+                                webrtc.set_remote_answer(target, sdp.to_string());
+                                sig.client_answer_applied = true;
+                            } else {
+                                warn!("Received Firestore answer but no pending offer connection exists");
+                            }
                         }
                     }
                 }

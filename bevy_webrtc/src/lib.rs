@@ -1,5 +1,6 @@
 //! Minimal browser WebRTC (WASM) using Bevy events and web-sys.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use js_sys::Uint8Array;
 use std::cell::{Cell, RefCell};
@@ -18,58 +19,125 @@ use web_sys::RtcPeerConnection;
 use web_sys::RtcSdpType;
 use web_sys::RtcSessionDescriptionInit;
 
+pub mod prelude;
+
 // Messages exposed to Bevy application code (now include ConnectionId)
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
 pub struct ConnectionId(pub u64);
 
+#[derive(Resource, Default)]
+struct ConnectionIdSeq(u64);
+
+impl ConnectionIdSeq {
+    fn next(&mut self) -> ConnectionId {
+        let id = self.0;
+        self.0 = self.0.wrapping_add(1);
+        ConnectionId(id)
+    }
+}
+
 #[derive(Message)]
-pub struct CreateOffer {
+pub(crate) struct CreateOffer {
     pub id: ConnectionId,
 }
 
 #[derive(Message)]
-pub struct CreateAnswer {
+pub(crate) struct CreateAnswer {
     pub id: ConnectionId,
     pub remote_sdp: String,
 }
 
 #[derive(Message)]
-pub struct SetRemote {
+pub(crate) struct SetRemote {
     pub id: ConnectionId, // Answer SDP for offerer side
     pub sdp: String,
 }
 
 #[derive(Message)]
-pub struct SendData {
+pub(crate) struct SendData {
     pub id: ConnectionId,
     pub text: String,
 }
 
 #[derive(Message)]
-pub struct LocalSdpReady {
-    pub id: ConnectionId,
-    pub sdp: String,
-}
-
-#[derive(Message)]
-pub struct IncomingData {
-    pub id: ConnectionId,
-    pub text: String,
-}
-
-#[derive(Message)]
-pub struct ConnectionOpen(pub ConnectionId);
-
-#[derive(Message)]
-pub struct CloseConnection {
+pub(crate) struct CloseConnection {
     pub id: ConnectionId,
 }
 
 #[derive(Message)]
-pub struct CloseAllConnections;
+pub(crate) struct CloseAllConnections;
 
-#[derive(Message)]
-pub struct ConnectionClosed(pub ConnectionId);
+#[derive(Debug, Clone)]
+pub enum WebRtcEvent {
+    LocalSdp { id: ConnectionId, sdp: String },
+    IncomingData { id: ConnectionId, text: String },
+    ConnectionOpen(ConnectionId),
+    ConnectionClosed(ConnectionId),
+}
+
+#[derive(Message, Clone)]
+struct WebRtcEventMessage(WebRtcEvent);
+
+#[derive(SystemParam)]
+pub struct WebRtc<'w, 's> {
+    next_id: ResMut<'w, ConnectionIdSeq>,
+    create_offer: MessageWriter<'w, CreateOffer>,
+    create_answer: MessageWriter<'w, CreateAnswer>,
+    set_remote: MessageWriter<'w, SetRemote>,
+    send_data: MessageWriter<'w, SendData>,
+    close_connection: MessageWriter<'w, CloseConnection>,
+    close_all: MessageWriter<'w, CloseAllConnections>,
+    event_reader: MessageReader<'w, 's, WebRtcEventMessage>,
+}
+
+impl<'w, 's> WebRtc<'w, 's> {
+    pub fn create_offer(&mut self) -> ConnectionId {
+        let id = self.next_id.next();
+        self.create_offer.write(CreateOffer { id });
+        id
+    }
+
+    pub fn create_answer(&mut self, remote_offer_sdp: impl Into<String>) -> ConnectionId {
+        let id = self.next_id.next();
+        self.create_answer.write(CreateAnswer {
+            id,
+            remote_sdp: remote_offer_sdp.into(),
+        });
+        id
+    }
+
+    pub fn set_remote_answer(&mut self, id: ConnectionId, answer_sdp: impl Into<String>) {
+        self.set_remote.write(SetRemote {
+            id,
+            sdp: answer_sdp.into(),
+        });
+    }
+
+    pub fn send_text(&mut self, id: ConnectionId, text: impl Into<String>) {
+        self.send_data.write(SendData {
+            id,
+            text: text.into(),
+        });
+    }
+
+    pub fn close(&mut self, id: ConnectionId) {
+        self.close_connection.write(CloseConnection { id });
+    }
+
+    pub fn close_all(&mut self) {
+        self.close_all.write(CloseAllConnections);
+    }
+
+    pub fn drain_events(&mut self) -> Vec<WebRtcEvent> {
+        let events: Vec<_> = self
+            .event_reader
+            .read()
+            .map(|WebRtcEventMessage(event)| event.clone())
+            .collect();
+        self.event_reader.clear();
+        events
+    }
+}
 
 // Per-connection state, stored inside the NonSend resource map
 struct ConnState {
@@ -112,23 +180,18 @@ pub struct WebRtcPlugin;
 
 impl Plugin for WebRtcPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_non_send_resource(RtcContext::default())
+        app.insert_resource(ConnectionIdSeq::default())
+            .insert_non_send_resource(RtcContext::default())
             .add_message::<CreateOffer>()
             .add_message::<CreateAnswer>()
             .add_message::<SetRemote>()
             .add_message::<SendData>()
-            .add_message::<LocalSdpReady>()
-            .add_message::<IncomingData>()
-            .add_message::<ConnectionOpen>()
+            .add_message::<WebRtcEventMessage>()
             .add_message::<CloseConnection>()
             .add_message::<CloseAllConnections>()
-            .add_message::<ConnectionClosed>()
+            .add_systems(PreUpdate, pump_js_callbacks)
             .add_systems(
-                PreUpdate,
-                pump_js_callbacks,
-            )
-            .add_systems(
-                Update,
+                PostUpdate,
                 (
                     handle_create_offer,
                     handle_create_answer,
@@ -217,9 +280,7 @@ fn hook_peer_connection(pending_closed: Rc<Cell<bool>>, pc: &RtcPeerConnection) 
         if let Ok(state_val) = js_sys::Reflect::get(&target, &JsValue::from_str("connectionState"))
         {
             if let Some(state) = state_val.as_string() {
-                info!("pc.connectionState={}", state);
                 if state == "disconnected" || state == "failed" || state == "closed" {
-                    info!("pc.connectionState indicates closed/disconnected/failed -> mark closed");
                     flag_conn.set(true);
                 }
             }
@@ -293,17 +354,15 @@ fn hook_data_channel(
 
 fn handle_create_offer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<CreateOffer>) {
     for CreateOffer { id } in ev.read() {
+        let id = *id;
         // Fresh per-connection state
-        let state = ctx
-            .conns
-            .entry(ConnectionId(id.0))
-            .or_insert_with(ConnState::new);
+        let state = ctx.conns.entry(id).or_insert_with(ConnState::new);
 
         // Fresh peer connection
         let pc = match make_peer_connection() {
             Ok(pc) => pc,
             Err(err) => {
-                info!("Failed to create RTCPeerConnection: {:?}", err);
+                error!("Failed to create RTCPeerConnection: {:?}", err);
                 continue;
             }
         };
@@ -326,7 +385,6 @@ fn handle_create_offer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<Cr
         // Prepare to emit local SDP after ICE completes
         let sdp_buf = state.pending_local_sdp.clone();
         let pc_clone = pc.clone();
-        let this_id = id;
 
         spawn_local(async move {
             // Create offer
@@ -334,7 +392,7 @@ fn handle_create_offer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<Cr
             let offer_val = match wasm_bindgen_futures::JsFuture::from(offer_promise).await {
                 Ok(v) => v,
                 Err(e) => {
-                    info!("createOffer failed: {:?}", e);
+                    error!("createOffer failed: {:?}", e);
                     return;
                 }
             };
@@ -352,7 +410,6 @@ fn handle_create_offer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<Cr
                 sdp_buf.borrow_mut().push(local.sdp());
             }
             // sdp will be pumped with id later
-            let _ = this_id; // silence unused warning in some builds
         });
 
         state.dc_slot.borrow_mut().replace(dc);
@@ -363,16 +420,14 @@ fn handle_create_offer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<Cr
 
 fn handle_create_answer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<CreateAnswer>) {
     for CreateAnswer { id, remote_sdp } in ev.read() {
+        let id = *id;
         // Fresh per-connection state
-        let state = ctx
-            .conns
-            .entry(ConnectionId(id.0))
-            .or_insert_with(ConnState::new);
+        let state = ctx.conns.entry(id).or_insert_with(ConnState::new);
 
         let pc = match make_peer_connection() {
             Ok(pc) => pc,
             Err(err) => {
-                info!("Failed to create RTCPeerConnection: {:?}", err);
+                error!("Failed to create RTCPeerConnection: {:?}", err);
                 continue;
             }
         };
@@ -407,28 +462,30 @@ fn handle_create_answer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<C
         let sdp_text = remote_sdp.clone();
         let sdp_buf = state.pending_local_sdp.clone();
         let pc_clone = pc.clone();
-        let _this_id = id;
         spawn_local(async move {
             // Apply remote offer
             let remote = RtcSessionDescriptionInit::new(RtcSdpType::Offer);
             remote.set_sdp(&sdp_text);
-            if wasm_bindgen_futures::JsFuture::from(pc_clone.set_remote_description(&remote))
-                .await
-                .is_err()
+            if let Err(err) =
+                wasm_bindgen_futures::JsFuture::from(pc_clone.set_remote_description(&remote)).await
             {
+                error!("set_remote_description failed: {:?}", err);
                 return;
             }
             // Create and set local answer
             let answer_val =
                 match wasm_bindgen_futures::JsFuture::from(pc_clone.create_answer()).await {
                     Ok(v) => v,
-                    Err(_) => return,
+                    Err(err) => {
+                        error!("create_answer failed: {:?}", err);
+                        return;
+                    }
                 };
             let answer: RtcSessionDescriptionInit = answer_val.unchecked_into();
-            if wasm_bindgen_futures::JsFuture::from(pc_clone.set_local_description(&answer))
-                .await
-                .is_err()
+            if let Err(err) =
+                wasm_bindgen_futures::JsFuture::from(pc_clone.set_local_description(&answer)).await
             {
+                error!("set_local_description failed: {:?}", err);
                 return;
             }
             await_ice_complete(pc_clone.clone()).await;
@@ -444,6 +501,7 @@ fn handle_create_answer(mut ctx: NonSendMut<RtcContext>, mut ev: MessageReader<C
 
 fn handle_set_remote(ctx: NonSend<RtcContext>, mut ev: MessageReader<SetRemote>) {
     for SetRemote { id, sdp } in ev.read() {
+        let id = *id;
         if let Some(state) = ctx.conns.get(&id) {
             if let Some(pc) = state.pc_slot.borrow().clone() {
                 let pc_clone = pc.clone();
@@ -464,6 +522,7 @@ fn handle_set_remote(ctx: NonSend<RtcContext>, mut ev: MessageReader<SetRemote>)
 
 fn handle_send_data(ctx: NonSend<RtcContext>, mut ev: MessageReader<SendData>) {
     for SendData { id, text } in ev.read() {
+        let id = *id;
         if let Some(state) = ctx.conns.get(&id) {
             if let Some(dc) = state.dc_slot.borrow().as_ref() {
                 if dc.ready_state() == RtcDataChannelState::Open {
@@ -477,30 +536,48 @@ fn handle_send_data(ctx: NonSend<RtcContext>, mut ev: MessageReader<SendData>) {
 
 // Periodically pump events produced by JS callbacks and async tasks back into Bevy
 fn pump_js_callbacks(
-    ctx: NonSendMut<RtcContext>,
-    mut sdp_writer: MessageWriter<LocalSdpReady>,
-    mut msg_writer: MessageWriter<IncomingData>,
-    mut open_writer: MessageWriter<ConnectionOpen>,
-    mut closed_writer: MessageWriter<ConnectionClosed>,
+    mut ctx: NonSendMut<RtcContext>,
+    mut event_writer: MessageWriter<WebRtcEventMessage>,
 ) {
     // Iterate over connections and flush their pending buffers with ids
     let ids: Vec<ConnectionId> = ctx.conns.keys().cloned().collect();
+    let mut closed_ids = Vec::new();
     for id in ids {
+        let mut should_remove = false;
         if let Some(state) = ctx.conns.get(&id) {
             if state.pending_open.replace(false) {
-                open_writer.write(ConnectionOpen(id));
+                event_writer.write(WebRtcEventMessage(WebRtcEvent::ConnectionOpen(id)));
             }
             if state.pending_closed.replace(false) {
-                closed_writer.write(ConnectionClosed(id));
+                event_writer.write(WebRtcEventMessage(WebRtcEvent::ConnectionClosed(id)));
+                should_remove = true;
             }
             let mut msgs = state.pending_messages.borrow_mut();
             for s in msgs.drain(..) {
-                msg_writer.write(IncomingData { id, text: s });
+                event_writer.write(WebRtcEventMessage(WebRtcEvent::IncomingData {
+                    id,
+                    text: s,
+                }));
             }
             drop(msgs);
             let mut sdp = state.pending_local_sdp.borrow_mut();
             for s in sdp.drain(..) {
-                sdp_writer.write(LocalSdpReady { id, sdp: s });
+                event_writer.write(WebRtcEventMessage(WebRtcEvent::LocalSdp { id, sdp: s }));
+            }
+            drop(sdp);
+        }
+        if should_remove {
+            closed_ids.push(id);
+        }
+    }
+
+    for id in closed_ids {
+        if let Some(state) = ctx.conns.remove(&id) {
+            if let Some(dc) = state.dc_slot.borrow().as_ref() {
+                let _ = dc.close();
+            }
+            if let Some(pc) = state.pc_slot.borrow().as_ref() {
+                pc.close();
             }
         }
     }
@@ -509,8 +586,10 @@ fn pump_js_callbacks(
 fn handle_close_connection(
     mut ctx: NonSendMut<RtcContext>,
     mut ev: MessageReader<CloseConnection>,
+    mut event_writer: MessageWriter<WebRtcEventMessage>,
 ) {
     for CloseConnection { id } in ev.read() {
+        let id = *id;
         if let Some(state) = ctx.conns.remove(&id) {
             if let Some(dc) = state.dc_slot.borrow().as_ref() {
                 let _ = dc.close();
@@ -518,6 +597,7 @@ fn handle_close_connection(
             if let Some(pc) = state.pc_slot.borrow().as_ref() {
                 pc.close();
             }
+            event_writer.write(WebRtcEventMessage(WebRtcEvent::ConnectionClosed(id)));
         }
     }
     ev.clear();

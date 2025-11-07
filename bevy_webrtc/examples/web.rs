@@ -1,5 +1,6 @@
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::prelude::*;
+use bevy::input::{keyboard::Key, ButtonInput};
 use bevy::prelude::*;
 use bevy::time::common_conditions::on_timer;
 use bevy_webrtc::prelude::*;
@@ -87,8 +88,20 @@ fn setup_ui(mut commands: Commands) {
     commands.spawn(Camera2d);
 }
 
+fn just_pressed_char(input: &ButtonInput<Key>, ch: char) -> bool {
+    let lower = ch.to_ascii_lowercase();
+    let upper = ch.to_ascii_uppercase();
+    let lower_key = Key::Character(lower.to_string().into());
+    if lower == upper {
+        input.just_pressed(lower_key)
+    } else {
+        let upper_key = Key::Character(upper.to_string().into());
+        input.just_pressed(lower_key) || input.just_pressed(upper_key)
+    }
+}
+
 fn handle_keyboard_input(
-    keyboard_input: Res<ButtonInput<KeyCode>>,
+    keyboard_input: Res<ButtonInput<Key>>,
     mut webrtc: WebRtc,
     state: Res<State<ConnectionState>>,
     mut next_state: ResMut<NextState<ConnectionState>>,
@@ -99,11 +112,11 @@ fn handle_keyboard_input(
 
     match state.get() {
         ConnectionState::NoConnection => {
-            if keyboard_input.just_pressed(KeyCode::KeyC) {
+            if just_pressed_char(&keyboard_input, 'c') {
                 // Create offer
                 let id = webrtc.create_offer();
                 next_state.set(ConnectionState::Negotiating(id));
-            } else if keyboard_input.just_pressed(KeyCode::KeyJ) {
+            } else if just_pressed_char(&keyboard_input, 'j') {
                 // Join - prompt for offer SDP
                 if let Some(offer_sdp_encoded) = prompt("Enter the offer SDP (base64):") {
                     match decode_sdp_from_base64(&offer_sdp_encoded) {
@@ -121,7 +134,7 @@ fn handle_keyboard_input(
             }
         }
         ConnectionState::Negotiating(id) => {
-            if keyboard_input.just_pressed(KeyCode::KeyR) {
+            if just_pressed_char(&keyboard_input, 'r') {
                 if let Some(answer_sdp_encoded) = prompt("Enter the answer SDP (base64):") {
                     match decode_sdp_from_base64(&answer_sdp_encoded) {
                         Some(answer_sdp) => {
@@ -134,12 +147,12 @@ fn handle_keyboard_input(
                         }
                     }
                 }
-            } else if keyboard_input.just_pressed(KeyCode::KeyE) {
+            } else if just_pressed_char(&keyboard_input, 'e') {
                 webrtc.close(*id);
             }
         }
         ConnectionState::Connected(id) => {
-            if keyboard_input.just_pressed(KeyCode::KeyE) {
+            if just_pressed_char(&keyboard_input, 'e') {
                 webrtc.close(*id);
             }
         }

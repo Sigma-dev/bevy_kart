@@ -82,40 +82,20 @@ where
             .add_plugins(WebRtcPlugin)
             .add_systems(
                 PreUpdate,
-                systems::handle_webrtc_events::<
-                    PlayerData,
-                    PlayerInputData,
-                    Instantiations,
-                >,
+                systems::handle_webrtc_events::<PlayerData, PlayerInputData, Instantiations>,
             )
             .add_systems(
                 Update,
                 (
-                    systems::handle_send_requests::<
-                        PlayerData,
-                        PlayerInputData,
-                        Instantiations,
-                    >,
+                    systems::handle_send_requests::<PlayerData, PlayerInputData, Instantiations>,
                     systems::handle_create_join_requests::<
                         PlayerData,
                         PlayerInputData,
                         Instantiations,
                     >,
-                    systems::handle_exit_requests::<
-                        PlayerData,
-                        PlayerInputData,
-                        Instantiations,
-                    >,
-                    systems::handle_kick_requests::<
-                        PlayerData,
-                        PlayerInputData,
-                        Instantiations,
-                    >,
-                    systems::on_lobby_exit_cleanup::<
-                        PlayerData,
-                        PlayerInputData,
-                        Instantiations,
-                    >,
+                    systems::handle_exit_requests::<PlayerData, PlayerInputData, Instantiations>,
+                    systems::handle_kick_requests::<PlayerData, PlayerInputData, Instantiations>,
+                    systems::on_lobby_exit_cleanup::<PlayerData, PlayerInputData, Instantiations>,
                 )
                     .in_set(EasyP2PSystemSet::Transport),
             )
@@ -299,11 +279,7 @@ fn firestore_pump(
     });
 }
 
-fn apply_firestore_doc(
-    doc: &serde_json::Value,
-    sig: &mut SignalingState,
-    webrtc: &mut WebRtc,
-) {
+fn apply_firestore_doc(doc: &serde_json::Value, sig: &mut SignalingState, webrtc: &mut WebRtc) {
     let fields = doc.get("fields");
     if let Some(fields) = fields {
         if sig.is_host {
@@ -338,7 +314,9 @@ fn apply_firestore_doc(
                                 webrtc.set_remote_answer(target, sdp.to_string());
                                 sig.client_answer_applied = true;
                             } else {
-                                warn!("Received Firestore answer but no pending offer connection exists");
+                                warn!(
+                                    "Received Firestore answer but no pending offer connection exists"
+                                );
                             }
                         }
                     }

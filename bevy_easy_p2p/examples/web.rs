@@ -1,8 +1,8 @@
 use bevy::input::{ButtonInput, keyboard::Key};
 use bevy::prelude::*;
+use bevy_easy_p2p::easy_firestore_p2p::{FirestoreP2PPlugin, FirestoreWebRtcTransport};
 use bevy_easy_p2p::prelude::*;
 use bevy_easy_p2p::{NetworkedEventsExt, NetworkedStatesExt};
-use bevy_firestore_p2p::{FirestoreP2PPlugin, FirestoreWebRtcTransport};
 use serde::{Deserialize, Serialize};
 use web_sys::window;
 
@@ -399,11 +399,18 @@ fn update_ui(
                 height: Val::Percent(100.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                ..default()
+                ..Default::default()
             },
             UIRoot,
         ))
         .with_children(|parent| {
-            parent.spawn(Text(text_content));
+            parent.spawn((
+                Text::new(text_content),
+                TextFont {
+                    font_size: 18.0,
+                    ..Default::default()
+                },
+            ));
         });
 }
+

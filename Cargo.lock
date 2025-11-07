@@ -746,9 +746,14 @@ name = "bevy_easy_p2p"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_webrtc",
  "js-sys",
  "serde",
+ "serde-wasm-bindgen",
  "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -799,24 +804,6 @@ checksum = "7449e5903594a00f007732ba232af0c527ad4e6e3d29bc3e195ec78dbd20c8b2"
 dependencies = [
  "bevy_macro_utils",
  "encase_derive_impl",
-]
-
-[[package]]
-name = "bevy_firestore_p2p"
-version = "0.1.0"
-dependencies = [
- "base-x",
- "bevy",
- "bevy_easy_p2p",
- "bevy_webrtc",
- "js-sys",
- "miniz_oxide 0.7.4",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
@@ -1045,7 +1032,6 @@ dependencies = [
  "base-x",
  "bevy",
  "bevy_easy_p2p",
- "bevy_firestore_p2p",
  "bevy_text_input",
  "bevy_timer",
  "bevy_webrtc",

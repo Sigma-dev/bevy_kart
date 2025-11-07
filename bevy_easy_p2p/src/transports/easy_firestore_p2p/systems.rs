@@ -1,10 +1,11 @@
 use bevy::prelude::*;
-use bevy_easy_p2p::{ClientId, EasyP2PTransportIo, ExitReason};
 use bevy_webrtc::{ConnectionId, WebRtc, WebRtcEvent};
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{
-    FIRESTORE_INBOX, FirestoreConfig, FirestoreShared, NetConnection, SignalingState,
+use crate::{ClientId, EasyP2PTransportIo, ExitReason};
+
+use super::{
+    FirestoreConfig, FirestoreShared, NetConnection, SignalingState, FIRESTORE_INBOX,
     ensure_room_exists, gen_client_id_num, generate_room_code, write_answer, write_offer,
 };
 
@@ -284,3 +285,5 @@ fn only_connection_ids(q: &Query<(Entity, &NetConnection)>) -> Option<Connection
         None
     }
 }
+
+

@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_easy_p2p::{ClientId, EasyP2PSystemSet, P2PTransport};
+use crate::{ClientId, EasyP2PSystemSet, P2PTransport};
 use bevy_webrtc::{ConnectionId, WebRtc, WebRtcPlugin};
 use serde_json::json;
 use std::cell::RefCell;
@@ -345,3 +345,4 @@ impl P2PTransport for FirestoreWebRtcTransport {
 }
 
 // Roster broadcasting is now handled in bevy_easy_p2p; transport only emits OnTransportRosterChanged
+

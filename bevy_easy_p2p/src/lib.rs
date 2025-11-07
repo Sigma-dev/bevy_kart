@@ -6,6 +6,7 @@ mod api;
 mod state;
 mod systems;
 mod updates;
+mod transports;
 
 pub mod networked_transform;
 pub mod prelude;
@@ -16,6 +17,7 @@ pub use api::{
 };
 pub use state::*;
 pub use updates::EasyP2PUpdate;
+pub use transports::easy_firestore_p2p;
 
 pub type ClientId = u64;
 

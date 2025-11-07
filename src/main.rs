@@ -51,9 +51,12 @@ pub struct AppPlayerInputData {
 
 #[derive(Resource)]
 struct AssetHandles {
+    track_texture: Handle<Image>,
+    traffic_light_texture: Handle<Image>,
     karts_texture: Handle<Image>,
     wheel_texture: Handle<Image>,
     crate_texture: Handle<Image>,
+    items_texture: Handle<Image>,
     rocket_texture: Handle<Image>,
 }
 
@@ -116,9 +119,12 @@ fn main() {
             times: HashMap::new(),
         })
         .insert_resource(AssetHandles {
+            track_texture: Handle::default(),
+            traffic_light_texture: Handle::default(),
             karts_texture: Handle::default(),
             wheel_texture: Handle::default(),
             crate_texture: Handle::default(),
+            items_texture: Handle::default(),
             rocket_texture: Handle::default(),
         })
         .add_systems(Update, emit_easy_updates.in_set(EasyP2PSystemSet::Emit))
@@ -229,10 +235,13 @@ fn setup(
         height: 144.,
     };
     commands.spawn((Camera2d, Projection::Orthographic(projection)));
+    handles.track_texture = asset_server.load("sprites/track.png");
+    handles.traffic_light_texture = asset_server.load("sprites/traffic_light.png");
     handles.karts_texture = asset_server.load("sprites/karts.png");
     handles.wheel_texture = asset_server.load("sprites/wheel.png");
     handles.crate_texture = asset_server.load("sprites/crate.png");
     handles.rocket_texture = asset_server.load("sprites/rocket.png");
+    handles.items_texture = asset_server.load("sprites/items.png");
 }
 
 fn cursor_positon_log(

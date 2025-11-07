@@ -6,7 +6,7 @@ use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AppInstantiations, AppState, FinishTimes, KartEasyP2P, SpriteLayers,
+    AppInstantiations, AppState, AssetHandles, FinishTimes, KartEasyP2P, SpriteLayers,
     car_controller_2d::CarControllerDisabled,
     items::{ItemPickedUp, spawn_spawner},
     kart::LapsCounter,
@@ -93,7 +93,7 @@ pub(crate) fn spawn_track(
     time: Res<Time>,
     mut commands: Commands,
     mut audio_manager: AudioManager,
-    asset_server: Res<AssetServer>,
+    asset_handles: Res<AssetHandles>,
     mut easy: KartEasyP2P,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
@@ -102,7 +102,7 @@ pub(crate) fn spawn_track(
     finish_times.times.clear();
     commands.spawn((
         DespawnOnExit(AppState::Game),
-        Sprite::from_image(asset_server.load("sprites/track.png")),
+        Sprite::from_image(asset_handles.track_texture.clone()),
     ));
     let red_material = materials.add(ColorMaterial::from(Color::srgb(0.68, 0.13, 0.20)));
     let white_material = materials.add(ColorMaterial::from(Color::srgb(1., 1., 1.)));
@@ -198,7 +198,7 @@ pub(crate) fn spawn_track(
         white_material.clone(),
         inner_ring,
     );
-    let texture = asset_server.load("sprites/start_light.png");
+    let texture = asset_handles.traffic_light_texture.clone();
     let layout = TextureAtlasLayout::from_grid(UVec2::new(15, 7), 5, 1, None, None);
     let texture_atlas_layout = texture_atlas_layouts.add(layout);
     commands.spawn((
@@ -216,7 +216,7 @@ pub(crate) fn spawn_track(
     audio_manager.play_sound(PlayAudio2D::new_once("sounds/countdown.wav"));
     commands.insert_resource(RaceStarted(time.elapsed_secs()));
 
-    let texture_handle = asset_server.load("sprites/items.png");
+    let texture_handle = asset_handles.items_texture.clone();
     let texture_atlas = TextureAtlasLayout::from_grid(UVec2::splat(8), 2, 1, None, None);
     let texture_atlas_handle = texture_atlas_layouts.add(texture_atlas);
 

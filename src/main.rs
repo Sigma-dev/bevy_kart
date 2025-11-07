@@ -160,10 +160,10 @@ fn extract_query_param(target: &str) -> Option<String> {
 
 fn send_inputs(mut easy: KartEasyP2P, keyboard: Res<ButtonInput<KeyCode>>) {
     easy.send_inputs(AppPlayerInputData {
-        forward: keyboard.pressed(KeyCode::KeyW),
-        backward: keyboard.pressed(KeyCode::KeyS),
-        left: keyboard.pressed(KeyCode::KeyA),
-        right: keyboard.pressed(KeyCode::KeyD),
+        forward: keyboard.pressed(KeyCode::KeyW) || keyboard.pressed(KeyCode::ArrowUp),
+        backward: keyboard.pressed(KeyCode::KeyS) || keyboard.pressed(KeyCode::ArrowDown),
+        left: keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::ArrowLeft),
+        right: keyboard.pressed(KeyCode::KeyD) || keyboard.pressed(KeyCode::ArrowRight),
         using_item: keyboard.pressed(KeyCode::Space),
     });
 }

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::PlayAudio;
+use crate::{PlayAudio, SpatialSettings};
 
 #[derive(Clone)]
 pub struct PlayAudio3D {
@@ -52,9 +52,7 @@ impl PlayAudio for PlayAudio3D {
     fn path(&self) -> String {
         self.path.clone()
     }
-    fn get_spatial(&self) -> Option<(Transform, Option<Entity>)> {
-        self.spatial_settings
-            .clone()
-            .map(|(position, maybe_follow)| (Transform::from_translation(position), maybe_follow))
+    fn get_spatial(&self) -> Option<SpatialSettings> {
+        None
     }
 }

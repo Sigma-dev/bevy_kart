@@ -1,3 +1,4 @@
+use audio_manager::prelude::*;
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy_easy_p2p::{
@@ -250,6 +251,7 @@ fn rocket_effect(In(transform): In<Transform>, mut easy: KartEasyP2P) {
 
 pub(crate) fn spawn_rocket(
     In((transform, networked_entity)): In<(Transform, NetworkedEntity)>,
+    mut audio_manager: AudioManager,
     easy: KartEasyP2P,
     mut commands: Commands,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
@@ -270,6 +272,10 @@ pub(crate) fn spawn_rocket(
         networked_entity,
         NetworkedTransform,
     ));
+    audio_manager.play_sound(
+        PlayAudio2D::new_once("sounds/rocket.wav")
+            .with_spatial(SpatialSettings2D::Entity(rocket.id())),
+    );
     if easy.is_host() {
         rocket
             .insert((Collider::rectangle(2., 2.), Sensor, CollisionEventsEnabled))
@@ -354,8 +360,10 @@ fn handle_rocket_explosion(
     mut exploded_r: MessageReader<RocketExploded>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut audio_manager: AudioManager,
 ) {
     for exploded_data in exploded_r.read() {
+        audio_manager.play_sound(PlayAudio2D::new_once("sounds/explosion.wav"));
         commands
             .spawn((
                 Transform::from_xyz(

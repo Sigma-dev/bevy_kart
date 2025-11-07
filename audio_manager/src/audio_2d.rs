@@ -1,13 +1,19 @@
 use bevy::prelude::*;
 
-use crate::PlayAudio;
+use crate::{PlayAudio, SpatialSettings};
+
+#[derive(Clone)]
+pub enum SpatialSettings2D {
+    Position(Vec2),
+    Entity(Entity),
+}
 
 #[derive(Clone)]
 pub struct PlayAudio2D {
     pub path: String,
     pub volume_mult: f32,
     pub one_shot: bool,
-    pub spatial_settings: Option<(Vec2, Option<Entity>)>,
+    pub spatial_settings: Option<SpatialSettings2D>,
 }
 
 impl PlayAudio2D {
@@ -34,6 +40,11 @@ impl PlayAudio2D {
         new.volume_mult = volume_mult;
         new
     }
+    pub fn with_spatial(&self, spatial_settings: SpatialSettings2D) -> PlayAudio2D {
+        let mut new = self.clone();
+        new.spatial_settings = Some(spatial_settings);
+        new
+    }
 }
 
 impl PlayAudio for PlayAudio2D {
@@ -46,12 +57,14 @@ impl PlayAudio for PlayAudio2D {
     fn path(&self) -> String {
         self.path.clone()
     }
-    fn get_spatial(&self) -> Option<(Transform, Option<Entity>)> {
-        self.spatial_settings.map(|(position, maybe_follow)| {
-            (
-                Transform::from_translation(position.extend(0.)),
-                maybe_follow,
-            )
-        })
+    fn get_spatial(&self) -> Option<SpatialSettings> {
+        self.spatial_settings
+            .clone()
+            .map(|spatial_settings| match spatial_settings {
+                SpatialSettings2D::Position(position) => {
+                    SpatialSettings::Position(Transform::from_translation(position.extend(0.)))
+                }
+                SpatialSettings2D::Entity(entity) => SpatialSettings::Entity(entity),
+            })
     }
 }

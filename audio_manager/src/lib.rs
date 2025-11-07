@@ -6,18 +6,17 @@ mod audio_2d;
 mod audio_3d;
 pub mod prelude;
 
+pub enum SpatialSettings {
+    Position(Transform),
+    Entity(Entity),
+}
+
 pub trait PlayAudio {
     fn is_one_shot(&self) -> bool;
     fn volume_mult(&self) -> f32;
     fn path(&self) -> String;
-    fn get_spatial(&self) -> Option<(Transform, Option<Entity>)>;
+    fn get_spatial(&self) -> Option<SpatialSettings>;
 }
-
-#[derive(Component)]
-pub struct AudioFollower {
-    pub followed: Entity,
-}
-
 #[derive(Component)]
 pub struct TogglableAudio {
     pub tag: String,
@@ -73,16 +72,22 @@ impl<'w, 's> AudioManager<'w, 's> {
             ..default()
         };
         let source = self.get_audio_handle(&sound.path());
-        if let Some((transform, maybe_follow)) = &sound.get_spatial() {
-            let mut e = self.commands.spawn((
-                AudioPlayer::new(source),
-                playback_settings.with_spatial(true),
-                *transform,
-            ));
-            if let Some(followed) = maybe_follow {
-                e.insert(AudioFollower {
-                    followed: *followed,
-                });
+        if let Some(spatial_settings) = &sound.get_spatial() {
+            match spatial_settings {
+                SpatialSettings::Position(transform) => {
+                    self.commands.spawn((
+                        AudioPlayer::new(source),
+                        playback_settings.with_spatial(true),
+                        Transform::from_translation(transform.translation),
+                    ));
+                }
+                SpatialSettings::Entity(entity) => {
+                    self.commands.spawn((
+                        AudioPlayer::new(source),
+                        playback_settings.with_spatial(true),
+                        ChildOf(*entity),
+                    ));
+                }
             }
         } else {
             self.commands.spawn((
@@ -150,12 +155,8 @@ impl Plugin for AudioManagerPlugin {
     }
 }
 
-fn handle_followers(
-    mut followers_query: Query<(&mut Transform, &AudioFollower)>,
-    transforms_query: Query<&Transform, Without<AudioFollower>>,
-) {
-    for (mut follower_transform, follower) in followers_query.iter_mut() {
-        follower_transform.translation =
-            transforms_query.get(follower.followed).unwrap().translation;
+fn handle_followers(mut audios: Query<&mut Transform, (With<AudioPlayer>, With<ChildOf>)>) {
+    for mut transform in audios.iter_mut() {
+        *transform = Transform::default();
     }
 }

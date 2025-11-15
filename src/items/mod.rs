@@ -1,6 +1,7 @@
 use audio_manager::prelude::*;
 use avian2d::prelude::*;
 use bevy::prelude::*;
+use bevy_bundled_observers::observers;
 use bevy_easy_p2p::{
     EasyP2PUpdate, NetworkedEntity, NetworkedEventsExt, prelude::NetworkedTransform,
 };
@@ -144,6 +145,11 @@ pub(crate) fn spawn_item_pickup(
         ItemPickup(item),
         Sprite::from_image(asset_handles.crate_texture.clone()),
         networked_entity,
+        observers!(
+            |_: On<Despawn, ItemPickup>, mut audio_manager: AudioManager| {
+                audio_manager.play_sound(PlayAudio2D::new_once("sounds/pickup.wav"));
+            }
+        ),
     ));
     if easy.is_host() {
         item_pickup

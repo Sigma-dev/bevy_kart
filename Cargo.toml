@@ -4,11 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy_text_input = { path = "bevy_text_input" }
 bevy_webrtc = { path = "bevy_webrtc" }
 bevy_easy_p2p = { path = "bevy_easy_p2p" }
 audio_manager = { path = "audio_manager" }
 bevy_timer = { path = "bevy_timer" }
+bevy_bundled_observers = { git = "https://github.com/fallible-algebra/bevy_observers.git" }
+bevy_ui_text_input = { git = "https://github.com/Sigma-dev/bevy_ui_text_input.git" }
 bevy = { version = "0.17", features = ["wav"] }
 avian2d = "0.4"
 serde = { version = "1", features = ["derive"] }

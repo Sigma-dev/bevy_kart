@@ -250,17 +250,22 @@ where
             .map(|inst| inst.0.clone())
             .collect()
     }
-    pub fn kick(&mut self, client_id: ClientId) {
-        self.kick_w.write(OnKickReq(client_id));
+    pub fn kick(&mut self, networked_id: NetworkedId) {
+        if !self.state.is_host {
+            return;
+        }
+        if let NetworkedId::ClientId(client_id) = networked_id {
+            self.kick_w.write(OnKickReq(client_id));
+        }
     }
     pub fn is_host(&self) -> bool {
         self.state.is_host
     }
-    pub fn get_local_player_id(&self) -> NetworkedId {
+    pub fn get_local_player_id(&self) -> Option<NetworkedId> {
         if self.state.is_host {
-            return NetworkedId::Host;
+            return Some(NetworkedId::Host);
         }
-        self.state.local_networked_id.unwrap()
+        self.state.local_networked_id
     }
     pub fn get_players(&self) -> Vec<PlayerInfo<PlayerData>> {
         self.state.get_players(self.is_host())
@@ -292,13 +297,14 @@ where
             .map(|update| update.clone())
             .collect()
     }
-    pub fn get_player_data(&self, id: NetworkedId) -> PlayerData {
+    pub fn get_player_data(&self, id: NetworkedId) -> Option<PlayerData> {
         self.get_players()
             .iter()
             .find(|player| player.id == id)
-            .unwrap()
-            .data
-            .clone()
+            .map(|player| player.data.clone())
+    }
+    pub fn get_player_index(&self, id: NetworkedId) -> Option<usize> {
+        self.get_players().iter().position(|player| player.id == id)
     }
     pub fn get_closest_networked_id(&self, entity: Entity) -> Option<NetworkedId> {
         if self.network_entities_q.contains(entity) {

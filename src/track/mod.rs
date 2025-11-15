@@ -431,7 +431,7 @@ fn update_held_item_icon(
     mut pickup_reader: MessageReader<ItemPickedUp>,
 ) {
     for picked_up in pickup_reader.read() {
-        if picked_up.car.owner_id() != easy.get_local_player_id() {
+        if picked_up.car.owner_id() != easy.get_local_player_id().unwrap() {
             continue;
         }
         for (mut visibility, mut image_node) in held_item_icon.iter_mut() {

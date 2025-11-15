@@ -1,11 +1,19 @@
-use crate::kart::{KART_COLORS_COUNT, KART_SIZE};
+use crate::kart::{KART_SIZE, KartControlType, spawn_kart};
+use crate::menu::{AnimatedButton, animated_button_bundle};
 use crate::{
-    AppP2PUpdate, AppPlayerData, AppState, AssetHandles, FinishTimes, KartColor, KartEasyP2P,
+    AppColors, AppP2PUpdate, AppPlayerData, AppState, AssetHandles, FinishTimes, KartEasyP2P,
+    RESOLUTION, SpriteLayers,
 };
 use bevy::prelude::*;
+use bevy_bundled_observers::observers;
 use bevy_easy_p2p::prelude::*;
-use bevy_easy_p2p::{EasyP2PSystemSet, EasyP2PUpdate, NetworkedId};
-use bevy_text_input::prelude::*;
+use bevy_easy_p2p::{EasyP2PUpdate, NetworkedId};
+use bevy_ui_text_input::{SubmitText, TextInputMode, TextInputNode};
+use rand::distr::Distribution;
+use rand::distr::weighted::WeightedIndex;
+use rand::{Rng, rng};
+
+pub const BACKGROUND_ELEMENT_TYPES_COUNT: usize = 8;
 
 pub struct LobbyPlugin;
 
@@ -15,19 +23,21 @@ impl Plugin for LobbyPlugin {
             .add_systems(
                 Update,
                 (
-                    lobby_code,
-                    lobby_chat_input_history,
-                    spawn_lobby_players_buttons,
+                    (
+                        lobby_code,
+                        lobby_chat_input_history,
+                        spawn_lobby_players_buttons,
+                        on_client_message_received,
+                        on_host_message_received,
+                        receive_ping,
+                        update_lobby_cars,
+                    )
+                        .run_if(in_state(AppState::OutOfGame))
+                        .run_if(in_state(P2PLobbyState::InLobby)),
                     on_lobby_exit,
-                    on_client_message_received,
-                    on_host_message_received,
-                    handle_kart_preview_add,
-                    handle_kart_preview,
-                    handle_local_kart_preview,
-                    receive_ping,
-                )
-                    .chain()
-                    .after(EasyP2PSystemSet::Emit),
+                    spawn_background_elements,
+                    handle_background_elements,
+                ),
             )
             .insert_resource(LobbyChatInputHistory(Vec::new()));
     }
@@ -60,22 +70,91 @@ struct LobbyChatInputHistoryText;
 struct LobbyPlayersButtons;
 
 #[derive(Component)]
-struct KartPreview(KartColor);
+pub struct LobbyCar(pub NetworkedId);
 
-impl KartPreview {
-    fn new(kart_color: KartColor) -> Self {
-        Self(kart_color)
-    }
+#[derive(Component, Clone, Copy)]
+enum BackgroundElement {
+    Tree,
+    Grass,
+    YellowFlower,
+    RedFlower,
+    BlueFlower,
+    PurpleFlower,
+    Fox,
+    Worm,
+    Cloud1,
+    Cloud2,
 }
 
-impl Default for KartPreview {
-    fn default() -> Self {
-        Self::new(KartColor::new())
+impl BackgroundElement {
+    fn as_sprite(&self, handles: &AssetHandles) -> Sprite {
+        let index = match self {
+            BackgroundElement::Tree => 0,
+            BackgroundElement::Grass => 1,
+            BackgroundElement::YellowFlower => 2,
+            BackgroundElement::RedFlower => 3,
+            BackgroundElement::BlueFlower => 4,
+            BackgroundElement::PurpleFlower => 5,
+            BackgroundElement::Fox => 6,
+            BackgroundElement::Worm => 7,
+            BackgroundElement::Cloud1 => 0,
+            BackgroundElement::Cloud2 => 1,
+        };
+        let texture_and_atlas = match self {
+            BackgroundElement::Cloud1 => {
+                (handles.clouds_texture.clone(), handles.clouds_atlas.clone())
+            }
+            BackgroundElement::Cloud2 => {
+                (handles.clouds_texture.clone(), handles.clouds_atlas.clone())
+            }
+            _ => (
+                handles.background_elements_texture.clone(),
+                handles.background_elements_atlas.clone(),
+            ),
+        };
+        Sprite::from_atlas_image(
+            texture_and_atlas.0,
+            TextureAtlas {
+                layout: texture_and_atlas.1,
+                index,
+            },
+        )
+    }
+
+    fn pick_random() -> Self {
+        let choices = [
+            BackgroundElement::Tree,
+            BackgroundElement::Grass,
+            BackgroundElement::YellowFlower,
+            BackgroundElement::RedFlower,
+            BackgroundElement::BlueFlower,
+            BackgroundElement::PurpleFlower,
+            BackgroundElement::Fox,
+            BackgroundElement::Worm,
+            BackgroundElement::Cloud1,
+            BackgroundElement::Cloud2,
+        ];
+        let weights = [5, 200, 10, 10, 10, 10, 2, 2, 2, 2];
+        let dist = WeightedIndex::new(weights).unwrap();
+        choices[dist.sample(&mut rng())]
+    }
+
+    fn speed(&self) -> f32 {
+        match self {
+            BackgroundElement::Cloud1 => 30.,
+            BackgroundElement::Cloud2 => 45.,
+            _ => 100.,
+        }
+    }
+
+    fn layer(&self) -> SpriteLayers {
+        match self {
+            BackgroundElement::Cloud1 => SpriteLayers::AboveCar,
+            BackgroundElement::Cloud2 => SpriteLayers::AboveCar,
+            _ => SpriteLayers::OnGround,
+        }
     }
 }
-
-#[derive(Component)]
-struct LocalKartPreview;
 
 fn lobby_code(
     state: Res<EasyP2PState<AppPlayerData>>,
@@ -104,7 +183,9 @@ fn on_client_message_received(
         if let EasyP2PUpdate::ClientChat { client_id, text } = update {
             history.add(format!(
                 "{}: {}",
-                easy.get_player_data(NetworkedId::ClientId(*client_id)).name,
+                easy.get_player_data(NetworkedId::ClientId(*client_id))
+                    .unwrap()
+                    .name,
                 text
             ));
         }
@@ -120,25 +201,21 @@ fn on_host_message_received(
         if let EasyP2PUpdate::HostChat { text } = update {
             history.add(format!(
                 "{}: {}",
-                easy.get_player_data(NetworkedId::Host).name,
+                easy.get_player_data(NetworkedId::Host).unwrap().name,
                 text
             ));
         }
     }
 }
 
-#[derive(Component)]
-struct KickTarget(NetworkedId);
-
 fn on_lobby_exit(
     mut events: MessageReader<AppP2PUpdate>,
-    mut inputs: Query<&mut Text, With<TextInput>>,
+    mut inputs: Query<&mut Text, With<TextInputNode>>,
     mut history: ResMut<LobbyChatInputHistory>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     for AppP2PUpdate(update) in events.read() {
-        if let EasyP2PUpdate::LobbyExited { reason } = update {
-            info!("Lobby exit: {:?}", reason);
+        if let EasyP2PUpdate::LobbyExited { reason: _ } = update {
             for mut input in inputs.iter_mut() {
                 input.0.clear();
             }
@@ -148,132 +225,90 @@ fn on_lobby_exit(
     }
 }
 
-fn players_buttons(
-    commands: &mut Commands,
-    parent: Entity,
-    players: &Vec<bevy_easy_p2p::PlayerInfo<AppPlayerData>>,
-    is_host: bool,
-    finish_times: &FinishTimes,
-) {
-    for player in players {
-        let mut player_name_and_rank = player.data.name.clone();
-        if let Some(rank) = finish_times.get_player_rank(player.id) {
-            player_name_and_rank += &format!(" {}", rank);
-        }
-        let is_person_host = player.id == NetworkedId::Host;
-        let mut base = commands.spawn(Node {
-            height: px(65),
-            border: UiRect::all(px(5)),
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Center,
-            ..default()
-        });
-        if is_person_host == false && is_host {
-            base.with_child((
-                Button,
-                Node {
-                    height: px(65),
-                    border: UiRect::all(px(5)),
-                    // horizontally center child text
-                    justify_content: JustifyContent::Center,
-                    // vertically center child text
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                BorderColor::all(Color::WHITE),
-                BorderRadius::MAX,
-                BackgroundColor(Color::linear_rgb(0.94, 0.00, 0.00)),
-                KickTarget(player.id),
-                children![(
-                    Text::new(&player_name_and_rank),
-                    TextFont {
-                        font_size: 33.0,
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                    TextShadow::default(),
-                )],
-            ))
-            .observe(
-                |trigger: On<Pointer<Press>>,
-                 mut easy: KartEasyP2P,
-                 kick_targets: Query<&KickTarget>| {
-                    let target = kick_targets.get(trigger.entity).unwrap();
-                    if let NetworkedId::ClientId(cid) = target.0 {
-                        easy.kick(cid);
-                    }
-                },
-            );
-        } else {
-            base.with_child((
-                Button,
-                Node {
-                    height: px(65),
-                    border: UiRect::all(px(5)),
-                    // horizontally center child text
-                    justify_content: JustifyContent::Center,
-                    // vertically center child text
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                BorderColor::all(Color::WHITE),
-                BorderRadius::MAX,
-                BackgroundColor(Color::linear_rgb(0.00, 0.00, 0.00)),
-                children![(
-                    Text::new(&player_name_and_rank),
-                    TextFont {
-                        font_size: 33.0,
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                    TextShadow::default(),
-                )],
-            ));
-        }
-        base.with_child((
-            KartPreview::new(player.data.kart_color),
-            Node {
-                width: px(50),
-                height: px(50),
-                ..default()
-            },
-            player.id,
-        ));
-        let base_id = base.id();
-
-        commands.entity(parent).add_child(base_id);
-    }
-}
-
 fn spawn_lobby_players_buttons(
     mut set: ParamSet<(KartEasyP2P, MessageReader<AppP2PUpdate>)>,
     mut commands: Commands,
-    buttons: Query<(Entity, Option<&Children>), With<LobbyPlayersButtons>>,
     finish_times: Res<FinishTimes>,
+    cars: Query<&LobbyCar>,
 ) {
     let has_update = set
         .p1()
         .read()
         .any(|AppP2PUpdate(update)| matches!(update, EasyP2PUpdate::RosterUpdated { .. }));
-    let already_spawned = buttons.iter().all(|(_, children)| children.is_some());
-    if !has_update && already_spawned {
+    let first_time = cars.count() == 0;
+    if !has_update && !first_time {
         return;
     }
-
-    let easy = set.p0();
-    let players = easy.get_players();
-    let is_host = easy.is_host();
-
-    for (button, children) in buttons.iter() {
-        if players.is_empty() && children.is_some() {
+    let players = set.p0().get_players();
+    let count = players.len();
+    for player in players {
+        if cars.iter().any(|car| car.0 == player.id) {
             continue;
         }
-        commands.entity(button).despawn_children();
-        players_buttons(&mut commands, button, &players, is_host, &finish_times);
+        let Some(local_player_id) = set.p0().get_local_player_id() else {
+            continue;
+        };
+        let player_index = set.p0().get_player_index(player.id).unwrap();
+        let is_local = local_player_id == player.id;
+        let left_spawn = -RESOLUTION.x / 2.;
+        let starting_pos = if first_time {
+            if is_local {
+                left_spawn
+            } else {
+                compute_desired_x(player_index, count)
+            }
+        } else {
+            left_spawn
+        };
+        commands.run_system_cached_with(
+            spawn_kart,
+            (
+                KartControlType::LobbyCar(player.id, finish_times.get_player_rank(player.id)),
+                Transform::from_translation(Vec3::X * starting_pos)
+                    .with_rotation(Quat::from_rotation_z(-90_f32.to_radians())),
+            ),
+        );
     }
 }
 
-pub fn spawn_lobby(mut commands: Commands, easy: KartEasyP2P) {
+fn compute_desired_x(player_index: usize, count: usize) -> f32 {
+    let spacing = 6;
+    let total_length = count * KART_SIZE.y as usize + (count - 1) * spacing;
+    let front = total_length as f32 / 2.;
+    let offset_from_front =
+        (player_index as f32 + 0.5) * (KART_SIZE.y as f32) + player_index as f32 * spacing as f32;
+    front - offset_from_front
+}
+
+fn update_lobby_cars(
+    time: Res<Time>,
+    mut commands: Commands,
+    easy: KartEasyP2P,
+    mut cars: Query<(Entity, &LobbyCar, &mut Transform, &mut Sprite)>,
+) {
+    let count = easy.get_players().len();
+    if count == 0 {
+        return;
+    }
+    for (entity, car, mut transform, mut sprite) in cars.iter_mut() {
+        let Some(player) = easy.get_player_data(car.0) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let player_index = easy.get_player_index(car.0).unwrap();
+        sprite.texture_atlas.as_mut().unwrap().index = player.kart_color.to_u32() as usize;
+        let desired_x = compute_desired_x(player_index, count);
+        transform.translation.x = transform.translation.x.lerp(desired_x, time.delta_secs());
+    }
+}
+
+pub fn spawn_lobby(
+    mut commands: Commands,
+    easy: KartEasyP2P,
+    handles: Res<AssetHandles>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
     let is_host = easy.is_host();
     let lobby = commands
         .spawn((
@@ -286,36 +321,33 @@ pub fn spawn_lobby(mut commands: Commands, easy: KartEasyP2P) {
                 justify_content: JustifyContent::Center,
                 ..default()
             },
+            Pickable::IGNORE,
         ))
         .id();
-    let exit_button = commands
+
+    commands.spawn((
+        Mesh2d(meshes.add(Rectangle::new(RESOLUTION.x, 10.))),
+        MeshMaterial2d(materials.add(AppColors::Road.color())),
+        Transform::from_xyz(0., 0., SpriteLayers::Background.to_z()),
+        DespawnOnExit(P2PLobbyState::InLobby),
+        DespawnOnExit(AppState::OutOfGame),
+    ));
+    let buttons = commands
         .spawn((
-            Button,
             Node {
-                height: px(65),
-                border: UiRect::all(px(5)),
-                // horizontally center child text
-                justify_content: JustifyContent::Center,
-                // vertically center child text
-                align_items: AlignItems::Center,
+                position_type: PositionType::Absolute,
+                bottom: vh(10),
+                flex_direction: FlexDirection::ColumnReverse,
+                row_gap: px(30),
                 ..default()
             },
-            BorderColor::all(Color::WHITE),
-            BorderRadius::MAX,
-            BackgroundColor(Color::BLACK),
             children![(
-                Text::new("Exit Lobby"),
-                TextFont {
-                    font_size: 33.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                TextShadow::default(),
+                animated_button_bundle(AnimatedButton(6), &handles, handles.buttons_atlas.clone()),
+                observers!(|_: On<Pointer<Press>>, mut easy: KartEasyP2P| {
+                    easy.exit_lobby();
+                }),
             )],
         ))
-        .observe(|_: On<Pointer<Press>>, mut easy: KartEasyP2P| {
-            easy.exit_lobby();
-        })
         .id();
 
     let lobby_code_text = commands
@@ -324,17 +356,12 @@ pub fn spawn_lobby(mut commands: Commands, easy: KartEasyP2P) {
             Text::new(""),
             TextFont {
                 // This font is loaded and will be used instead of the default font.
-                font_size: 67.0,
+                font_size: 80.0,
                 ..default()
             },
-            TextShadow::default(),
-            // Set the justification of the Text
-            TextLayout::new_with_justify(Justify::Center),
-            // Set the style of the Node itself.
             Node {
                 position_type: PositionType::Absolute,
-                bottom: px(5),
-                left: px(5),
+                top: vh(20),
                 ..default()
             },
             LobbyCodeText,
@@ -344,8 +371,10 @@ pub fn spawn_lobby(mut commands: Commands, easy: KartEasyP2P) {
     let lobby_chat_input_text = commands
         .spawn((
             // Accepts a `String` or any type that converts into a `String`, such as `&str`
-            Text::new(""),
-            TextInput::new(false, false, true),
+            TextInputNode {
+                mode: TextInputMode::SingleLine,
+                ..default()
+            },
             Node {
                 position_type: PositionType::Absolute,
                 bottom: px(5),
@@ -353,17 +382,18 @@ pub fn spawn_lobby(mut commands: Commands, easy: KartEasyP2P) {
                 height: px(25),
                 ..default()
             },
+            BackgroundColor(AppColors::Dark.color()),
         ))
         .observe(
-            |trigger: On<InputFieldSubmit>,
+            |trigger: On<SubmitText>,
              mut easy: KartEasyP2P,
              mut history: ResMut<LobbyChatInputHistory>| {
                 if easy.is_host() {
-                    easy.send_message_all(trigger.text().to_string());
+                    easy.send_message_all(trigger.text.clone());
                 } else {
-                    easy.send_message_to_host(trigger.text().to_string());
+                    easy.send_message_to_host(trigger.text.clone());
                 }
-                history.add(format!("You: {}", trigger.text()));
+                history.add(format!("You: {}", trigger.text));
             },
         )
         .id();
@@ -381,7 +411,7 @@ pub fn spawn_lobby(mut commands: Commands, easy: KartEasyP2P) {
             },
         ))
         .id();
-    let buttons = commands
+    let players_buttons = commands
         .spawn((
             LobbyPlayersButtons,
             Node {
@@ -393,91 +423,22 @@ pub fn spawn_lobby(mut commands: Commands, easy: KartEasyP2P) {
         ))
         .id();
 
-    let kart_buttons = commands
-        .spawn((Node {
-            position_type: PositionType::Absolute,
-            right: px(5),
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            ..default()
-        },))
-        .id();
-    let left_kart_button = commands
-        .spawn((Button, Text::new("<")))
-        .observe(|_: On<Pointer<Press>>, mut easy: KartEasyP2P| {
-            let current_kart = easy.get_local_player_data().kart_color;
-            easy.set_local_player_data(AppPlayerData {
-                kart_color: current_kart.left(),
-                ..easy.get_local_player_data()
-            });
-        })
-        .id();
-    let right_kart_button = commands
-        .spawn((Button, Text::new(">")))
-        .observe(|_: On<Pointer<Press>>, mut easy: KartEasyP2P| {
-            let current_kart = easy.get_local_player_data().kart_color;
-            easy.set_local_player_data(AppPlayerData {
-                kart_color: current_kart.right(),
-                ..easy.get_local_player_data()
-            });
-        })
-        .id();
-    let kart_image = commands
-        .spawn((
-            KartPreview::default(),
-            LocalKartPreview,
-            Node {
-                width: px(50),
-                height: px(50),
-                ..default()
-            },
-        ))
-        .id();
-    commands
-        .entity(kart_buttons)
-        .add_children(&[left_kart_button, kart_image, right_kart_button]);
-
     if is_host {
-        let start_button = commands
-            .spawn((
-                Button,
-                Node {
-                    height: px(65),
-                    border: UiRect::all(px(5)),
-                    // horizontally center child text
-                    justify_content: JustifyContent::Center,
-                    // vertically center child text
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                BorderColor::all(Color::WHITE),
-                BorderRadius::MAX,
-                BackgroundColor(Color::BLACK),
-                children![(
-                    Text::new("Start Game"),
-                    TextFont {
-                        font_size: 33.0,
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                    TextShadow::default(),
-                )],
-            ))
-            .observe(
-                |_trigger: On<Pointer<Press>>, mut next_state: ResMut<NextState<AppState>>| {
+        commands.entity(buttons).with_child((
+            animated_button_bundle(AnimatedButton(4), &handles, handles.buttons_atlas.clone()),
+            observers!(
+                |_: On<Pointer<Press>>, mut next_state: ResMut<NextState<AppState>>| {
                     next_state.set(AppState::Game);
-                },
-            )
-            .id();
-        commands.entity(lobby).add_child(start_button);
+                }
+            ),
+        ));
     }
     commands.entity(lobby).add_children(&[
-        exit_button,
         lobby_code_text,
         lobby_chat_input_text,
         lobby_chat_input_history,
+        players_buttons,
         buttons,
-        kart_buttons,
     ]);
 
     commands.spawn((
@@ -491,49 +452,6 @@ pub fn spawn_lobby(mut commands: Commands, easy: KartEasyP2P) {
     ));
 }
 
-fn handle_kart_preview_add(
-    mut commands: Commands,
-    karts: Query<Entity, Added<KartPreview>>,
-    handles: Res<AssetHandles>,
-    mut texture_atlases: ResMut<Assets<TextureAtlasLayout>>,
-) {
-    for entity in karts.iter() {
-        let texture_atlas =
-            TextureAtlasLayout::from_grid(KART_SIZE, KART_COLORS_COUNT, 1, None, None);
-        let texture_atlas_handle = texture_atlases.add(texture_atlas);
-        commands.entity(entity).insert((
-            ImageNode::from_atlas_image(
-                handles.karts_texture.clone(),
-                TextureAtlas::from(texture_atlas_handle),
-            ),
-            Node {
-                width: px(KART_SIZE.x * 10),
-                height: px(KART_SIZE.y * 10),
-                ..default()
-            },
-        ));
-    }
-}
-
-fn handle_kart_preview(mut image_nodes: Query<(&mut ImageNode, &KartPreview)>) {
-    for (mut image_node, kart) in image_nodes.iter_mut() {
-        let index = kart.0.to_u32() as usize;
-        if let Some(atlas) = &mut image_node.texture_atlas {
-            atlas.index = index;
-        }
-    }
-}
-
-fn handle_local_kart_preview(
-    easy: KartEasyP2P,
-    mut image_nodes: Query<&mut KartPreview, With<LocalKartPreview>>,
-) {
-    let current_kart = easy.get_local_player_data().kart_color;
-    for mut kart in image_nodes.iter_mut() {
-        kart.0 = current_kart;
-    }
-}
-
 fn receive_ping(
     mut updates: MessageReader<PingUpdate>,
     mut texts: Query<&mut Text, With<PingText>>,
@@ -541,6 +459,56 @@ fn receive_ping(
     for PingUpdate(ping) in updates.read() {
         for mut text in texts.iter_mut() {
             *text = Text::new(format!("Ping: {} ms", ping.as_millis()));
+        }
+    }
+}
+
+fn spawn_background_elements(
+    mut commands: Commands,
+    background_elements: Query<&BackgroundElement>,
+    handles: Res<AssetHandles>,
+) {
+    let max_amount = 60;
+    if background_elements.count() >= max_amount {
+        return;
+    }
+    let random_x = rng().random_range(RESOLUTION.x..RESOLUTION.x + 512.);
+    let random_y = rng().random_range(-RESOLUTION.y / 2.0..RESOLUTION.y / 2.);
+    if random_y.abs() < 10. {
+        return;
+    }
+    let element = BackgroundElement::pick_random();
+    commands.spawn((
+        element,
+        Transform::from_translation(Vec3::new(random_x, random_y, element.layer().to_z())),
+        element.as_sprite(&handles),
+    ));
+}
+
+fn handle_background_elements(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut background_elements: Query<(Entity, &mut Visibility, &mut Transform, &BackgroundElement)>,
+    app_state: Res<State<AppState>>,
+    p2p_state: Res<State<P2PLobbyState>>,
+) {
+    for (entity, mut visibility, mut transform, element) in background_elements.iter_mut() {
+        let speed = if time.elapsed_secs() < 0.5 {
+            10000.
+        } else {
+            element.speed()
+        };
+
+        transform.translation.x -= speed * time.delta_secs();
+        if transform.translation.x < -RESOLUTION.x {
+            commands.entity(entity).despawn();
+        }
+        *visibility = if *app_state.get() == AppState::OutOfGame
+            && *p2p_state.get() == P2PLobbyState::InLobby
+        {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
         }
     }
 }

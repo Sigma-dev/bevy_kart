@@ -1,15 +1,65 @@
-use crate::{AppPlayerData, AppState, KartColor, KartEasyP2P};
+use crate::{
+    AppColors, AppPlayerData, AppState, AssetHandles, KartColor, KartEasyP2P, RESOLUTION,
+    SpriteLayers,
+    kart::{AutoCar, KartControlType, spawn_kart},
+    menu::animated_button_bundle,
+};
 use bevy::prelude::*;
+use bevy_bundled_observers::observers;
 use bevy_easy_p2p::prelude::*;
-use bevy_text_input::prelude::*;
+use bevy_ui_text_input::{
+    ModifyText, SubmitText, TextInputBuffer, TextInputContents, TextInputFilter, TextInputMode,
+    TextInputModifier, TextInputNode,
+};
+use rand::Rng;
 
-pub fn spawn_menu(mut commands: Commands, mut easy: KartEasyP2P) {
-    if easy.get_local_player_data().name.is_empty() {
-        easy.set_local_player_data(AppPlayerData {
-            name: "YOUR_NAME".to_string(),
-            kart_color: KartColor::new(),
-        });
+use super::AnimatedButton;
+
+pub struct StartPlugin;
+
+impl Plugin for StartPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            (handle_spawning_menu_cars, handle_despawning_menu_cars),
+        );
     }
+}
+
+#[derive(Component)]
+struct MenuCarSpawner {
+    next_spawn: Option<f32>,
+}
+
+impl MenuCarSpawner {
+    fn new() -> Self {
+        Self { next_spawn: None }
+    }
+}
+
+#[derive(Component)]
+struct CodeInput;
+
+pub(crate) fn spawn_menu(
+    mut commands: Commands,
+    mut texture_atlases: ResMut<Assets<TextureAtlasLayout>>,
+    easy: KartEasyP2P,
+    handles: Res<AssetHandles>,
+) {
+    let name_atlas = texture_atlases.add(TextureAtlasLayout::from_grid(
+        UVec2::new(32, 8),
+        2,
+        1,
+        None,
+        None,
+    ));
+    let logo_atlas = texture_atlases.add(TextureAtlasLayout::from_grid(
+        UVec2::new(128, 68),
+        2,
+        1,
+        None,
+        None,
+    ));
     let menu = commands
         .spawn((
             DespawnOnExit(P2PLobbyState::OutOfLobby),
@@ -23,89 +73,232 @@ pub fn spawn_menu(mut commands: Commands, mut easy: KartEasyP2P) {
             },
         ))
         .id();
-    let button = commands
+    let car_spawners = commands
+        .spawn(children![
+            (
+                MenuCarSpawner::new(),
+                Transform::from_translation(Vec3::new(-134., -6., SpriteLayers::Car.to_z()))
+                    .with_rotation(Quat::from_rotation_z(-53_f32.to_radians())),
+            ),
+            (
+                MenuCarSpawner::new(),
+                Transform::from_translation(Vec3::new(-142., 0., SpriteLayers::Car.to_z()))
+                    .with_rotation(Quat::from_rotation_z(-53_f32.to_radians())),
+            ),
+            (
+                MenuCarSpawner::new(),
+                Transform::from_translation(Vec3::new(10., -80., SpriteLayers::Car.to_z()))
+                    .with_rotation(Quat::from_rotation_z(72_f32.to_radians())),
+            ),
+            (
+                MenuCarSpawner::new(),
+                Transform::from_translation(Vec3::new(20., -80., SpriteLayers::Car.to_z()))
+                    .with_rotation(Quat::from_rotation_z(73_f32.to_radians())),
+            ),
+            (
+                MenuCarSpawner::new(),
+                Transform::from_translation(Vec3::new(30., 80., SpriteLayers::Car.to_z()))
+                    .with_rotation(Quat::from_rotation_z(-147_f32.to_radians())),
+            ),
+            (
+                MenuCarSpawner::new(),
+                Transform::from_translation(Vec3::new(40., 80., SpriteLayers::Car.to_z()))
+                    .with_rotation(Quat::from_rotation_z(-147_f32.to_radians())),
+            ),
+        ])
+        .id();
+    let menu_background = commands
         .spawn((
-            Button,
+            Sprite::from_image(handles.menu_background_texture.clone()),
+            Transform::from_translation(Vec3::Z * SpriteLayers::Background.to_z()),
+        ))
+        .id();
+    let buttons = commands
+        .spawn((
             Node {
-                height: px(65),
-                border: UiRect::all(px(5)),
+                position_type: PositionType::Absolute,
+                bottom: vh(20),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(30),
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            children![
+                (
+                    animated_button_bundle(
+                        AnimatedButton(0),
+                        &handles,
+                        handles.buttons_atlas.clone()
+                    ),
+                    observers!(|_trigger: On<Pointer<Press>>, mut easy: KartEasyP2P| {
+                        easy.create_lobby();
+                    }),
+                ),
+                (
+                    Node {
+                        row_gap: px(10),
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    children![
+                        (
+                            TextInputNode {
+                                mode: TextInputMode::SingleLine,
+                                max_chars: Some(4),
+                                clear_on_submit: false,
+                                ..default()
+                            },
+                            TextFont {
+                                font_size: 50.,
+                                ..default()
+                            },
+                            TextInputContents::default(),
+                            TextInputModifier::AllCaps,
+                            TextInputFilter::Custom(Box::new(|c: &str| c
+                                .chars()
+                                .all(|c| c.is_ascii_uppercase()))),
+                            Node {
+                                height: px(64),
+                                width: px(128),
+                                ..default()
+                            },
+                            BackgroundColor(AppColors::Dark.color()),
+                            CodeInput,
+                            observers![|trigger: On<SubmitText>, mut easy: KartEasyP2P| {
+                                easy.join_lobby(&trigger.text.to_string());
+                            }]
+                        ),
+                        (
+                            animated_button_bundle(
+                                AnimatedButton(2),
+                                &handles,
+                                handles.buttons_atlas.clone()
+                            ),
+                            observers!(
+                            |_: On<Pointer<Press>>,
+                             mut easy: KartEasyP2P,
+                             code: Single<&TextInputContents, With<CodeInput>>| {
+                                easy.join_lobby(&code.get());
+                            }
+                        ),
+                        ),
+                    ]
+                ),
+            ],
+        ))
+        .id();
+    let logo = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: vh(10),
+                height: px(68. * 4.),
+                width: px(128. * 4.),
+                ..default()
+            },
+            ImageNode::from_atlas_image(
+                handles.logo_texture.clone(),
+                TextureAtlas::from(logo_atlas.clone()),
+            ),
+            AnimatedButton(0),
+        ))
+        .id();
+    let player_name = easy.get_local_player_data().name.clone();
+    let name_parent = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: px(15),
+                column_gap: px(10),
                 // horizontally center child text
                 justify_content: JustifyContent::Center,
                 // vertically center child text
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BorderColor::all(Color::WHITE),
-            BorderRadius::MAX,
-            BackgroundColor(Color::BLACK),
-            children![(
-                Text::new("Create Lobby"),
-                TextFont {
-                    font_size: 33.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                TextShadow::default(),
-            )],
+            children![
+                (
+                    Button,
+                    ImageNode::from_atlas_image(
+                        handles.name_texture.clone(),
+                        TextureAtlas::from(name_atlas.clone()),
+                    ),
+                    AnimatedButton(0),
+                    Node {
+                        height: px(8. * 4.),
+                        width: px(32. * 4.),
+                        ..default()
+                    },
+                ),
+                (
+                    TextInputNode {
+                        mode: TextInputMode::SingleLine,
+                        max_chars: Some(11),
+                        clear_on_submit: false,
+                        ..default()
+                    },
+                    TextInputBuffer::new(player_name),
+                    TextFont {
+                        font_size: 28.,
+                        ..default()
+                    },
+                    BackgroundColor(AppColors::Dark.color()),
+                    Node {
+                        height: px(34),
+                        width: px(200),
+                        ..default()
+                    },
+                    observers!(|trigger: On<ModifyText>, mut easy: KartEasyP2P| {
+                        easy.set_local_player_data(AppPlayerData {
+                            name: trigger.text.to_string(),
+                            kart_color: KartColor::new(),
+                        });
+                    })
+                )
+            ],
         ))
-        .observe(|_trigger: On<Pointer<Press>>, mut easy: KartEasyP2P| {
-            easy.create_lobby();
-        })
         .id();
-    let code_input = commands
-        .spawn((
-            TextInput::new(true, true, true),
-            Node {
-                height: px(25),
-                width: px(150),
-                ..default()
-            },
-        ))
-        .observe(|trigger: On<InputFieldSubmit>, mut easy: KartEasyP2P| {
-            easy.join_lobby(&trigger.text().to_string());
-        })
-        .id();
-    let mut code_parent = commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(15),
-            left: px(15),
-            column_gap: px(10),
-            ..default()
-        },
-        children![(Text::new("Lobby Code:"))],
-    ));
-    code_parent.add_child(code_input);
-    let code_parent_id = code_parent.id();
-    let name_input = commands
-        .spawn((
-            TextInput::new(false, false, false).with_max_characters(10),
-            Text::new(easy.get_local_player_data().name.clone()),
-            Node {
-                height: px(25),
-                ..default()
-            },
-        ))
-        .observe(|trigger: On<InputFieldChange>, mut easy: KartEasyP2P| {
-            easy.set_local_player_data(AppPlayerData {
-                name: trigger.text().to_string(),
-                kart_color: KartColor::new(),
-            });
-        })
-        .id();
-    let mut name_parent = commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(15),
-            right: px(15),
-            column_gap: px(10),
-            ..default()
-        },
-        children![(Text::new("Name:"),)],
-    ));
-    name_parent.add_child(name_input);
-    let name_parent_id = name_parent.id();
-    commands
-        .entity(menu)
-        .add_children(&[button, code_parent_id, name_parent_id]);
+    commands.entity(menu).add_children(&[
+        menu_background,
+        buttons,
+        name_parent,
+        logo,
+        car_spawners,
+    ]);
+}
+
+fn handle_spawning_menu_cars(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut spawners: Query<(&Transform, &mut MenuCarSpawner)>,
+) {
+    for (transform, mut spawner) in spawners.iter_mut() {
+        if let Some(next_spawn) = spawner.next_spawn {
+            if time.elapsed_secs() > next_spawn {
+                commands.run_system_cached_with(
+                    spawn_kart,
+                    (KartControlType::AutoCar, transform.clone()),
+                );
+                spawner.next_spawn = None;
+            }
+        }
+        if spawner.next_spawn.is_none() {
+            spawner.next_spawn = Some(time.elapsed_secs() + rand::rng().random_range(1.0..5.0));
+        }
+    }
+}
+
+fn handle_despawning_menu_cars(
+    mut commands: Commands,
+    cars: Query<(Entity, &Transform), With<AutoCar>>,
+) {
+    for (entity, transform) in cars.iter() {
+        if outside_of(transform.translation.xy(), RESOLUTION) {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn outside_of(pos: Vec2, zone: Vec2) -> bool {
+    pos.x < -zone.x || pos.x > zone.x || pos.y < -zone.y || pos.y > zone.y
 }

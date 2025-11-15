@@ -85,6 +85,7 @@ impl<'w, 's> AudioManager<'w, 's> {
                     self.commands.spawn((
                         AudioPlayer::new(source),
                         playback_settings.with_spatial(true),
+                        Transform::default(),
                         ChildOf(*entity),
                     ));
                 }

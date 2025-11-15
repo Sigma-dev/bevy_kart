@@ -1,7 +1,7 @@
 use crate::{AppP2PUpdate, KartEasyP2P};
 use avian2d::prelude::*;
 use bevy::prelude::*;
-use bevy_easy_p2p::EasyP2PUpdate;
+use bevy_easy_p2p::{EasyP2PUpdate, NetworkedEntity};
 
 pub struct CarController2dPlugin;
 
@@ -10,11 +10,15 @@ impl Plugin for CarController2dPlugin {
         app.add_systems(
             FixedUpdate,
             (
-                car_controller_power,
-                car_controller_steering,
-                car_controller_traction,
-                handle_boost_effect,
-            ),
+                handle_networked_inputs,
+                (
+                    car_controller_power,
+                    car_controller_steering,
+                    car_controller_traction,
+                    handle_boost_effect,
+                ),
+            )
+                .chain(),
         );
     }
 }
@@ -25,6 +29,14 @@ pub struct CarControllerDisabled;
 #[derive(Component)]
 pub struct CarController2d {
     pub engine_force: f32,
+}
+
+#[derive(Component, Default)]
+pub struct CarControllerInputs {
+    pub forward: bool,
+    pub backward: bool,
+    pub left: bool,
+    pub right: bool,
 }
 
 #[derive(Component)]
@@ -52,21 +64,9 @@ pub struct BoostEffect {
     pub start_time: f32,
 }
 
-fn car_controller_power(
-    mut cars: Query<
-        (
-            Forces,
-            Entity,
-            &Children,
-            &CarController2d,
-            Option<&BoostEffect>,
-        ),
-        (
-            Without<CarController2dWheel>,
-            Without<CarControllerDisabled>,
-        ),
-    >,
-    wheels: Query<(&GlobalTransform, &CarController2dWheel)>,
+fn handle_networked_inputs(
+    mut commands: Commands,
+    mut cars: Query<(Entity, &NetworkedEntity), With<CarController2d>>,
     mut param_set: ParamSet<(KartEasyP2P, MessageReader<AppP2PUpdate>)>,
 ) {
     let inputs = param_set
@@ -77,37 +77,64 @@ fn car_controller_power(
             _ => None,
         })
         .collect::<Vec<_>>();
-    for (sender, input) in inputs {
-        for (mut force, entity, children, car, maybe_boost_effect) in cars.iter_mut() {
-            if !param_set.p0().inputs_belong_to_player(entity, &sender) {
-                continue;
-            }
-            let mut dir = None;
 
-            if input.forward {
-                dir = Some(1.);
-            } else if input.backward {
-                dir = Some(-1.);
-            }
-            let Some(dir) = dir else {
+    for (entity, networked_entity) in cars.iter_mut() {
+        if let Some(input) = inputs
+            .iter()
+            .find(|(id, _)| *id == networked_entity.owner_id())
+            .map(|(_, input)| input)
+        {
+            commands.entity(entity).insert(CarControllerInputs {
+                forward: input.forward,
+                backward: input.backward,
+                left: input.left,
+                right: input.right,
+            });
+        }
+    }
+}
+
+fn car_controller_power(
+    mut cars: Query<
+        (
+            Forces,
+            &Children,
+            &CarController2d,
+            &CarControllerInputs,
+            Option<&BoostEffect>,
+        ),
+        (
+            Without<CarController2dWheel>,
+            Without<CarControllerDisabled>,
+        ),
+    >,
+    wheels: Query<(&GlobalTransform, &CarController2dWheel)>,
+) {
+    for (mut force, children, car, inputs, maybe_boost_effect) in cars.iter_mut() {
+        let mut dir = None;
+        if inputs.forward {
+            dir = Some(1.);
+        } else if inputs.backward {
+            dir = Some(-1.);
+        }
+        let Some(dir) = dir else {
+            continue;
+        };
+
+        let base_mult = 16.;
+        for child in children.iter() {
+            let Ok((global_transform, wheel)) = wheels.get(child) else {
                 continue;
             };
-
-            let base_mult = 8.;
-            for child in children.iter() {
-                let Ok((global_transform, wheel)) = wheels.get(child) else {
-                    continue;
-                };
-                let power = global_transform.up().xy()
-                    * car.engine_force
-                    * base_mult
-                    * maybe_boost_effect.map_or(1., |boost_effect| boost_effect.multiplier)
-                    * dir;
-                if !wheel.powered {
-                    continue;
-                }
-                force.apply_force_at_point(power, global_transform.translation().xy());
+            if !wheel.powered {
+                continue;
             }
+            let power = global_transform.up().xy()
+                * car.engine_force
+                * base_mult
+                * maybe_boost_effect.map_or(1., |boost_effect| boost_effect.multiplier)
+                * dir;
+            force.apply_force_at_point(power, global_transform.translation().xy());
         }
     }
 }

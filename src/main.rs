@@ -1,18 +1,21 @@
 use crate::items::{ItemType, ItemsPlugin, spawn_item_pickup, spawn_rocket};
-use crate::kart::{KartColor, KartPlugin, spawn_kart};
+use crate::kart::{
+    KART_COLORS_COUNT, KART_SIZE, KartColor, KartControlType, KartPlugin, spawn_kart,
+};
 use crate::menu::MenuPlugin;
-use crate::menu::lobby::spawn_lobby;
+use crate::menu::lobby::{BACKGROUND_ELEMENT_TYPES_COUNT, spawn_lobby};
 use crate::menu::start::spawn_menu;
 use crate::track::{TrackPlugin, spawn_track};
 use audio_manager::AudioManagerPlugin;
 use avian2d::prelude::*;
+use bevy::asset::AssetMetaCheck;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_easy_p2p::easy_firestore_p2p::{FirestoreP2PPlugin, FirestoreWebRtcTransport};
 use bevy_easy_p2p::prelude::*;
 use bevy_easy_p2p::{EasyP2PSystemSet, EasyP2PUpdate, NetworkedId, NetworkedStatesExt};
-use bevy_text_input::prelude::*;
+use bevy_ui_text_input::TextInputPlugin;
 use serde::{Deserialize, Serialize};
 
 pub mod car_controller_2d;
@@ -23,15 +26,25 @@ pub mod track;
 use bevy_timer::TimerPlugin;
 use car_controller_2d::CarController2dPlugin;
 
+const RESOLUTION: Vec2 = Vec2::new(256., 144.);
+
 pub type KartEasyP2P<'w, 's> =
     EasyP2P<'w, 's, FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AppPlayerData {
     pub name: String,
     pub kart_color: KartColor,
 }
 
+impl Default for AppPlayerData {
+    fn default() -> Self {
+        Self {
+            name: "YOUR_NAME".to_string(),
+            kart_color: KartColor::default(),
+        }
+    }
+}
 #[derive(States, Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 enum AppState {
     #[default]
@@ -49,14 +62,26 @@ pub struct AppPlayerInputData {
 }
 
 #[derive(Resource)]
-struct AssetHandles {
+pub struct AssetHandles {
+    menu_background_texture: Handle<Image>,
+    logo_texture: Handle<Image>,
+    buttons_texture: Handle<Image>,
+    buttons_atlas: Handle<TextureAtlasLayout>,
+    arrow_texture: Handle<Image>,
+    kick_texture: Handle<Image>,
+    name_texture: Handle<Image>,
     track_texture: Handle<Image>,
     traffic_light_texture: Handle<Image>,
     karts_texture: Handle<Image>,
+    karts_atlas: Handle<TextureAtlasLayout>,
     wheel_texture: Handle<Image>,
     crate_texture: Handle<Image>,
     items_texture: Handle<Image>,
     rocket_texture: Handle<Image>,
+    background_elements_texture: Handle<Image>,
+    background_elements_atlas: Handle<TextureAtlasLayout>,
+    clouds_texture: Handle<Image>,
+    clouds_atlas: Handle<TextureAtlasLayout>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -86,14 +111,39 @@ impl SpriteLayers {
     }
 }
 
-#[derive(Clone, Message)]
+#[derive(Clone, Message, Debug)]
 struct AppP2PUpdate(EasyP2PUpdate<AppPlayerData, AppPlayerInputData, AppInstantiations>);
+
+pub enum AppColors {
+    Dark,
+    Road,
+    Grass,
+}
+
+impl AppColors {
+    fn color(&self) -> Color {
+        match self {
+            AppColors::Dark => Srgba::hex("2e222f").unwrap().into(),
+            AppColors::Road => Srgba::hex("323353").unwrap().into(),
+            AppColors::Grass => Srgba::hex("239063").unwrap().into(),
+        }
+    }
+}
 
 fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins.set(ImagePlugin::default_nearest()),
+            DefaultPlugins
+                .set(ImagePlugin::default_nearest())
+                .set(AssetPlugin {
+                    // Wasm builds will check for meta files (that don't exist) if this isn't set.
+                    // This causes errors and even panics on web build on itch or with SPA dev-servers.
+                    // See https://github.com/bevyengine/bevy_github_ci_template/issues/48.
+                    meta_check: AssetMetaCheck::Never,
+                    ..default()
+                }),
             PhysicsPlugins::default(),
+            TextInputPlugin,
         ))
         .insert_resource(Gravity::ZERO)
         .add_plugins((
@@ -104,7 +154,6 @@ fn main() {
                 AppInstantiations,
             >::default(),
             FirestoreP2PPlugin::<AppPlayerData, AppPlayerInputData, AppInstantiations>::default(),
-            TextInputPlugin,
             CarController2dPlugin,
             AudioManagerPlugin::default(),
             TimerPlugin,
@@ -117,14 +166,58 @@ fn main() {
         .insert_resource(FinishTimes {
             times: HashMap::new(),
         })
-        .insert_resource(AssetHandles {
-            track_texture: Handle::default(),
-            traffic_light_texture: Handle::default(),
-            karts_texture: Handle::default(),
-            wheel_texture: Handle::default(),
-            crate_texture: Handle::default(),
-            items_texture: Handle::default(),
-            rocket_texture: Handle::default(),
+        .add_plugins(|app: &mut App| {
+            let asset_server = app.world().get_resource::<AssetServer>().unwrap().clone();
+            let mut texture_atlases = app
+                .world_mut()
+                .get_resource_mut::<Assets<TextureAtlasLayout>>()
+                .unwrap();
+            let asset_handles = AssetHandles {
+                menu_background_texture: asset_server.load("sprites/menu_background.png"),
+                logo_texture: asset_server.load("sprites/logo.png"),
+                buttons_texture: asset_server.load("sprites/buttons.png"),
+                buttons_atlas: texture_atlases.add(TextureAtlasLayout::from_grid(
+                    UVec2::new(64, 16),
+                    2,
+                    4,
+                    None,
+                    None,
+                )),
+                arrow_texture: asset_server.load("sprites/arrow.png"),
+                kick_texture: asset_server.load("sprites/kick.png"),
+                name_texture: asset_server.load("sprites/name.png"),
+                track_texture: asset_server.load("sprites/track.png"),
+                traffic_light_texture: asset_server.load("sprites/start_light.png"),
+                karts_texture: asset_server.load("sprites/karts.png"),
+                karts_atlas: texture_atlases.add(TextureAtlasLayout::from_grid(
+                    KART_SIZE,
+                    KART_COLORS_COUNT,
+                    1,
+                    None,
+                    None,
+                )),
+                wheel_texture: asset_server.load("sprites/wheel.png"),
+                crate_texture: asset_server.load("sprites/crate.png"),
+                items_texture: asset_server.load("sprites/items.png"),
+                rocket_texture: asset_server.load("sprites/rocket.png"),
+                background_elements_texture: asset_server.load("sprites/nature.png"),
+                background_elements_atlas: texture_atlases.add(TextureAtlasLayout::from_grid(
+                    UVec2::splat(8),
+                    BACKGROUND_ELEMENT_TYPES_COUNT as u32,
+                    1,
+                    None,
+                    None,
+                )),
+                clouds_texture: asset_server.load("sprites/clouds.png"),
+                clouds_atlas: texture_atlases.add(TextureAtlasLayout::from_grid(
+                    UVec2::splat(32),
+                    2,
+                    1,
+                    None,
+                    None,
+                )),
+            };
+            app.insert_resource(asset_handles);
         })
         .add_systems(Update, emit_easy_updates.in_set(EasyP2PSystemSet::Emit))
         .add_systems(Update, on_lobby_created.after(EasyP2PSystemSet::Emit))
@@ -134,6 +227,7 @@ fn main() {
         .add_systems(OnEnter(AppState::Game), spawn_track)
         .add_systems(OnExit(AppState::Game), spawn_lobby)
         .add_systems(Update, (send_inputs, cursor_positon_log))
+        .insert_resource(ClearColor(AppColors::Grass.color()))
         .run();
 }
 
@@ -199,7 +293,10 @@ fn on_instantiation(mut commands: Commands, mut easy: KartEasyP2P) {
             AppInstantiations::Kart(id) => {
                 commands.run_system_cached_with(
                     spawn_kart,
-                    (NetworkedEntity::new(*id, data.uuid), data.transform),
+                    (
+                        KartControlType::Player(NetworkedEntity::new(*id, data.uuid)),
+                        data.transform,
+                    ),
                 );
             }
             AppInstantiations::ItemPickup(item) => {
@@ -223,24 +320,13 @@ fn on_instantiation(mut commands: Commands, mut easy: KartEasyP2P) {
     }
 }
 
-fn setup(
-    mut commands: Commands,
-    mut handles: ResMut<AssetHandles>,
-    asset_server: Res<AssetServer>,
-) {
+fn setup(mut commands: Commands) {
     let mut projection = OrthographicProjection::default_2d();
     projection.scaling_mode = bevy::camera::ScalingMode::Fixed {
-        width: 256.,
-        height: 144.,
+        width: RESOLUTION.x,
+        height: RESOLUTION.y,
     };
     commands.spawn((Camera2d, Projection::Orthographic(projection)));
-    handles.track_texture = asset_server.load("sprites/track.png");
-    handles.traffic_light_texture = asset_server.load("sprites/traffic_light.png");
-    handles.karts_texture = asset_server.load("sprites/karts.png");
-    handles.wheel_texture = asset_server.load("sprites/wheel.png");
-    handles.crate_texture = asset_server.load("sprites/crate.png");
-    handles.rocket_texture = asset_server.load("sprites/rocket.png");
-    handles.items_texture = asset_server.load("sprites/items.png");
 }
 
 fn cursor_positon_log(

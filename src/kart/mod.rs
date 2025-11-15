@@ -1,9 +1,12 @@
-use crate::car_controller_2d::{CarController2d, CarControllerDisabled};
+use crate::car_controller_2d::{CarController2d, CarControllerDisabled, CarControllerInputs};
+use crate::menu::lobby::LobbyCar;
 use crate::{AppP2PUpdate, KartEasyP2P, NetworkedEntity, car_controller_2d::CarController2dWheel};
-use crate::{AppState, AssetHandles, SpriteLayers};
+use crate::{AppPlayerData, AppState, AssetHandles, SpriteLayers};
 use avian2d::prelude::*;
 use bevy::prelude::*;
+use bevy_bundled_observers::observers;
 use bevy_easy_p2p::prelude::*;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 pub struct KartPlugin;
 
@@ -63,16 +66,21 @@ pub enum WheelRotation {
 #[derive(Message, Clone, Debug, Serialize, Deserialize)]
 struct WheelPositionUpdate(NetworkedId, WheelRotation);
 
+#[derive(Component)]
+pub struct AutoCar;
+
+pub enum KartControlType {
+    Player(NetworkedEntity),
+    AutoCar,
+    LobbyCar(NetworkedId, Option<usize>),
+}
+
 pub(crate) fn spawn_kart(
-    In((networked_entity, transform)): In<(NetworkedEntity, Transform)>,
+    In((control_type, transform)): In<(KartControlType, Transform)>,
     mut commands: Commands,
     easy: KartEasyP2P,
     asset_handles: Res<AssetHandles>,
-    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
-    let player = easy.get_player_data(networked_entity.owner_id().clone());
-    let layout = TextureAtlasLayout::from_grid(KART_SIZE, KART_COLORS_COUNT, 1, None, None);
-    let texture_atlas_layout = texture_atlas_layouts.add(layout);
     let half_car_width = 2.5;
     let half_car_length = 3.;
     let id = commands
@@ -82,18 +90,7 @@ pub(crate) fn spawn_kart(
             RigidBody::Dynamic,
             Collider::rectangle(4., 8.),
             transform,
-            NetworkedTransform,
-            networked_entity,
             CarController2d::new(1.),
-            CarControllerDisabled,
-            LapsCounter(0),
-            Sprite::from_atlas_image(
-                asset_handles.karts_texture.clone(),
-                TextureAtlas {
-                    layout: texture_atlas_layout,
-                    index: player.kart_color.to_u32() as usize,
-                },
-            ),
             Visibility::Inherited,
             children![
                 (
@@ -135,14 +132,138 @@ pub(crate) fn spawn_kart(
             ],
         ))
         .id();
-    commands.spawn((
-        DespawnOnExit(AppState::Game),
-        FollowTransform(id),
-        children![(
-            Text2d::new(player.name),
-            Transform::from_xyz(0., 5., SpriteLayers::AboveCar.to_z()).with_scale(Vec3::splat(0.1)),
-        )],
-    ));
+    match control_type {
+        KartControlType::Player(networked_entity) => {
+            let player = easy
+                .get_player_data(networked_entity.owner_id().clone())
+                .unwrap();
+            commands.entity(id).insert((
+                networked_entity,
+                CarControllerDisabled,
+                LapsCounter(0),
+                Sprite::from_atlas_image(
+                    asset_handles.karts_texture.clone(),
+                    TextureAtlas {
+                        layout: asset_handles.karts_atlas.clone(),
+                        index: player.kart_color.to_u32() as usize,
+                    },
+                ),
+                NetworkedTransform,
+            ));
+
+            commands.spawn((
+                DespawnOnExit(AppState::Game),
+                FollowTransform(id),
+                children![(
+                    Text2d::new(player.name),
+                    Transform::from_xyz(0., 5., SpriteLayers::AboveCar.to_z())
+                        .with_scale(Vec3::splat(0.1)),
+                )],
+            ));
+        }
+        KartControlType::AutoCar => {
+            commands.entity(id).insert((
+                Sprite::from_atlas_image(
+                    asset_handles.karts_texture.clone(),
+                    TextureAtlas {
+                        layout: asset_handles.karts_atlas.clone(),
+                        index: rand::rng().random_range(0..KART_COLORS_COUNT) as usize,
+                    },
+                ),
+                AutoCar,
+                CarControllerInputs {
+                    forward: true,
+                    ..default()
+                },
+                DespawnOnExit(P2PLobbyState::OutOfLobby),
+            ));
+        }
+        KartControlType::LobbyCar(networked_id, rank) => {
+            let is_local = easy.get_local_player_id().unwrap() == networked_id;
+            let is_host = easy.is_host();
+            let player = easy.get_player_data(networked_id).unwrap();
+            let name = if is_local { "(YOU)\n" } else { "" }.to_string() + &player.name;
+            let name = rank
+                .map(|r| format!("({})\n", r))
+                .unwrap_or_default()
+                .to_string()
+                + &name;
+
+            commands
+                .entity(id)
+                .insert((
+                    Sprite::from_atlas_image(
+                        asset_handles.karts_texture.clone(),
+                        TextureAtlas {
+                            layout: asset_handles.karts_atlas.clone(),
+                            index: 0,
+                        },
+                    ),
+                    LobbyCar(networked_id),
+                    DespawnOnExit(P2PLobbyState::InLobby),
+                    DespawnOnExit(AppState::OutOfGame),
+                ))
+                .remove::<Collider>();
+
+            let mut ui = commands.spawn((
+                Visibility::Inherited,
+                FollowTransform(id),
+                children![(
+                    Text2d::new(name),
+                    TextLayout::new_with_justify(Justify::Center),
+                    Transform::from_xyz(0., 5., SpriteLayers::AboveCar.to_z())
+                        .with_scale(Vec3::splat(0.1)),
+                ),],
+            ));
+            if is_local {
+                ui.with_children(|parent| {
+                    parent.spawn((
+                        Transform::from_xyz(-6., 0., SpriteLayers::Car.to_z()),
+                        Button,
+                        Sprite {
+                            image: asset_handles.arrow_texture.clone(),
+                            flip_x: true,
+                            ..default()
+                        },
+                        Pickable::default(),
+                        observers!(|_: On<Pointer<Press>>, mut easy: KartEasyP2P| {
+                            let local_player_data = easy.get_local_player_data();
+                            easy.set_local_player_data(AppPlayerData {
+                                name: local_player_data.name,
+                                kart_color: local_player_data.kart_color.left(),
+                            });
+                        }),
+                    ));
+                    parent.spawn((
+                        Transform::from_xyz(6., 0., SpriteLayers::Car.to_z()),
+                        Button,
+                        Sprite::from_image(asset_handles.arrow_texture.clone()),
+                        Pickable::default(),
+                        observers![|_: On<Pointer<Press>>, mut easy: KartEasyP2P| {
+                            let local_player_data = easy.get_local_player_data();
+                            easy.set_local_player_data(AppPlayerData {
+                                name: local_player_data.name,
+                                kart_color: local_player_data.kart_color.right(),
+                            });
+                        },],
+                    ));
+                });
+            } else if is_host {
+                ui.with_child((
+                    Transform::from_xyz(0., -6., SpriteLayers::Car.to_z()),
+                    Button,
+                    Sprite::from_image(asset_handles.kick_texture.clone()),
+                    Pickable::default(),
+                    networked_id,
+                    observers![|trigger: On<Pointer<Press>>,
+                                mut easy: KartEasyP2P,
+                                ids: Query<&NetworkedId>| {
+                        easy.kick(*ids.get(trigger.event_target()).unwrap());
+                    },],
+                ));
+            }
+        }
+    }
 }
 
 fn sync_wheel_rotation(

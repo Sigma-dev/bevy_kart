@@ -48,6 +48,49 @@
             gap: 48px;
         }
 
+        .loading-text {
+            margin-top: 48px;
+            font-family: monospace;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            -webkit-font-smoothing: none;
+            -moz-osx-font-smoothing: auto;
+            text-transform: uppercase;
+        }
+
+        .loading-text .dots {
+            display: inline-block;
+            width: 32px;
+        }
+
+        .loading-text .dot {
+            opacity: 0.2;
+            animation: dot 900ms steps(1, end) infinite;
+        }
+
+        .loading-text .dot:nth-child(2) {
+            animation-delay: 300ms;
+        }
+
+        .loading-text .dot:nth-child(3) {
+            animation-delay: 600ms;
+        }
+
+        @keyframes dot {
+            0% {
+                opacity: 0.2;
+            }
+
+            50% {
+                opacity: 1;
+            }
+
+            100% {
+                opacity: 0.2;
+            }
+        }
+
         .kart-row {
             width: 128px;
             height: 64px;
@@ -175,6 +218,11 @@
                     </div>
                 </div>
             </div>
+        </div>
+        <div class="loading-text" aria-live="polite" aria-label="Loading">
+            Loading<span class="dots">
+                <span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>
+            </span>
         </div>
     </div>
 

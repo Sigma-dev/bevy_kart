@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <style>
+        /* Styles for the loading screen */
+        :root {
+            --web-bg-color: #323353;
+            --web-color: white;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            border: 0;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+        }
+
+        .center {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+
+        body {
+            background-color: var(--web-bg-color);
+            color: var(--web-color);
+        }
+
+        canvas {
+            outline: none;
+            width: 100% !important;
+            height: 100% !important;
+        }
+
+        .spinner {
+            display: flex;
+            flex-direction: column;
+            gap: 48px;
+        }
+
+        .kart-row {
+            width: 128px;
+            height: 64px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: visible;
+        }
+
+        .kart-anim {
+            width: 128px;
+            height: 64px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            animation: overtake 600ms cubic-bezier(0.21, 0, 0.79, 1) infinite alternate;
+        }
+
+        .kart-anim.alt {
+            animation-delay: -300ms;
+        }
+
+        @keyframes overtake {
+            0% {
+                transform: translateX(-48px);
+            }
+
+            100% {
+                transform: translateX(48px);
+            }
+        }
+
+        .kart-wrapper {
+            width: 128px;
+            height: 64px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .kart-container {
+            position: relative;
+            width: 64px;
+            height: 128px;
+            transform: rotate(90deg);
+            transform-origin: center center;
+        }
+
+        .kart-sprite {
+            position: relative;
+            z-index: 0;
+            width: 64px;
+            height: 128px;
+            background-image: url("assets/sprites/karts.png");
+            background-size: 640px 128px;
+            background-position: 0 0;
+            background-repeat: no-repeat;
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: crisp-edges;
+        }
+
+        .kart-sprite.sprite-2 {
+            background-position: -64px 0;
+        }
+
+        .wheel {
+            position: absolute;
+            background-color: #2e222f;
+            width: 16px;
+            height: 32px;
+            transform: translate(-50%, -50%);
+            z-index: 1;
+        }
+
+        .wheel-front-right {
+            left: 72px;
+            top: 32px;
+        }
+
+        .wheel-front-left {
+            left: -8px;
+            top: 32px;
+        }
+
+        .wheel-back-right {
+            left: 72px;
+            top: 112px;
+        }
+
+        .wheel-back-left {
+            left: -8px;
+            top: 112px;
+        }
+    </style>
+</head>
+
+<body class="center">
+    <noscript>JavaScript support is required to run this app</noscript>
+    <div id="loading-screen" class="center">
+        <div class="spinner">
+            <div class="kart-row">
+                <div class="kart-anim">
+                    <div class="kart-wrapper">
+                        <div class="kart-container">
+                            <div class="kart-sprite" role="img" aria-label="Loading kart 1"></div>
+                            <div class="wheel wheel-front-right"></div>
+                            <div class="wheel wheel-front-left"></div>
+                            <div class="wheel wheel-back-right"></div>
+                            <div class="wheel wheel-back-left"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="kart-row">
+                <div class="kart-anim alt">
+                    <div class="kart-wrapper">
+                        <div class="kart-container">
+                            <div class="kart-sprite sprite-2" role="img" aria-label="Loading kart 2"></div>
+                            <div class="wheel wheel-front-right"></div>
+                            <div class="wheel wheel-front-left"></div>
+                            <div class="wheel wheel-back-right"></div>
+                            <div class="wheel wheel-back-left"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // Automatically restart the audio context after user interaction
+        // Needs to be executed _before_ the game is loaded
+        // Taken from https://developer.chrome.com/blog/web-audio-autoplay/#moving-forward
+        (function () {
+            // An array of all contexts to resume on the page
+            const audioContextList = [];
+
+            // An array of various user interaction events we should listen for
+            const userInputEventNames = [
+                "click",
+                "contextmenu",
+                "auxclick",
+                "dblclick",
+                "mousedown",
+                "mouseup",
+                "pointerup",
+                "touchend",
+                "keydown",
+                "keyup",
+            ];
+
+            // A proxy object to intercept AudioContexts and
+            // add them to the array for tracking and resuming later
+            self.AudioContext = new Proxy(self.AudioContext, {
+                construct(target, args) {
+                    const result = new target(...args);
+                    audioContextList.push(result);
+                    return result;
+                },
+            });
+
+            // To resume all AudioContexts being tracked
+            function resumeAllContexts(event) {
+                let count = 0;
+
+                audioContextList.forEach((context) => {
+                    if (context.state !== "running") {
+                        context.resume();
+                    } else {
+                        count++;
+                    }
+                });
+
+                // If all the AudioContexts have now resumed then we
+                // unbind all the event listeners from the page to prevent
+                // unnecessary resume attempts
+                if (count == audioContextList.length) {
+                    userInputEventNames.forEach((eventName) => {
+                        document.removeEventListener(eventName, resumeAllContexts);
+                    });
+                }
+            }
+
+            // We bind the resume function for each user interaction
+            // event on the page
+            userInputEventNames.forEach((eventName) => {
+                document.addEventListener(eventName, resumeAllContexts);
+            });
+        })();
+    </script>
+
+    <script type="module">
+        // Starting the game
+
+        // When this file is used as the default `index.html`, the CLI will automatically replace
+        // `bevy_app.js` with the name of the generated JS entrypoint. If you copy this file and
+        // customize it, you will need to manually change the name. For more information, please see
+        // <https://thebevyflock.github.io/bevy_cli/cli/web/default-index-html.html>!
+        import init from "./build/bevy_kart.js";
+        init().catch((error) => {
+            if (
+                !error.message.startsWith(
+                    "Using exceptions for control flow, don't mind me. This isn't actually an error!"
+                )
+            ) {
+                throw error;
+            }
+        });
+    </script>
+
+    <script type="module">
+        // Hide loading screen when the game starts.
+        const loading_screen = document.getElementById("loading-screen");
+        const observer = new MutationObserver((records) => {
+            for (const record of records) {
+                for (const addedNode of record.addedNodes) {
+                    if (addedNode instanceof HTMLCanvasElement) {
+                        if (addedNode.innerText.trim().length === 0) {
+                            // Add compatibility note
+                            addedNode.innerText =
+                                "Canvas support is required to run this app";
+                        }
+
+                        // A new canvas has been created, which means that the game has been loaded
+                        // Hide the loading screen!
+                        loading_screen.style.display = "none";
+                        observer.disconnect();
+                        return;
+                    }
+                }
+            }
+        });
+
+        observer.observe(document.body, {
+            subtree: false,
+            childList: true,
+            attributes: false,
+            characterData: false,
+        });
+    </script>
+</body>
+
+</html>

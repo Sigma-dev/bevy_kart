@@ -1,5 +1,5 @@
-use bevy::prelude::*;
 use crate::{ClientId, EasyP2PSystemSet, P2PTransport};
+use bevy::prelude::*;
 use bevy_webrtc::{ConnectionId, WebRtc, WebRtcPlugin};
 use serde_json::json;
 use std::cell::RefCell;
@@ -311,7 +311,7 @@ fn apply_firestore_doc(doc: &serde_json::Value, sig: &mut SignalingState, webrtc
                     if let Some(val) = answers.get(&cid) {
                         if let Some(sdp) = val.get("stringValue").and_then(|v| v.as_str()) {
                             if let Some(target) = sig.offer_conn {
-                                webrtc.set_remote_answer(target, sdp.to_string());
+                                webrtc.accept_answer(target, sdp.to_string());
                                 sig.client_answer_applied = true;
                             } else {
                                 warn!(
@@ -345,4 +345,3 @@ impl P2PTransport for FirestoreWebRtcTransport {
 }
 
 // Roster broadcasting is now handled in bevy_easy_p2p; transport only emits OnTransportRosterChanged
-

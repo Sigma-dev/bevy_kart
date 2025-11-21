@@ -1,6 +1,6 @@
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::prelude::*;
-use bevy::input::{keyboard::Key, ButtonInput};
+use bevy::input::{ButtonInput, keyboard::Key};
 use bevy::prelude::*;
 use bevy::time::common_conditions::on_timer;
 use bevy_webrtc::prelude::*;
@@ -138,7 +138,7 @@ fn handle_keyboard_input(
                 if let Some(answer_sdp_encoded) = prompt("Enter the answer SDP (base64):") {
                     match decode_sdp_from_base64(&answer_sdp_encoded) {
                         Some(answer_sdp) => {
-                            webrtc.set_remote_answer(*id, answer_sdp);
+                            webrtc.accept_answer(*id, answer_sdp);
                         }
                         None => {
                             alert(
@@ -165,20 +165,20 @@ fn process_webrtc_events(
     mut ping_writer: MessageWriter<PingUpdate>,
     mut state: ResMut<NextState<ConnectionState>>,
 ) {
-    let events = webrtc.drain_events();
+    let events = webrtc.read_updates();
     for event in events {
         match event {
-            WebRtcEvent::LocalSdp { sdp, .. } => {
+            WebRtcUpdate::LocalSdp { sdp, .. } => {
                 let encoded = encode_sdp_to_base64(&sdp);
                 alert(&format!("Share this SDP offer (base64):\n\n{}", encoded));
             }
-            WebRtcEvent::IncomingData { id, text } => {
-                if let Some(origin_str) = text.strip_prefix("PING:") {
+            WebRtcUpdate::IncomingData { id, data } => {
+                if let Some(origin_str) = data.strip_prefix("PING:") {
                     if let Ok(origin) = origin_str.parse::<f64>() {
                         let response = format!("PONG:{}:{}", origin, now_epoch_ms());
                         webrtc.send_text(id, response);
                     }
-                } else if let Some(rest) = text.strip_prefix("PONG:") {
+                } else if let Some(rest) = data.strip_prefix("PONG:") {
                     let mut parts = rest.splitn(2, ':');
                     if let (Some(origin_str), Some(remote_str)) = (parts.next(), parts.next()) {
                         if let (Ok(origin), Ok(remote)) =
@@ -192,10 +192,10 @@ fn process_webrtc_events(
                     }
                 }
             }
-            WebRtcEvent::ConnectionOpen(id) => {
+            WebRtcUpdate::ConnectionOpen(id) => {
                 state.set(ConnectionState::Connected(id));
             }
-            WebRtcEvent::ConnectionClosed(_) => {
+            WebRtcUpdate::ConnectionClosed(_) => {
                 ping_display.0 = None;
                 state.set(ConnectionState::NoConnection);
             }

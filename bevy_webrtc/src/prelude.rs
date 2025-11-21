@@ -1,1 +1,1 @@
-pub use crate::{ConnectionId, WebRtc, WebRtcEvent, WebRtcPlugin};
+pub use crate::{ConnectionId, WebRtc, WebRtcPlugin, WebRtcUpdate};

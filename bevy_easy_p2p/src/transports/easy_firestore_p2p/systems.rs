@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_webrtc::{ConnectionId, WebRtc, WebRtcEvent};
+use bevy_webrtc::{ConnectionId, WebRtc, WebRtcUpdate};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::{ClientId, EasyP2PTransportIo, ExitReason};
@@ -161,14 +161,11 @@ pub(crate) fn handle_webrtc_events<PlayerData, PlayerInputData, Instantiations>(
     mut io: EasyP2PTransportIo<PlayerData, PlayerInputData, Instantiations>,
     q_conns: Query<(Entity, &NetConnection)>,
 ) {
-    let events = webrtc.drain_events();
-    if events.is_empty() {
-        return;
-    }
+    let updates = webrtc.read_updates();
 
-    for event in events {
-        match event {
-            WebRtcEvent::LocalSdp { id, sdp } => {
+    for update in updates {
+        match update {
+            WebRtcUpdate::LocalSdp { id, sdp } => {
                 if q_conns.iter().all(|(_, c)| c.id != id) {
                     commands.spawn(NetConnection { id });
                 }
@@ -198,7 +195,7 @@ pub(crate) fn handle_webrtc_events<PlayerData, PlayerInputData, Instantiations>(
                     }
                 }
             }
-            WebRtcEvent::ConnectionOpen(id) => {
+            WebRtcUpdate::ConnectionOpen(id) => {
                 if sig.is_host {
                     if let Some(cid_str) = sig.host_connection_to_client_id.get(&id.0).cloned() {
                         sig.joined_clients.insert(cid_str);
@@ -212,7 +209,7 @@ pub(crate) fn handle_webrtc_events<PlayerData, PlayerInputData, Instantiations>(
                     sig.client_emitted_join = true;
                 }
             }
-            WebRtcEvent::ConnectionClosed(id) => {
+            WebRtcUpdate::ConnectionClosed(id) => {
                 for (e, c) in q_conns.iter() {
                     if c.id == id {
                         commands.entity(e).despawn();
@@ -229,15 +226,15 @@ pub(crate) fn handle_webrtc_events<PlayerData, PlayerInputData, Instantiations>(
                     io.emit_lobby_exit(ExitReason::Disconnected);
                 }
             }
-            WebRtcEvent::IncomingData { id, text } => {
+            WebRtcUpdate::IncomingData { id, data } => {
                 if sig.is_host {
                     if let Some(cid_str) = sig.host_connection_to_client_id.get(&id.0) {
                         if let Ok(cid) = cid_str.parse::<ClientId>() {
-                            io.emit_incoming_from_client(cid, text.clone());
+                            io.emit_incoming_from_client(cid, data.clone());
                         }
                     }
                 } else {
-                    io.emit_incoming_from_host(text.clone());
+                    io.emit_incoming_from_host(data.clone());
                 }
             }
         }

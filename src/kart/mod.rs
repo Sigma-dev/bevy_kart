@@ -1,7 +1,7 @@
 use crate::car_controller_2d::{CarController2d, CarControllerDisabled, CarControllerInputs};
 use crate::menu::lobby::LobbyCar;
 use crate::{AppP2PUpdate, KartEasyP2P, NetworkedEntity, car_controller_2d::CarController2dWheel};
-use crate::{AppPlayerData, AppState, AssetHandles, SpriteLayers};
+use crate::{AppPlayerData, AppState, AssetHandles, KartP2PData, SpriteLayers};
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy_bundled_observers::observers;
@@ -12,15 +12,15 @@ pub struct KartPlugin;
 
 impl Plugin for KartPlugin {
     fn build(&self, app: &mut App) {
-        app.init_networked_event::<WheelPositionUpdate>()
+        app.init_networked_event::<WheelPositionUpdate, KartP2PData>()
             .add_systems(
                 Update,
                 (
                     sync_wheel_rotation,
                     receive_wheel_rotation,
                     follow_transform,
-                    sync_wheel_rotation.after(EasyP2PSystemSet::Emit),
-                    receive_wheel_rotation.after(EasyP2PSystemSet::Emit),
+                    sync_wheel_rotation,
+                    receive_wheel_rotation,
                 ),
             );
     }

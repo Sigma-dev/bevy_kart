@@ -1,72 +1,24 @@
-use crate::{EasyP2P, NetworkedEntity, NetworkedEventsExt, P2PTransport};
+use crate::{
+    EasyP2P, NetworkedEntity, NetworkedEventsExt,
+    api::EasyP2PData,
+    schedules::{EasyHydrate, EasyProcess},
+};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub struct NetworkedTransformPlugin<
-    T: P2PTransport,
-    PlayerData: Serialize
-        + for<'de> Deserialize<'de>
-        + Clone
-        + Send
-        + Sync
-        + core::fmt::Debug
-        + 'static
-        + Default
-        + PartialEq,
-    PlayerInputData: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
-    Instantiations: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
->(std::marker::PhantomData<(T, PlayerData, PlayerInputData, Instantiations)>);
+pub struct NetworkedTransformPlugin<T: EasyP2PData>(std::marker::PhantomData<T>);
 
-impl<T, PlayerData, PlayerInputData, Instantiations> Default
-    for NetworkedTransformPlugin<T, PlayerData, PlayerInputData, Instantiations>
-where
-    T: P2PTransport,
-    PlayerData: Serialize
-        + for<'de> Deserialize<'de>
-        + Clone
-        + Send
-        + Sync
-        + core::fmt::Debug
-        + 'static
-        + Default
-        + PartialEq,
-    PlayerInputData:
-        Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
-    Instantiations:
-        Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
-{
+impl<T: EasyP2PData> Default for NetworkedTransformPlugin<T> {
     fn default() -> Self {
         Self(std::marker::PhantomData)
     }
 }
 
-impl<T, PlayerData, PlayerInputData, Instantiations> Plugin
-    for NetworkedTransformPlugin<T, PlayerData, PlayerInputData, Instantiations>
-where
-    T: P2PTransport,
-    PlayerData: Serialize
-        + for<'de> Deserialize<'de>
-        + Clone
-        + Send
-        + Sync
-        + core::fmt::Debug
-        + 'static
-        + Default
-        + PartialEq,
-    PlayerInputData:
-        Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
-    Instantiations:
-        Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
-{
+impl<T: EasyP2PData> Plugin for NetworkedTransformPlugin<T> {
     fn build(&self, app: &mut App) {
-        app.init_networked_event::<OnNetworkedTransformUpdate>()
-            .add_systems(
-                Update,
-                (
-                    networked_transform::<T, PlayerData, PlayerInputData, Instantiations>,
-                    apply_networked_transform::<T, PlayerData, PlayerInputData, Instantiations>,
-                ),
-            );
+        app.init_networked_event::<OnNetworkedTransformUpdate, T>()
+            .add_systems(EasyHydrate, apply_networked_transform::<T>)
+            .add_systems(EasyProcess, send_networked_transform::<T>);
     }
 }
 
@@ -76,23 +28,8 @@ pub struct NetworkedTransform;
 #[derive(Message, Clone, Debug, Serialize, Deserialize)]
 struct OnNetworkedTransformUpdate(u64, (Vec3, Quat));
 
-fn networked_transform<
-    'w,
-    's,
-    T: P2PTransport,
-    PlayerData: Serialize
-        + for<'de> Deserialize<'de>
-        + Clone
-        + Send
-        + Sync
-        + core::fmt::Debug
-        + 'static
-        + Default
-        + PartialEq,
-    PlayerInputData: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
-    Instantiations: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
->(
-    easy: EasyP2P<'w, 's, T, PlayerData, PlayerInputData, Instantiations>,
+fn send_networked_transform<'w, 's, T: EasyP2PData>(
+    easy: EasyP2P<'w, 's, T>,
     transforms: Query<(&NetworkedEntity, &Transform), With<NetworkedTransform>>,
     mut events_w: MessageWriter<OnNetworkedTransformUpdate>,
 ) {
@@ -107,23 +44,8 @@ fn networked_transform<
     }
 }
 
-fn apply_networked_transform<
-    'w,
-    's,
-    T: P2PTransport,
-    PlayerData: Serialize
-        + for<'de> Deserialize<'de>
-        + Clone
-        + Send
-        + Sync
-        + core::fmt::Debug
-        + 'static
-        + Default
-        + PartialEq,
-    PlayerInputData: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
-    Instantiations: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + core::fmt::Debug + 'static,
->(
-    easy: EasyP2P<'w, 's, T, PlayerData, PlayerInputData, Instantiations>,
+fn apply_networked_transform<'w, 's, T: EasyP2PData>(
+    easy: EasyP2P<'w, 's, T>,
     mut transforms: Query<(&NetworkedEntity, &mut Transform), With<NetworkedTransform>>,
     mut events_r: MessageReader<OnNetworkedTransformUpdate>,
 ) {

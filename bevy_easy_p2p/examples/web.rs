@@ -1,28 +1,12 @@
 use bevy::input::{ButtonInput, keyboard::Key};
 use bevy::prelude::*;
-use bevy_easy_p2p::easy_firestore_p2p::{FirestoreP2PPlugin, FirestoreWebRtcTransport};
+use bevy_easy_p2p::easy_firestore_p2p::FirestoreP2PPlugin;
 use bevy_easy_p2p::prelude::*;
-use bevy_easy_p2p::{NetworkedEventsExt, NetworkedStatesExt};
+use bevy_easy_p2p::{EasyP2PData, NetworkedEventsExt, NetworkedStatesExt, P2PData};
 use serde::{Deserialize, Serialize};
 use web_sys::window;
 
-type DemoTransport = FirestoreWebRtcTransport;
-type DemoInput = ();
-type DemoSpawn = ();
-
-#[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
-enum DemoSyncedState {
-    #[default]
-    Waiting,
-    Ready,
-}
-
-#[derive(Message, Clone, Debug, Serialize, Deserialize)]
-struct DemoSyncedEvent {
-    text: String,
-}
-
-#[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct DemoPlayerData {
     name: String,
 }
@@ -35,6 +19,29 @@ impl DemoPlayerData {
             &self.name
         }
     }
+}
+
+#[derive(Clone, Debug, Default)]
+struct DemoP2PData;
+
+impl EasyP2PData for DemoP2PData {
+    type PlayerData = DemoPlayerData;
+    type PlayerInputData = ();
+    type Instantiations = ();
+}
+
+type DemoEasyP2P<'w, 's> = EasyP2P<'w, 's, DemoP2PData>;
+
+#[derive(States, Default, Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+enum DemoSyncedState {
+    #[default]
+    Waiting,
+    Ready,
+}
+
+#[derive(Message, Clone, Debug, Serialize, Deserialize)]
+struct DemoSyncedEvent {
+    text: String,
 }
 
 #[derive(Resource, Default)]
@@ -83,12 +90,12 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins((
-            EasyP2PPlugin::<DemoTransport, DemoPlayerData, DemoInput, DemoSpawn>::default(),
-            FirestoreP2PPlugin::<DemoPlayerData, DemoInput, DemoSpawn>::default(),
+            EasyP2PPlugin::<DemoP2PData>::default(),
+            FirestoreP2PPlugin::<P2PData<DemoP2PData>>::default(),
         ))
         .init_state::<DemoSyncedState>()
-        .init_networked_state::<DemoSyncedState>()
-        .init_networked_event::<DemoSyncedEvent>()
+        .init_networked_state::<DemoSyncedState, DemoP2PData>()
+        .init_networked_event::<DemoSyncedEvent, DemoP2PData>()
         .init_resource::<PingDisplay>()
         .insert_resource(StatusLog::default())
         .insert_resource(EventLog::default())
@@ -136,7 +143,7 @@ fn just_pressed_char(keys: &ButtonInput<Key>, ch: char) -> bool {
 fn handle_keyboard_input(
     keyboard: Res<ButtonInput<Key>>,
     lobby_state: Res<State<P2PLobbyState>>,
-    mut easy_p2p: EasyP2P<'_, '_, DemoTransport, DemoPlayerData, DemoInput, DemoSpawn>,
+    mut easy_p2p: DemoEasyP2P<'_, '_>,
     mut status: ResMut<StatusLog>,
     mut event_writer: MessageWriter<DemoSyncedEvent>,
     synced_state: Res<State<DemoSyncedState>>,
@@ -226,7 +233,7 @@ fn handle_keyboard_input(
 }
 
 fn process_easy_p2p_updates(
-    mut updates: MessageReader<EasyP2PUpdate<DemoPlayerData, DemoInput, DemoSpawn>>,
+    mut updates: MessageReader<EasyP2PUpdate<DemoP2PData>>,
     mut status: ResMut<StatusLog>,
 ) {
     for update in updates.read() {
@@ -413,4 +420,3 @@ fn update_ui(
             ));
         });
 }
-

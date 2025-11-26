@@ -1,104 +1,25 @@
 use bevy::prelude::*;
 use bevy_webrtc::{ConnectionId, WebRtc, WebRtcUpdate};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{ClientId, EasyP2PTransportIo, ExitReason};
+use crate::ClientId;
+use crate::transports::api::{EasyP2PTransportIo, EasyP2PTransportRequest, EasyP2PTransportUpdate};
 
+use super::structs::FirestoreInboxMessage;
 use super::{
     FIRESTORE_INBOX, FirestoreConfig, FirestoreShared, NetConnection, SignalingState,
     ensure_room_exists, gen_client_id_num, generate_room_code, write_answer, write_offer,
 };
 
-pub(crate) fn handle_create_join_requests<PlayerData, PlayerInputData, Instantiations>(
-    mut io: EasyP2PTransportIo<PlayerData, PlayerInputData, Instantiations>,
-    mut sig: ResMut<SignalingState>,
-    cfg: Res<FirestoreConfig>,
+fn cleanup_transport(
+    commands: &mut Commands,
+    webrtc: &mut WebRtc,
+    sig: &mut SignalingState,
+    shared: &mut FirestoreShared,
+    q_conns: &Query<(Entity, &NetConnection)>,
 ) {
-    if io.take_create_requests() > 0 {
-        let room = generate_room_code();
-        sig.room_code = room.clone();
-        sig.is_host = true;
-        sig.answered_clients.clear();
-        io.emit_lobby_created(room.clone());
-        io.emit_lobby_entered(room.clone());
-        let cfg = cfg.clone();
-        spawn_local(async move {
-            ensure_room_exists(&cfg, &room).await;
-            FIRESTORE_INBOX.with(|inbox| {
-                inbox
-                    .borrow_mut()
-                    .push(serde_json::json!({"__status":"created"}))
-            });
-        });
-    }
-
-    for room in io.take_join_requests() {
-        sig.room_code = room.clone();
-        sig.is_host = false;
-        sig.client_id = Some(gen_client_id_num().to_string());
-        sig.client_answer_applied = false;
-        sig.client_join_pending = true;
-    }
-}
-
-pub(crate) fn handle_send_requests<PlayerData, PlayerInputData, Instantiations>(
-    mut io: EasyP2PTransportIo<PlayerData, PlayerInputData, Instantiations>,
-    mut webrtc: WebRtc,
-    q_conns: Query<(Entity, &NetConnection)>,
-    sig: Res<SignalingState>,
-) {
-    for text in io.take_send_to_all() {
-        for (_, c) in q_conns.iter() {
-            webrtc.send_text(c.id, text.clone());
-        }
-    }
-
-    let host_payloads = io.take_send_to_host();
-    if let Some(single) = only_connection_ids(&q_conns) {
-        for text in host_payloads {
-            webrtc.send_text(single, text);
-        }
-    }
-
-    for (client_id, text) in io.take_send_to_client() {
-        if !sig.is_host {
-            continue;
-        }
-        let target = client_id.to_string();
-        if let Some((&conn_raw, _)) = sig
-            .host_connection_to_client_id
-            .iter()
-            .find(|(_, cid)| *cid == &target)
-        {
-            let id = ConnectionId(conn_raw);
-            webrtc.send_text(id, text);
-        }
-    }
-
-    for (sender, text) in io.take_relay_to_all_except() {
-        if !sig.is_host {
-            continue;
-        }
-        let sender_str = sender.to_string();
-        for (conn_raw, cid_str) in sig.host_connection_to_client_id.iter() {
-            if cid_str == &sender_str {
-                continue;
-            }
-            webrtc.send_text(ConnectionId(*conn_raw), text.clone());
-        }
-    }
-}
-
-pub(crate) fn handle_exit_requests<PlayerData, PlayerInputData, Instantiations>(
-    mut commands: Commands,
-    mut io: EasyP2PTransportIo<PlayerData, PlayerInputData, Instantiations>,
-    mut webrtc: WebRtc,
-    mut sig: ResMut<SignalingState>,
-    q_conns: Query<(Entity, &NetConnection)>,
-) {
-    if io.take_exit_requests() == 0 {
-        return;
-    }
     webrtc.close_all();
     for (e, _) in q_conns.iter() {
         commands.entity(e).despawn();
@@ -113,54 +34,149 @@ pub(crate) fn handle_exit_requests<PlayerData, PlayerInputData, Instantiations>(
     sig.client_join_pending = false;
     sig.client_emitted_join = false;
     sig.host_connection_to_client_id.clear();
+    shared.in_flight = false;
+    shared.next_allowed_fetch_at_ms = 0.0;
+    shared.not_found_logged = false;
+    shared.room_exists = false;
     FIRESTORE_INBOX.with(|inbox| inbox.borrow_mut().clear());
 }
 
-pub(crate) fn handle_kick_requests<PlayerData, PlayerInputData, Instantiations>(
+pub(crate) fn handle_transport_requests<Packet>(
     mut commands: Commands,
-    mut io: EasyP2PTransportIo<PlayerData, PlayerInputData, Instantiations>,
+    mut io: EasyP2PTransportIo<Packet>,
     mut webrtc: WebRtc,
     mut sig: ResMut<SignalingState>,
+    mut shared: ResMut<FirestoreShared>,
+    cfg: Res<FirestoreConfig>,
     q_conns: Query<(Entity, &NetConnection)>,
-) {
-    for client_id in io.take_kick_requests() {
-        if !sig.is_host {
-            continue;
-        }
-        let target = client_id.to_string();
-        let mut to_remove: Option<u64> = None;
-        for (cid_conn, cid_str) in sig.host_connection_to_client_id.iter() {
-            if cid_str == &target {
-                to_remove = Some(*cid_conn);
-                break;
+) where
+    Packet: Send + Sync + 'static + Serialize + DeserializeOwned,
+{
+    let mut updates = Vec::new();
+    for req in io.take_requests() {
+        match req {
+            EasyP2PTransportRequest::CreateLobby => {
+                let room = generate_room_code();
+                sig.room_code = room.clone();
+                sig.is_host = true;
+                sig.answered_clients.clear();
+                updates.push(EasyP2PTransportUpdate::LobbyCreated(room.clone()));
+
+                let cfg = cfg.clone();
+                spawn_local(async move {
+                    ensure_room_exists(&cfg, &room).await;
+                    FIRESTORE_INBOX.with(|inbox| {
+                        inbox
+                            .borrow_mut()
+                            .push(FirestoreInboxMessage::RoomCreated)
+                    });
+                });
+            }
+            EasyP2PTransportRequest::JoinLobby(room) => {
+                sig.room_code = room.clone();
+                sig.is_host = false;
+                sig.client_id = Some(gen_client_id_num().to_string());
+                sig.client_answer_applied = false;
+                sig.client_join_pending = true;
+            }
+            EasyP2PTransportRequest::SendToAll(packet) => {
+                if let Ok(text) = serde_json::to_string(packet) {
+                    for (_, c) in q_conns.iter() {
+                        webrtc.send_text(c.id, text.clone());
+                    }
+                }
+            }
+            EasyP2PTransportRequest::SendToHost(packet) => {
+                if let Ok(text) = serde_json::to_string(packet) {
+                    if let Some(single) = only_connection_ids(&q_conns) {
+                        webrtc.send_text(single, text);
+                    }
+                }
+            }
+            EasyP2PTransportRequest::SendToClient(client_id, packet) => {
+                if !sig.is_host {
+                    continue;
+                }
+                if let Ok(text) = serde_json::to_string(packet) {
+                    let target = client_id.to_string();
+                    if let Some((&conn_raw, _)) = sig
+                        .host_connection_to_client_id
+                        .iter()
+                        .find(|(_, cid)| *cid == &target)
+                    {
+                        webrtc.send_text(ConnectionId(conn_raw), text);
+                    }
+                }
+            }
+            EasyP2PTransportRequest::SendToAllExcept(except_cid, packet) => {
+                if !sig.is_host {
+                    continue;
+                }
+                if let Ok(text) = serde_json::to_string(packet) {
+                    let except_str = except_cid.to_string();
+                    for (conn_raw, cid_str) in sig.host_connection_to_client_id.iter() {
+                        if cid_str == &except_str {
+                            continue;
+                        }
+                        webrtc.send_text(ConnectionId(*conn_raw), text.clone());
+                    }
+                }
+            }
+            EasyP2PTransportRequest::ExitLobby => {
+                cleanup_transport(&mut commands, &mut webrtc, &mut sig, &mut shared, &q_conns);
+                updates.push(EasyP2PTransportUpdate::LobbyExited);
+            }
+            EasyP2PTransportRequest::Kick(client_id) => {
+                if !sig.is_host {
+                    continue;
+                }
+                let target = client_id.to_string();
+                let mut to_remove: Option<u64> = None;
+                for (cid_conn, cid_str) in sig.host_connection_to_client_id.iter() {
+                    if cid_str == &target {
+                        to_remove = Some(*cid_conn);
+                        break;
+                    }
+                }
+                if let Some(conn_raw) = to_remove {
+                    let conn = ConnectionId(conn_raw);
+                    webrtc.close(conn);
+                    for (e, c) in q_conns.iter() {
+                        if c.id == conn {
+                            commands.entity(e).despawn();
+                        }
+                    }
+                    sig.host_connection_to_client_id.remove(&conn_raw);
+                    sig.answered_clients.remove(&target);
+                    sig.joined_clients.remove(&target);
+
+                    let mut list: Vec<ClientId> = Vec::new();
+                    for cid_str in sig.joined_clients.iter() {
+                        if let Ok(cid) = cid_str.parse::<ClientId>() {
+                            list.push(cid);
+                        }
+                    }
+                    updates.push(EasyP2PTransportUpdate::RosterUpdated(list));
+                }
             }
         }
-        let Some(conn_raw) = to_remove else {
-            continue;
-        };
-        let conn = ConnectionId(conn_raw);
-        webrtc.close(conn);
-        for (e, c) in q_conns.iter() {
-            if c.id == conn {
-                commands.entity(e).despawn();
-            }
-        }
-        sig.host_connection_to_client_id.remove(&conn_raw);
-        sig.answered_clients.remove(&target);
-        sig.joined_clients.remove(&target);
-        let list: Vec<String> = sig.joined_clients.iter().cloned().collect();
-        io.emit_roster_changed(list);
+    }
+    for update in updates {
+        io.emit_update(update);
     }
 }
 
-pub(crate) fn handle_webrtc_events<PlayerData, PlayerInputData, Instantiations>(
+pub(crate) fn handle_webrtc_events<Packet>(
     mut commands: Commands,
     mut webrtc: WebRtc,
     mut sig: ResMut<SignalingState>,
+    mut shared: ResMut<FirestoreShared>,
     cfg: Res<FirestoreConfig>,
-    mut io: EasyP2PTransportIo<PlayerData, PlayerInputData, Instantiations>,
+    mut io: EasyP2PTransportIo<Packet>,
     q_conns: Query<(Entity, &NetConnection)>,
-) {
+) where
+    Packet: Send + Sync + 'static + Serialize + DeserializeOwned,
+{
     let updates = webrtc.read_updates();
 
     for update in updates {
@@ -199,13 +215,17 @@ pub(crate) fn handle_webrtc_events<PlayerData, PlayerInputData, Instantiations>(
                 if sig.is_host {
                     if let Some(cid_str) = sig.host_connection_to_client_id.get(&id.0).cloned() {
                         sig.joined_clients.insert(cid_str);
-                        let list: Vec<String> = sig.joined_clients.iter().cloned().collect();
-                        io.emit_roster_changed(list);
+                        let mut list: Vec<ClientId> = Vec::new();
+                        for cid_str in sig.joined_clients.iter() {
+                            if let Ok(cid) = cid_str.parse::<ClientId>() {
+                                list.push(cid);
+                            }
+                        }
+                        io.emit_update(EasyP2PTransportUpdate::RosterUpdated(list));
                     }
                 } else if !sig.client_emitted_join {
                     let room = sig.room_code.clone();
-                    io.emit_lobby_joined(room.clone());
-                    io.emit_lobby_entered(room);
+                    io.emit_update(EasyP2PTransportUpdate::LobbyJoined(room.clone()));
                     sig.client_emitted_join = true;
                 }
             }
@@ -219,58 +239,38 @@ pub(crate) fn handle_webrtc_events<PlayerData, PlayerInputData, Instantiations>(
                     if let Some(cid_str) = sig.host_connection_to_client_id.remove(&id.0) {
                         sig.answered_clients.remove(&cid_str);
                         sig.joined_clients.remove(&cid_str);
-                        let list: Vec<String> = sig.joined_clients.iter().cloned().collect();
-                        io.emit_roster_changed(list);
+                        let mut list: Vec<ClientId> = Vec::new();
+                        for cid_str in sig.joined_clients.iter() {
+                            if let Ok(cid) = cid_str.parse::<ClientId>() {
+                                list.push(cid);
+                            }
+                        }
+                        io.emit_update(EasyP2PTransportUpdate::RosterUpdated(list));
                     }
                 } else {
-                    io.emit_lobby_exit(ExitReason::Disconnected);
+                    cleanup_transport(&mut commands, &mut webrtc, &mut sig, &mut shared, &q_conns);
+                    io.emit_update(EasyP2PTransportUpdate::LobbyExited);
                 }
             }
             WebRtcUpdate::IncomingData { id, data } => {
-                if sig.is_host {
-                    if let Some(cid_str) = sig.host_connection_to_client_id.get(&id.0) {
-                        if let Ok(cid) = cid_str.parse::<ClientId>() {
-                            io.emit_incoming_from_client(cid, data.clone());
+                if let Ok(packet) = serde_json::from_str::<Packet>(&data) {
+                    if sig.is_host {
+                        if let Some(cid_str) = sig.host_connection_to_client_id.get(&id.0) {
+                            if let Ok(cid) = cid_str.parse::<ClientId>() {
+                                io.emit_update(EasyP2PTransportUpdate::MessageReceivedFromClient(
+                                    cid, packet,
+                                ));
+                            }
                         }
+                    } else {
+                        io.emit_update(EasyP2PTransportUpdate::MessageReceivedFromHost(packet));
                     }
                 } else {
-                    io.emit_incoming_from_host(data.clone());
+                    warn!("Failed to deserialize packet: {}", data);
                 }
             }
         }
     }
-}
-
-pub(crate) fn on_lobby_exit_cleanup<PlayerData, PlayerInputData, Instantiations>(
-    mut commands: Commands,
-    mut io: EasyP2PTransportIo<PlayerData, PlayerInputData, Instantiations>,
-    mut sig: ResMut<SignalingState>,
-    mut shared: ResMut<FirestoreShared>,
-    mut webrtc: WebRtc,
-    q_conns: Query<(Entity, &NetConnection)>,
-) {
-    if io.take_lobby_exit_events().is_empty() {
-        return;
-    }
-    webrtc.close_all();
-    for (e, _) in q_conns.iter() {
-        commands.entity(e).despawn();
-    }
-    sig.room_code.clear();
-    sig.is_host = false;
-    sig.answered_clients.clear();
-    sig.joined_clients.clear();
-    sig.client_id = None;
-    sig.client_answer_applied = false;
-    sig.offer_conn = None;
-    sig.client_join_pending = false;
-    sig.client_emitted_join = false;
-    sig.host_connection_to_client_id.clear();
-    shared.in_flight = false;
-    shared.next_allowed_fetch_at_ms = 0.0;
-    shared.not_found_logged = false;
-    shared.room_exists = false;
-    FIRESTORE_INBOX.with(|inbox| inbox.borrow_mut().clear());
 }
 
 fn only_connection_ids(q: &Query<(Entity, &NetConnection)>) -> Option<ConnectionId> {

@@ -1,7 +1,8 @@
-use crate::{ClientId, EasyP2PSystemSet, P2PTransport};
+use crate::schedules::{TransportHydrate, TransportProcess};
 use bevy::prelude::*;
 use bevy_webrtc::{ConnectionId, WebRtc, WebRtcPlugin};
-use serde_json::json;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use wasm_bindgen::JsCast;
@@ -9,10 +10,12 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Headers, Request, RequestInit, RequestMode, Response};
 
+mod structs;
 mod systems;
+use structs::*;
 
 thread_local! {
-    pub(crate) static FIRESTORE_INBOX: RefCell<Vec<serde_json::Value>> = RefCell::new(Vec::new());
+    pub(crate) static FIRESTORE_INBOX: RefCell<Vec<FirestoreInboxMessage>> = RefCell::new(Vec::new());
 }
 
 #[derive(Component, Copy, Clone)]
@@ -56,50 +59,29 @@ struct FirestoreShared {
     room_exists: bool,
 }
 
-pub struct FirestoreP2PPlugin<PlayerData, PlayerInputData, Instantiations>(
-    std::marker::PhantomData<(PlayerData, PlayerInputData, Instantiations)>,
-);
+pub struct FirestoreP2PPlugin<Packet>(std::marker::PhantomData<Packet>);
 
-impl<PlayerData, PlayerInputData, Instantiations> Default
-    for FirestoreP2PPlugin<PlayerData, PlayerInputData, Instantiations>
-{
+impl<Packet> Default for FirestoreP2PPlugin<Packet> {
     fn default() -> Self {
         Self(std::marker::PhantomData)
     }
 }
 
-impl<PlayerData, PlayerInputData, Instantiations> Plugin
-    for FirestoreP2PPlugin<PlayerData, PlayerInputData, Instantiations>
+impl<Packet> Plugin for FirestoreP2PPlugin<Packet>
 where
-    PlayerData: Send + Sync + 'static,
-    PlayerInputData: Send + Sync + 'static,
-    Instantiations: Send + Sync + 'static,
+    Packet: Send + Sync + 'static + Serialize + DeserializeOwned,
 {
     fn build(&self, app: &mut App) {
         app.init_resource::<FirestoreConfig>()
             .init_resource::<SignalingState>()
             .init_resource::<FirestoreShared>()
             .add_plugins(WebRtcPlugin)
+            .add_systems(TransportHydrate, systems::handle_webrtc_events::<Packet>)
             .add_systems(
-                PreUpdate,
-                systems::handle_webrtc_events::<PlayerData, PlayerInputData, Instantiations>,
+                TransportProcess,
+                systems::handle_transport_requests::<Packet>,
             )
-            .add_systems(
-                Update,
-                (
-                    systems::handle_send_requests::<PlayerData, PlayerInputData, Instantiations>,
-                    systems::handle_create_join_requests::<
-                        PlayerData,
-                        PlayerInputData,
-                        Instantiations,
-                    >,
-                    systems::handle_exit_requests::<PlayerData, PlayerInputData, Instantiations>,
-                    systems::handle_kick_requests::<PlayerData, PlayerInputData, Instantiations>,
-                    systems::on_lobby_exit_cleanup::<PlayerData, PlayerInputData, Instantiations>,
-                )
-                    .in_set(EasyP2PSystemSet::Transport),
-            )
-            .add_systems(Update, firestore_pump);
+            .add_systems(TransportHydrate, firestore_pump);
     }
 }
 
@@ -136,11 +118,11 @@ pub(crate) fn firestore_patch_url(cfg: &FirestoreConfig, room: &str, mask: &str)
     )
 }
 
-pub(crate) async fn http_fetch_json(
+pub(crate) async fn http_fetch_json<B: Serialize, R: DeserializeOwned>(
     method: &str,
     url: &str,
-    body: Option<serde_json::Value>,
-) -> Option<serde_json::Value> {
+    body: Option<&B>,
+) -> Option<R> {
     let window = web_sys::window()?;
     let init = RequestInit::new();
     init.set_method(method);
@@ -149,7 +131,8 @@ pub(crate) async fn http_fetch_json(
         let headers = Headers::new().ok()?;
         headers.set("Content-Type", "application/json").ok()?;
         init.set_headers(&headers);
-        init.set_body(&JsValue::from_str(&b.to_string()));
+        let body_str = serde_json::to_string(b).ok()?;
+        init.set_body(&JsValue::from_str(&body_str));
     }
     let request = Request::new_with_str_and_init(url, &init).ok()?;
     let resp_value = JsFuture::from(window.fetch_with_request(&request))
@@ -157,50 +140,75 @@ pub(crate) async fn http_fetch_json(
         .ok()?;
     let resp: Response = resp_value.dyn_into().ok()?;
     if !resp.ok() {
+        warn!("Fetch failed: {} {}", resp.status(), resp.status_text());
         return None;
     }
     let json = JsFuture::from(resp.json().ok()?).await.ok()?;
-    let val: serde_json::Value = serde_wasm_bindgen::from_value(json).ok()?;
-    Some(val)
+    match serde_wasm_bindgen::from_value(json) {
+        Ok(val) => Some(val),
+        Err(e) => {
+            warn!("Deserialization failed: {:?}", e);
+            None
+        }
+    }
 }
 
 pub(crate) async fn ensure_room_exists(cfg: &FirestoreConfig, room: &str) {
     let url = firestore_room_doc_url(cfg, room);
-    let body = json!({
-        "fields": {
-            "offers": {"mapValue": {"fields": {}}},
-            "answers": {"mapValue": {"fields": {}}}
-        }
-    });
-    let _ = http_fetch_json("PATCH", &url, Some(body)).await;
+    let body = FirestoreRoomDoc {
+        fields: FirestoreRoomFields::default(),
+    };
+    // We just use generic Value for the response here since we don't care about it
+    let _ = http_fetch_json::<_, serde_json::Value>("PATCH", &url, Some(&body)).await;
 }
 
 pub(crate) async fn write_offer(cfg: &FirestoreConfig, room: &str, client_id: &str, sdp: &str) {
     let url = firestore_patch_url(cfg, room, "offers");
-    let body = json!({
-        "fields": {
-            "offers": {"mapValue": {"fields": {
-                client_id: {"stringValue": sdp}
-            }}}
-        }
-    });
-    let _ = http_fetch_json("PATCH", &url, Some(body)).await;
+    let mut map = HashMap::new();
+    map.insert(
+        client_id.to_string(),
+        FirestoreStringValue {
+            string_value: sdp.to_string(),
+        },
+    );
+
+    let body = FirestorePatchOffers {
+        fields: FirestoreOffersField {
+            offers: FirestoreMapValue {
+                map_value: FirestoreMapFields { fields: map },
+            },
+        },
+    };
+    let _ = http_fetch_json::<_, serde_json::Value>("PATCH", &url, Some(&body)).await;
 }
 
 pub(crate) async fn write_answer(cfg: &FirestoreConfig, room: &str, client_id: &str, sdp: &str) {
     let url = firestore_patch_url(cfg, room, "answers");
-    let body = json!({
-        "fields": {
-            "answers": {"mapValue": {"fields": {
-                client_id: {"stringValue": sdp}
-            }}}
-        }
-    });
-    let _ = http_fetch_json("PATCH", &url, Some(body)).await;
+    let mut map = HashMap::new();
+    map.insert(
+        client_id.to_string(),
+        FirestoreStringValue {
+            string_value: sdp.to_string(),
+        },
+    );
+
+    let body = FirestorePatchAnswers {
+        fields: FirestoreAnswersField {
+            answers: FirestoreMapValue {
+                map_value: FirestoreMapFields { fields: map },
+            },
+        },
+    };
+    let _ = http_fetch_json::<_, serde_json::Value>("PATCH", &url, Some(&body)).await;
 }
 
-pub(crate) async fn read_room(cfg: &FirestoreConfig, room: &str) -> Option<serde_json::Value> {
-    http_fetch_json("GET", &firestore_room_doc_url(cfg, room), None).await
+pub(crate) async fn read_room(cfg: &FirestoreConfig, room: &str) -> Option<FirestoreInboxMessage> {
+    match http_fetch_json::<(), FirestoreRoomDoc>("GET", &firestore_room_doc_url(cfg, room), None)
+        .await
+    {
+        Some(doc) => Some(FirestoreInboxMessage::Doc(doc)),
+        None => Some(FirestoreInboxMessage::RoomNotFound),
+    }
 }
 
 pub(crate) fn now_ms() -> f64 {
@@ -217,23 +225,20 @@ fn firestore_pump(
         return;
     }
 
-    let mut drained_docs: Vec<serde_json::Value> = Vec::new();
+    let mut drained_msgs: Vec<FirestoreInboxMessage> = Vec::new();
     FIRESTORE_INBOX.with(|inbox| {
         let mut buf = inbox.borrow_mut();
-        drained_docs.extend(buf.drain(..));
+        drained_msgs.extend(buf.drain(..));
     });
-    if !drained_docs.is_empty() {
+    if !drained_msgs.is_empty() {
         shared.in_flight = false;
     }
-    for doc in drained_docs {
-        if let Some(status) = doc.get("__status").and_then(|v| v.as_str()) {
-            if status == "created" {
+    for msg in drained_msgs {
+        match msg {
+            FirestoreInboxMessage::RoomCreated => {
                 shared.room_exists = true;
-                continue;
             }
-        }
-        if let Some(status) = doc.get("__status").and_then(|v| v.as_str()) {
-            if status == "not_found" {
+            FirestoreInboxMessage::RoomNotFound => {
                 let now = now_ms();
                 if shared.next_allowed_fetch_at_ms < now + 1500.0 {
                     shared.next_allowed_fetch_at_ms = now + 1500.0;
@@ -245,18 +250,17 @@ fn firestore_pump(
                     );
                     shared.not_found_logged = true;
                 }
-                continue;
             }
-        }
-        if !doc.is_null() {
-            apply_firestore_doc(&doc, &mut sig, &mut webrtc);
-            // If we are a client waiting to join and the room exists, create offer only.
-            // Delay emitting OnLobbyJoined/OnLobbyEntered until data channel opens.
-            if sig.client_join_pending && !sig.is_host {
-                sig.client_join_pending = false;
-                sig.client_emitted_join = false;
-                let id = webrtc.create_offer();
-                sig.offer_conn = Some(id);
+            FirestoreInboxMessage::Doc(doc) => {
+                apply_firestore_doc(&doc, &mut sig, &mut webrtc);
+                // If we are a client waiting to join and the room exists, create offer only.
+                // Delay emitting OnLobbyJoined/OnLobbyEntered until data channel opens.
+                if sig.client_join_pending && !sig.is_host {
+                    sig.client_join_pending = false;
+                    sig.client_emitted_join = false;
+                    let id = webrtc.create_offer();
+                    sig.offer_conn = Some(id);
+                }
             }
         }
     }
@@ -273,75 +277,39 @@ fn firestore_pump(
     let room = sig.room_code.clone();
     let cfg_owned = cfg.clone();
     wasm_bindgen_futures::spawn_local(async move {
-        let result = read_room(&cfg_owned, &room).await;
-        let pushed = result.unwrap_or_else(|| serde_json::Value::Null);
-        FIRESTORE_INBOX.with(|inbox| inbox.borrow_mut().push(pushed));
+        if let Some(msg) = read_room(&cfg_owned, &room).await {
+            FIRESTORE_INBOX.with(|inbox| inbox.borrow_mut().push(msg));
+        } else {
+            // network error or something, maybe treat as not found or ignore
+            // currently ignoring
+            FIRESTORE_INBOX
+                .with(|inbox| inbox.borrow_mut().push(FirestoreInboxMessage::RoomNotFound));
+        }
     });
 }
 
-fn apply_firestore_doc(doc: &serde_json::Value, sig: &mut SignalingState, webrtc: &mut WebRtc) {
-    let fields = doc.get("fields");
-    if let Some(fields) = fields {
-        if sig.is_host {
-            if let Some(offers) = fields
-                .get("offers")
-                .and_then(|m| m.get("mapValue"))
-                .and_then(|m| m.get("fields"))
-            {
-                if let Some(map) = offers.as_object() {
-                    for (cid, val) in map.iter() {
-                        if sig.answered_clients.contains(cid) {
-                            continue;
-                        }
-                        if let Some(sdp) = val.get("stringValue").and_then(|v| v.as_str()) {
-                            let id = webrtc.create_answer(sdp.to_string());
-                            sig.answered_clients.insert(cid.clone());
-                            sig.host_connection_to_client_id.insert(id.0, cid.clone());
-                        }
-                    }
-                }
+fn apply_firestore_doc(doc: &FirestoreRoomDoc, sig: &mut SignalingState, webrtc: &mut WebRtc) {
+    if sig.is_host {
+        for (cid, val) in doc.fields.offers.map_value.fields.iter() {
+            if sig.answered_clients.contains(cid) {
+                continue;
             }
-        } else if let Some(cid) = sig.client_id.clone() {
-            if !sig.client_answer_applied {
-                if let Some(answers) = fields
-                    .get("answers")
-                    .and_then(|m| m.get("mapValue"))
-                    .and_then(|m| m.get("fields"))
-                {
-                    if let Some(val) = answers.get(&cid) {
-                        if let Some(sdp) = val.get("stringValue").and_then(|v| v.as_str()) {
-                            if let Some(target) = sig.offer_conn {
-                                webrtc.accept_answer(target, sdp.to_string());
-                                sig.client_answer_applied = true;
-                            } else {
-                                warn!(
-                                    "Received Firestore answer but no pending offer connection exists"
-                                );
-                            }
-                        }
-                    }
+            let sdp = &val.string_value;
+            let id = webrtc.create_answer(sdp.to_string());
+            sig.answered_clients.insert(cid.clone());
+            sig.host_connection_to_client_id.insert(id.0, cid.clone());
+        }
+    } else if let Some(cid) = sig.client_id.clone() {
+        if !sig.client_answer_applied {
+            if let Some(val) = doc.fields.answers.map_value.fields.get(&cid) {
+                let sdp = &val.string_value;
+                if let Some(target) = sig.offer_conn {
+                    webrtc.accept_answer(target, sdp.to_string());
+                    sig.client_answer_applied = true;
+                } else {
+                    warn!("Received Firestore answer but no pending offer connection exists");
                 }
             }
         }
     }
 }
-
-// Minimal P2PTransport impl (no-ops; actual work driven by systems above)
-pub struct FirestoreWebRtcTransport;
-
-impl P2PTransport for FirestoreWebRtcTransport {
-    type Error = ();
-    fn create_lobby(_world: &mut World) -> Result<String, Self::Error> {
-        Ok(String::new())
-    }
-    fn join_lobby(_world: &mut World, _code: &str) -> Result<(), Self::Error> {
-        Ok(())
-    }
-    fn exit_lobby(_world: &mut World) {}
-    fn send_to_host(_world: &mut World, _text: String) {}
-    fn send_to_all(_world: &mut World, _text: String) {}
-    fn kick(_world: &mut World, _client_id: ClientId) {}
-    fn poll_transport(_world: &mut World) {}
-}
-
-// Roster broadcasting is now handled in bevy_easy_p2p; transport only emits OnTransportRosterChanged

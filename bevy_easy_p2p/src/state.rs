@@ -1,3 +1,4 @@
+use crate::api::EasyP2PData;
 use bevy::{prelude::*, state::state::FreelyMutableState};
 use core::any::TypeId;
 use serde::{Deserialize, Serialize};
@@ -57,15 +58,15 @@ pub struct PlayerInfo<PlayerData> {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum P2PData<PlayerData, PlayerInputData, Instantiations> {
+pub enum P2PData<T: EasyP2PData> {
     ClientLobbyChatMessage(String, NetworkedId),
-    ClientInput(PlayerInputData),
-    ClientDataUpdate(PlayerData),
-    HostLobbyInfoUpdate(Vec<PlayerInfo<PlayerData>>),
+    ClientInput(T::PlayerInputData),
+    ClientDataUpdate(T::PlayerData),
+    HostLobbyInfoUpdate(Vec<PlayerInfo<T::PlayerData>>),
     ClientIdAssignment(NetworkedId),
     StateSync(u8, String),
     EventSync(u8, String),
-    HostInstantiation(InstantiationDataNet<Instantiations>),
+    HostInstantiation(InstantiationDataNet<T::Instantiations>),
     HostDespawn(u64),
     PingRequest(f32),
 }

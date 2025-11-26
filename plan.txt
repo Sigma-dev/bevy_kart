@@ -1,0 +1,4 @@
+Transport layer reads requests
+Transport layer emits updates:
+ - Someone quit
+ - Someone joined

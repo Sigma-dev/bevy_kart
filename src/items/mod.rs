@@ -10,7 +10,7 @@ use rand::seq::IndexedRandom;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AppInstantiations, AppState, AssetHandles, KartEasyP2P, SpriteLayers,
+    AppInstantiations, AppState, AssetHandles, KartEasyP2P, KartP2PData, SpriteLayers,
     car_controller_2d::{BoostEffect, CarController2d},
 };
 
@@ -31,8 +31,8 @@ impl Plugin for ItemsPlugin {
                 handle_explosion_car_spin,
             ),
         )
-        .init_networked_event::<ItemPickedUp>()
-        .init_networked_event::<RocketExploded>();
+        .init_networked_event::<ItemPickedUp, KartP2PData>()
+        .init_networked_event::<RocketExploded, KartP2PData>();
     }
 }
 

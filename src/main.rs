@@ -12,9 +12,9 @@ use bevy::asset::AssetMetaCheck;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_easy_p2p::easy_firestore_p2p::{FirestoreP2PPlugin, FirestoreWebRtcTransport};
-use bevy_easy_p2p::prelude::*;
-use bevy_easy_p2p::{EasyP2PSystemSet, EasyP2PUpdate, NetworkedId, NetworkedStatesExt};
+use bevy_easy_p2p::easy_firestore_p2p::FirestoreP2PPlugin;
+use bevy_easy_p2p::{EasyP2PData, P2PData, prelude::*};
+use bevy_easy_p2p::{EasyP2PUpdate, NetworkedId, NetworkedStatesExt};
 use bevy_ui_text_input::TextInputPlugin;
 use serde::{Deserialize, Serialize};
 
@@ -28,8 +28,16 @@ use car_controller_2d::CarController2dPlugin;
 
 const RESOLUTION: Vec2 = Vec2::new(256., 144.);
 
-pub type KartEasyP2P<'w, 's> =
-    EasyP2P<'w, 's, FirestoreWebRtcTransport, AppPlayerData, AppPlayerInputData, AppInstantiations>;
+#[derive(Clone, Debug, Default)]
+pub struct KartP2PData;
+
+impl EasyP2PData for KartP2PData {
+    type PlayerData = AppPlayerData;
+    type PlayerInputData = AppPlayerInputData;
+    type Instantiations = AppInstantiations;
+}
+
+pub type KartEasyP2P<'w, 's> = EasyP2P<'w, 's, KartP2PData>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AppPlayerData {
@@ -112,7 +120,7 @@ impl SpriteLayers {
 }
 
 #[derive(Clone, Message, Debug)]
-struct AppP2PUpdate(EasyP2PUpdate<AppPlayerData, AppPlayerInputData, AppInstantiations>);
+struct AppP2PUpdate(EasyP2PUpdate<KartP2PData>);
 
 pub enum AppColors {
     Dark,
@@ -147,13 +155,8 @@ fn main() {
         ))
         .insert_resource(Gravity::ZERO)
         .add_plugins((
-            EasyP2PPlugin::<
-                FirestoreWebRtcTransport,
-                AppPlayerData,
-                AppPlayerInputData,
-                AppInstantiations,
-            >::default(),
-            FirestoreP2PPlugin::<AppPlayerData, AppPlayerInputData, AppInstantiations>::default(),
+            EasyP2PPlugin::<KartP2PData>::default(),
+            FirestoreP2PPlugin::<P2PData<KartP2PData>>::default(),
             CarController2dPlugin,
             AudioManagerPlugin::default(),
             TimerPlugin,
@@ -161,7 +164,7 @@ fn main() {
         .add_plugins((MenuPlugin, TrackPlugin, ItemsPlugin, KartPlugin))
         .add_systems(Startup, (auto_join_from_url, setup))
         .init_state::<AppState>()
-        .init_networked_state::<AppState>()
+        .init_networked_state::<AppState, KartP2PData>()
         .add_message::<AppP2PUpdate>()
         .insert_resource(FinishTimes {
             times: HashMap::new(),
@@ -219,9 +222,9 @@ fn main() {
             };
             app.insert_resource(asset_handles);
         })
-        .add_systems(Update, emit_easy_updates.in_set(EasyP2PSystemSet::Emit))
-        .add_systems(Update, on_lobby_created.after(EasyP2PSystemSet::Emit))
-        .add_systems(Update, on_instantiation.after(EasyP2PSystemSet::Core))
+        .add_systems(Update, emit_easy_updates)
+        .add_systems(Update, on_lobby_created)
+        .add_systems(Update, on_instantiation)
         .add_systems(OnEnter(P2PLobbyState::OutOfLobby), spawn_menu)
         .add_systems(OnEnter(P2PLobbyState::InLobby), spawn_lobby)
         .add_systems(OnEnter(AppState::Game), spawn_track)
@@ -388,6 +391,7 @@ impl FinishTimes {
     }
 }
 
+// TODO Remove this, useless
 fn emit_easy_updates(mut easy: KartEasyP2P, mut writer: MessageWriter<AppP2PUpdate>) {
     for update in easy.read_updates() {
         writer.write(AppP2PUpdate(update));

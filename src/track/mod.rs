@@ -6,7 +6,7 @@ use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AppInstantiations, AppState, AssetHandles, FinishTimes, KartEasyP2P, SpriteLayers,
+    AppInstantiations, AppState, AssetHandles, FinishTimes, KartEasyP2P, KartP2PData, SpriteLayers,
     car_controller_2d::CarControllerDisabled,
     items::{ItemPickedUp, spawn_spawner},
     kart::LapsCounter,
@@ -16,7 +16,7 @@ pub struct TrackPlugin;
 
 impl Plugin for TrackPlugin {
     fn build(&self, app: &mut App) {
-        app.init_networked_event::<OnFinishTimeUpdate>();
+        app.init_networked_event::<OnFinishTimeUpdate, KartP2PData>();
         app.add_systems(
             Update,
             (

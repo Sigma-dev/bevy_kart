@@ -1,14 +1,10 @@
+use crate::api::EasyP2PData;
 use crate::state::{InstantiationData, PlayerInfo};
 use crate::{ClientId, ExitReason, NetworkedId};
 use bevy::prelude::*;
 
 #[derive(Message, Clone, Debug)]
-pub enum EasyP2PUpdate<PlayerData, PlayerInputData, Instantiations>
-where
-    PlayerData: Clone + Send + Sync + core::fmt::Debug + 'static,
-    PlayerInputData: Clone + Send + Sync + core::fmt::Debug + 'static,
-    Instantiations: Clone + Send + Sync + core::fmt::Debug + 'static,
-{
+pub enum EasyP2PUpdate<T: EasyP2PData> {
     LobbyCreated {
         code: String,
     },
@@ -29,13 +25,13 @@ where
         text: String,
     },
     RosterUpdated {
-        players: Vec<PlayerInfo<PlayerData>>,
+        players: Vec<PlayerInfo<T::PlayerData>>,
     },
     ClientInput {
         sender: NetworkedId,
-        input: PlayerInputData,
+        input: T::PlayerInputData,
     },
     Instantiated {
-        data: InstantiationData<Instantiations>,
+        data: InstantiationData<T::Instantiations>,
     },
 }

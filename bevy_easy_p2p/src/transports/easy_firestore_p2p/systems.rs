@@ -65,14 +65,12 @@ pub(crate) fn handle_transport_requests<Packet>(
                 let cfg = cfg.clone();
                 spawn_local(async move {
                     ensure_room_exists(&cfg, &room).await;
-                    FIRESTORE_INBOX.with(|inbox| {
-                        inbox
-                            .borrow_mut()
-                            .push(FirestoreInboxMessage::RoomCreated)
-                    });
+                    FIRESTORE_INBOX
+                        .with(|inbox| inbox.borrow_mut().push(FirestoreInboxMessage::RoomCreated));
                 });
             }
             EasyP2PTransportRequest::JoinLobby(room) => {
+                cleanup_transport(&mut commands, &mut webrtc, &mut sig, &mut shared, &q_conns);
                 sig.room_code = room.clone();
                 sig.is_host = false;
                 sig.client_id = Some(gen_client_id_num().to_string());

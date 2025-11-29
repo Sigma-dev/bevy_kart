@@ -12,35 +12,30 @@ pub struct WebRtc<'w, 's> {
 impl<'w, 's> WebRtc<'w, 's> {
     pub fn create_offer(&mut self) -> ConnectionId {
         let id = self.next_id.next();
-        self.api_call_writer.write(WebRtcApiCall::CreateOffer(id));
+        self.send_api_call(WebRtcApiCall::CreateOffer(id));
         id
     }
 
     pub fn create_answer(&mut self, remote_offer_sdp: impl Into<String>) -> ConnectionId {
         let id = self.next_id.next();
-        self.api_call_writer
-            .write(WebRtcApiCall::CreateAnswer(id, remote_offer_sdp.into()));
+        self.send_api_call(WebRtcApiCall::CreateAnswer(id, remote_offer_sdp.into()));
         id
     }
 
     pub fn accept_answer(&mut self, id: ConnectionId, answer_sdp: impl Into<String>) {
-        self.api_call_writer
-            .write(WebRtcApiCall::AcceptAnswer(id, answer_sdp.into()));
+        self.send_api_call(WebRtcApiCall::AcceptAnswer(id, answer_sdp.into()));
     }
 
     pub fn send_text(&mut self, id: ConnectionId, text: impl Into<String>) {
-        self.api_call_writer
-            .write(WebRtcApiCall::SendData(id, text.into()));
+        self.send_api_call(WebRtcApiCall::SendData(id, text.into()));
     }
 
     pub fn close(&mut self, id: ConnectionId) {
-        self.api_call_writer
-            .write(WebRtcApiCall::CloseConnection(id));
+        self.send_api_call(WebRtcApiCall::CloseConnection(id));
     }
 
     pub fn close_all(&mut self) {
-        self.api_call_writer
-            .write(WebRtcApiCall::CloseAllConnections);
+        self.send_api_call(WebRtcApiCall::CloseAllConnections);
     }
 
     pub fn read_updates(&mut self) -> Vec<WebRtcUpdate> {
@@ -51,5 +46,9 @@ impl<'w, 's> WebRtc<'w, 's> {
             .collect();
         self.update_reader.clear();
         updates
+    }
+
+    fn send_api_call(&mut self, api_call: WebRtcApiCall) {
+        self.api_call_writer.write(api_call);
     }
 }

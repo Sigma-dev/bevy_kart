@@ -193,7 +193,7 @@ fn hook_peer_connection(pending_closed: Rc<Cell<bool>>, pc: &RtcPeerConnection) 
         if let Ok(state_val) = js_sys::Reflect::get(&target, &JsValue::from_str("connectionState"))
         {
             if let Some(state) = state_val.as_string() {
-                if state == "disconnected" || state == "failed" || state == "closed" {
+                if state == "failed" || state == "closed" {
                     flag_conn.set(true);
                 }
             }
@@ -210,7 +210,7 @@ fn hook_peer_connection(pending_closed: Rc<Cell<bool>>, pc: &RtcPeerConnection) 
             js_sys::Reflect::get(&target, &JsValue::from_str("iceConnectionState"))
         {
             if let Some(state) = state_val.as_string() {
-                if state == "disconnected" || state == "failed" || state == "closed" {
+                if state == "failed" || state == "closed" {
                     flag_ice.set(true);
                 }
             }

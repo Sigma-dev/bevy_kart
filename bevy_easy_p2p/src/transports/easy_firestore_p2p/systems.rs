@@ -5,7 +5,9 @@ use serde::de::DeserializeOwned;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::ClientId;
-use crate::transports::api::{EasyP2PTransportIo, EasyP2PTransportRequest, EasyP2PTransportUpdate};
+use crate::transports::api::{
+    EasyP2PTransportIo, EasyP2PTransportRequest, EasyP2PTransportUpdate, Reliability,
+};
 
 use super::structs::FirestoreInboxMessage;
 use super::{
@@ -54,6 +56,11 @@ pub(crate) fn handle_transport_requests<Packet>(
 {
     let mut updates = Vec::new();
     for req in io.take_requests() {
+        let mut send_data =
+            |id: ConnectionId, data: Vec<u8>, reliability: &Reliability| match reliability {
+                Reliability::Reliable => webrtc.send_data(id, data),
+                Reliability::Unreliable => webrtc.send_unreliable_data(id, data),
+            };
         match req {
             EasyP2PTransportRequest::CreateLobby => {
                 let room = generate_room_code();
@@ -77,46 +84,46 @@ pub(crate) fn handle_transport_requests<Packet>(
                 sig.client_answer_applied = false;
                 sig.client_join_pending = true;
             }
-            EasyP2PTransportRequest::SendToAll(packet) => {
-                if let Ok(text) = serde_json::to_string(packet) {
+            EasyP2PTransportRequest::SendToAll(packet, reliability) => {
+                if let Ok(data) = bincode::serialize(&packet) {
                     for (_, c) in q_conns.iter() {
-                        webrtc.send_text(c.id, text.clone());
+                        send_data(c.id, data.clone(), reliability);
                     }
                 }
             }
-            EasyP2PTransportRequest::SendToHost(packet) => {
-                if let Ok(text) = serde_json::to_string(packet) {
+            EasyP2PTransportRequest::SendToHost(packet, reliability) => {
+                if let Ok(data) = bincode::serialize(&packet) {
                     if let Some(single) = only_connection_ids(&q_conns) {
-                        webrtc.send_text(single, text);
+                        send_data(single, data.clone(), reliability);
                     }
                 }
             }
-            EasyP2PTransportRequest::SendToClient(client_id, packet) => {
+            EasyP2PTransportRequest::SendToClient(client_id, packet, reliability) => {
                 if !sig.is_host {
                     continue;
                 }
-                if let Ok(text) = serde_json::to_string(packet) {
+                if let Ok(data) = bincode::serialize(&packet) {
                     let target = client_id.to_string();
                     if let Some((&conn_raw, _)) = sig
                         .host_connection_to_client_id
                         .iter()
                         .find(|(_, cid)| *cid == &target)
                     {
-                        webrtc.send_text(ConnectionId(conn_raw), text);
+                        send_data(ConnectionId(conn_raw), data.clone(), reliability);
                     }
                 }
             }
-            EasyP2PTransportRequest::SendToAllExcept(except_cid, packet) => {
+            EasyP2PTransportRequest::SendToAllExcept(except_cid, packet, reliability) => {
                 if !sig.is_host {
                     continue;
                 }
-                if let Ok(text) = serde_json::to_string(packet) {
+                if let Ok(data) = bincode::serialize(&packet) {
                     let except_str = except_cid.to_string();
                     for (conn_raw, cid_str) in sig.host_connection_to_client_id.iter() {
                         if cid_str == &except_str {
                             continue;
                         }
-                        webrtc.send_text(ConnectionId(*conn_raw), text.clone());
+                        send_data(ConnectionId(*conn_raw), data.clone(), reliability);
                     }
                 }
             }
@@ -251,7 +258,7 @@ pub(crate) fn handle_webrtc_events<Packet>(
                 }
             }
             WebRtcUpdate::IncomingData { id, data } => {
-                if let Ok(packet) = serde_json::from_str::<Packet>(&data) {
+                if let Ok(packet) = bincode::deserialize::<Packet>(&data) {
                     if sig.is_host {
                         if let Some(cid_str) = sig.host_connection_to_client_id.get(&id.0) {
                             if let Ok(cid) = cid_str.parse::<ClientId>() {
@@ -264,7 +271,7 @@ pub(crate) fn handle_webrtc_events<Packet>(
                         io.emit_update(EasyP2PTransportUpdate::MessageReceivedFromHost(packet));
                     }
                 } else {
-                    warn!("Failed to deserialize packet: {}", data);
+                    warn!("Failed to deserialize packet (len={})", data.len());
                 }
             }
         }

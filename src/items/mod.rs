@@ -163,8 +163,11 @@ pub(crate) fn spawn_item_pickup(
                     let Ok(car) = car.get(trigger.collider2) else {
                         return;
                     };
-                    let (transform, e, item_pickup) =
-                        item_pickups.get(trigger.event_target()).unwrap();
+                    let Ok((transform, e, item_pickup)) =
+                        item_pickups.get(trigger.event_target())
+                    else {
+                        return;
+                    };
                     w.write(ItemPickedUp {
                         item: item_pickup.0,
                         car: car.clone(),
@@ -341,7 +344,9 @@ fn boost_effect(
 
 fn animate_rocket(time: Res<Time>, mut rockets: Query<&mut Sprite, With<Rocket>>) {
     for mut sprite in rockets.iter_mut() {
-        sprite.texture_atlas.as_mut().unwrap().index = (time.elapsed_secs() * 10.) as usize % 2;
+        if let Some(atlas) = sprite.texture_atlas.as_mut() {
+            atlas.index = (time.elapsed_secs() * 10.) as usize % 2;
+        }
     }
 }
 

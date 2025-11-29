@@ -5,16 +5,23 @@ use crate::ClientId;
 
 type LobbyIdentifier = String;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Reliability {
+    #[default]
+    Reliable,
+    Unreliable,
+}
+
 #[derive(Message)]
 pub enum EasyP2PTransportRequest<Packet: Send + Sync + 'static> {
     CreateLobby,
     JoinLobby(LobbyIdentifier),
     ExitLobby,
-    SendToHost(Packet),
-    SendToAll(Packet),
-    SendToClient(ClientId, Packet),
+    SendToHost(Packet, Reliability),
+    SendToAll(Packet, Reliability),
+    SendToClient(ClientId, Packet, Reliability),
     Kick(ClientId),
-    SendToAllExcept(ClientId, Packet),
+    SendToAllExcept(ClientId, Packet, Reliability),
 }
 
 #[derive(Message)]

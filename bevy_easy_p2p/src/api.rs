@@ -11,7 +11,7 @@ use crate::networked_transform;
 use crate::ping::PingPlugin;
 use crate::schedules::{EasyHydrate, EasyP2PSchedulePlugin};
 use crate::state::{NetworkedEntity, NetworkedId, P2PData, P2PLobbyState, PlayerInfo};
-use crate::transports::api::{EasyP2PTransportRequest, EasyP2PTransportUpdate};
+use crate::transports::api::{EasyP2PTransportRequest, EasyP2PTransportUpdate, Reliability};
 use crate::updates::EasyP2PUpdate;
 
 pub trait EasyP2PData: 'static + Send + Sync + Clone + core::fmt::Debug {
@@ -93,12 +93,12 @@ impl<'w, 's, T: EasyP2PData> EasyP2P<'w, 's, T> {
     pub fn send_message_to_host(&mut self, text: String) {
         let msg = P2PData::ClientLobbyChatMessage(text.clone(), NetworkedId::ClientId(0));
         self.requests_w
-            .write(EasyP2PTransportRequest::SendToHost(msg));
+            .write(EasyP2PTransportRequest::SendToHost(msg, Reliability::Reliable));
     }
     pub fn send_message_all(&mut self, text: String) {
         let msg: P2PData<T> = P2PData::ClientLobbyChatMessage(text.clone(), NetworkedId::Host);
         self.requests_w
-            .write(EasyP2PTransportRequest::SendToAll(msg));
+            .write(EasyP2PTransportRequest::SendToAll(msg, Reliability::Reliable));
     }
     pub fn send_inputs(&mut self, input: T::PlayerInputData) {
         let msg = P2PData::ClientInput(input.clone());
@@ -109,7 +109,7 @@ impl<'w, 's, T: EasyP2PData> EasyP2P<'w, 's, T> {
             });
         } else {
             self.requests_w
-                .write(EasyP2PTransportRequest::SendToHost(msg));
+                .write(EasyP2PTransportRequest::SendToHost(msg, Reliability::Unreliable));
         }
     }
     pub fn instantiate(&mut self, instantiation: T::Instantiations, transform: Transform) {
@@ -128,6 +128,7 @@ impl<'w, 's, T: EasyP2PData> EasyP2P<'w, 's, T> {
             InstantiationDataNet::from(&instantiation_data);
         self.requests_w.write(EasyP2PTransportRequest::SendToAll(
             P2PData::HostInstantiation(net),
+            Reliability::Reliable,
         ));
     }
     pub fn despawn(&mut self, uuid: u64) {
@@ -137,7 +138,7 @@ impl<'w, 's, T: EasyP2PData> EasyP2P<'w, 's, T> {
         self.requests_w
             .write(EasyP2PTransportRequest::SendToAll(P2PData::HostDespawn(
                 uuid,
-            )));
+            ), Reliability::Reliable));
         self.despawn_w.write(DespawnEntity(uuid));
     }
     pub fn get_instantiations(&mut self) -> Vec<InstantiationData<T::Instantiations>> {
@@ -180,10 +181,12 @@ impl<'w, 's, T: EasyP2PData> EasyP2P<'w, 's, T> {
             });
             self.requests_w.write(EasyP2PTransportRequest::SendToAll(
                 P2PData::HostLobbyInfoUpdate(players),
+                Reliability::Reliable,
             ));
         } else {
             self.requests_w.write(EasyP2PTransportRequest::SendToHost(
                 P2PData::ClientDataUpdate(data),
+                Reliability::Reliable,
             ));
         }
     }
@@ -204,14 +207,14 @@ impl<'w, 's, T: EasyP2PData> EasyP2P<'w, 's, T> {
         self.get_players().iter().position(|player| player.id == id)
     }
     pub fn get_closest_networked_id(&self, entity: Entity) -> Option<NetworkedId> {
-        if self.network_entities_q.contains(entity) {
-            return Some(self.network_entities_q.get(entity).unwrap().owner_id());
+        if let Ok(net) = self.network_entities_q.get(entity) {
+            return Some(net.owner_id());
         }
         let ancestor = self
             .children_q
             .iter_ancestors(entity)
             .find(|a| self.network_entities_q.contains(*a))?;
-        Some(self.network_entities_q.get(ancestor).unwrap().owner_id())
+        self.network_entities_q.get(ancestor).ok().map(|n| n.owner_id())
     }
     pub fn inputs_belong_to_player(&self, entity: Entity, id: &NetworkedId) -> bool {
         let Some(ancestor) = self.get_closest_networked_id(entity) else {

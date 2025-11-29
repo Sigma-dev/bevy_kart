@@ -23,7 +23,7 @@ impl Plugin for WebRtcPlugin {
 }
 
 type Sdp = String;
-type Data = String;
+type Data = Vec<u8>;
 
 // Messages exposed to Bevy application code (now include ConnectionId)
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
@@ -46,6 +46,7 @@ pub(crate) enum WebRtcApiCall {
     CreateAnswer(ConnectionId, Sdp),
     AcceptAnswer(ConnectionId, Sdp),
     SendData(ConnectionId, Data),
+    SendUnreliableData(ConnectionId, Data),
     CloseConnection(ConnectionId),
     CloseAllConnections,
 }

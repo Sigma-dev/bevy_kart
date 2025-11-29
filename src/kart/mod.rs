@@ -138,9 +138,10 @@ pub(crate) fn spawn_kart(
         .id();
     match control_type {
         KartControlType::Player(networked_entity) => {
-            let player = easy
-                .get_player_data(networked_entity.owner_id().clone())
-                .unwrap();
+            let Some(player) = easy.get_player_data(networked_entity.owner_id().clone()) else {
+                commands.entity(id).despawn();
+                return;
+            };
             commands.entity(id).insert((
                 networked_entity,
                 CarControllerDisabled,
@@ -183,9 +184,14 @@ pub(crate) fn spawn_kart(
             ));
         }
         KartControlType::LobbyCar(networked_id, rank) => {
-            let is_local = easy.get_local_player_id().unwrap() == networked_id;
+            let is_local = easy
+                .get_local_player_id()
+                .is_some_and(|id| id == networked_id);
             let is_host = easy.is_host();
-            let player = easy.get_player_data(networked_id).unwrap();
+            let Some(player) = easy.get_player_data(networked_id) else {
+                commands.entity(id).despawn();
+                return;
+            };
             let name = if is_local { "(YOU)\n" } else { "" }.to_string() + &player.name;
             let name = rank
                 .map(|r| format!("({})\n", r))
@@ -262,7 +268,9 @@ pub(crate) fn spawn_kart(
                     observers![|trigger: On<Pointer<Press>>,
                                 mut easy: KartEasyP2P,
                                 ids: Query<&NetworkedId>| {
-                        easy.kick(*ids.get(trigger.event_target()).unwrap());
+                        if let Ok(id) = ids.get(trigger.event_target()) {
+                            easy.kick(*id);
+                        }
                     },],
                 ));
             }

@@ -180,13 +180,9 @@ fn on_client_message_received(
 ) {
     for AppP2PUpdate(update) in events.read() {
         if let EasyP2PUpdate::ClientChat { client_id, text } = update {
-            history.add(format!(
-                "{}: {}",
-                easy.get_player_data(NetworkedId::ClientId(*client_id))
-                    .unwrap()
-                    .name,
-                text
-            ));
+            if let Some(data) = easy.get_player_data(NetworkedId::ClientId(*client_id)) {
+                history.add(format!("{}: {}", data.name, text));
+            }
         }
     }
 }
@@ -198,11 +194,9 @@ fn on_host_message_received(
 ) {
     for AppP2PUpdate(update) in events.read() {
         if let EasyP2PUpdate::HostChat { text } = update {
-            history.add(format!(
-                "{}: {}",
-                easy.get_player_data(NetworkedId::Host).unwrap().name,
-                text
-            ));
+            if let Some(data) = easy.get_player_data(NetworkedId::Host) {
+                history.add(format!("{}: {}", data.name, text));
+            }
         }
     }
 }
@@ -247,7 +241,9 @@ fn spawn_lobby_players_buttons(
         let Some(local_player_id) = set.p0().get_local_player_id() else {
             continue;
         };
-        let player_index = set.p0().get_player_index(player.id).unwrap();
+        let Some(player_index) = set.p0().get_player_index(player.id) else {
+            continue;
+        };
         let is_local = local_player_id == player.id;
         let left_spawn = -RESOLUTION.x / 2.;
         let starting_pos = if first_time {
@@ -294,8 +290,12 @@ fn update_lobby_cars(
             commands.entity(entity).despawn();
             continue;
         };
-        let player_index = easy.get_player_index(car.0).unwrap();
-        sprite.texture_atlas.as_mut().unwrap().index = player.kart_color.to_u32() as usize;
+        let Some(player_index) = easy.get_player_index(car.0) else {
+            continue;
+        };
+        if let Some(atlas) = sprite.texture_atlas.as_mut() {
+            atlas.index = player.kart_color.to_u32() as usize;
+        }
         let desired_x = compute_desired_x(player_index, count);
         transform.translation.x = transform.translation.x.lerp(desired_x, time.delta_secs());
     }

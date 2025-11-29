@@ -26,8 +26,12 @@ impl<'w, 's> WebRtc<'w, 's> {
         self.send_api_call(WebRtcApiCall::AcceptAnswer(id, answer_sdp.into()));
     }
 
-    pub fn send_text(&mut self, id: ConnectionId, text: impl Into<String>) {
-        self.send_api_call(WebRtcApiCall::SendData(id, text.into()));
+    pub fn send_data(&mut self, id: ConnectionId, data: Vec<u8>) {
+        self.send_api_call(WebRtcApiCall::SendData(id, data));
+    }
+
+    pub fn send_unreliable_data(&mut self, id: ConnectionId, data: Vec<u8>) {
+        self.send_api_call(WebRtcApiCall::SendUnreliableData(id, data));
     }
 
     pub fn close(&mut self, id: ConnectionId) {

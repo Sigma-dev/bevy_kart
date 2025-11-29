@@ -15,9 +15,12 @@ web-sys = { version = "0.3", features = [
     "RtcDataChannel",
     "RtcDataChannelEvent",
     "RtcDataChannelState",
+    "RtcDataChannelInit",
     "RtcSdpType",
     "RtcSessionDescriptionInit",
     "RtcSessionDescription",
+    "RtcDataChannelType",
+    "Blob",
     "Window",
 ] }
 futures-channel = "0.3"

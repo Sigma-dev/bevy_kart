@@ -33,7 +33,8 @@ pub(crate) fn send_ping<T: EasyP2PData>(
         return;
     }
 
-    w_send_host.write(EasyP2PTransportRequest::SendToHost(P2PData::PingRequest(
-        time.elapsed_secs(),
-    )));
+    w_send_host.write(EasyP2PTransportRequest::SendToHost(
+        P2PData::PingRequest(time.elapsed_secs()),
+        crate::transports::api::Reliability::Reliable,
+    ));
 }

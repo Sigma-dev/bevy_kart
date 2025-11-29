@@ -6,7 +6,7 @@ use crate::EasyP2PState;
 use crate::api::EasyP2PData;
 use crate::schedules::EasyProcess;
 use crate::state::P2PData;
-use crate::transports::api::EasyP2PTransportRequest;
+use crate::transports::api::{EasyP2PTransportRequest, Reliability};
 use core::any::TypeId;
 
 pub trait NetworkedEventsExt {
@@ -45,7 +45,7 @@ pub struct NetworkedEventPlugin<E, T: EasyP2PData>(std::marker::PhantomData<(E, 
 
 #[derive(Resource, Default)]
 pub struct SyncedEventRegister {
-    pub readers: Vec<fn(&str, &mut World) -> ()>,
+    pub readers: Vec<fn(&[u8], &mut World) -> ()>,
     pub indexes: HashMap<TypeId, u8>,
     pub counter: u8,
 }
@@ -68,8 +68,8 @@ impl SyncedEventRegister {
         let idx = self.counter;
         self.indexes.insert(TypeId::of::<E>(), idx);
         self.counter = self.counter.wrapping_add(1);
-        self.readers.push(|payload: &str, world: &mut World| {
-            if let Ok(value) = serde_json::from_str::<E>(payload) {
+        self.readers.push(|payload: &[u8], world: &mut World| {
+            if let Ok(value) = bincode::deserialize::<E>(payload) {
                 world.write_message(value);
             }
         });
@@ -126,10 +126,13 @@ pub(crate) fn host_broadcast_event<E, T: EasyP2PData>(
     }
     for e in events.read() {
         if let Some(index) = register.indexes.get(&TypeId::of::<E>()) {
-            match serde_json::to_string(e) {
-                Ok(text) => {
-                    let payload = P2PData::EventSync(*index, text);
-                    w_send_all.write(EasyP2PTransportRequest::SendToAll(payload));
+            match bincode::serialize(e) {
+                Ok(data) => {
+                    let payload = P2PData::EventSync(*index, data);
+                    w_send_all.write(EasyP2PTransportRequest::SendToAll(
+                        payload,
+                        Reliability::Reliable,
+                    ));
                 }
                 Err(err) => {
                     warn!("Error serializing event for sync: {:?}", err);
@@ -141,7 +144,7 @@ pub(crate) fn host_broadcast_event<E, T: EasyP2PData>(
 
 pub(crate) struct EmitSyncedEvent {
     pub(crate) index: u8,
-    pub(crate) payload: String,
+    pub(crate) payload: Vec<u8>,
 }
 
 impl bevy::ecs::system::Command for EmitSyncedEvent {

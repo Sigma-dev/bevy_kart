@@ -48,7 +48,8 @@ fn read_api_calls(
             WebRtcApiCall::CreateOffer(id) => create_offer(&mut ctx, *id),
             WebRtcApiCall::CreateAnswer(id, remote_sdp) => create_answer(&mut ctx, *id, remote_sdp),
             WebRtcApiCall::AcceptAnswer(id, sdp) => accept_answer(&ctx, *id, sdp),
-            WebRtcApiCall::SendData(id, data) => send_data(&ctx, *id, data),
+            WebRtcApiCall::SendData(id, data) => send_data(&ctx, *id, data, true),
+            WebRtcApiCall::SendUnreliableData(id, data) => send_data(&ctx, *id, data, false),
             WebRtcApiCall::CloseConnection(id) => close_connection(&mut ctx, *id, &mut update_w),
             WebRtcApiCall::CloseAllConnections => close_all_connections(&mut ctx, &mut update_w),
         } {
@@ -80,10 +81,15 @@ fn accept_answer(ctx: &NonSendMut<RtcContext>, id: ConnectionId, sdp: &Sdp) -> R
         .map_err(|e| format!("Failed to accept answer: {:?}", e))
 }
 
-fn send_data(ctx: &NonSendMut<RtcContext>, id: ConnectionId, data: &Data) -> Result<(), String> {
+fn send_data(
+    ctx: &NonSendMut<RtcContext>,
+    id: ConnectionId,
+    data: &Data,
+    reliable: bool,
+) -> Result<(), String> {
     ctx.get_connection(id)
         .ok_or_else(|| format!("Connection {:?} not found", id))?
-        .send_data(data)
+        .send_data(data, reliable)
 }
 
 fn close_connection(

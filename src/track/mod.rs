@@ -320,11 +320,10 @@ pub(crate) fn spawn_track(
                     }
                     lap_counter.0 += 1;
                     if lap_counter.0 == LAPS_TO_WIN {
-                        commands.entity(entity).insert(CarControllerDisabled);
-                        finish_times.times.insert(
-                            easy.get_closest_networked_id(entity).unwrap().clone(),
-                            time.elapsed_secs(),
-                        );
+                        if let Some(id) = easy.get_closest_networked_id(entity) {
+                            commands.entity(entity).insert(CarControllerDisabled);
+                            finish_times.times.insert(id, time.elapsed_secs());
+                        }
                     }
                 }
             },
@@ -431,12 +430,17 @@ fn update_held_item_icon(
     mut pickup_reader: MessageReader<ItemPickedUp>,
 ) {
     for picked_up in pickup_reader.read() {
-        if picked_up.car.owner_id() != easy.get_local_player_id().unwrap() {
+        if !easy
+            .get_local_player_id()
+            .is_some_and(|id| id == picked_up.car.owner_id())
+        {
             continue;
         }
         for (mut visibility, mut image_node) in held_item_icon.iter_mut() {
             *visibility = Visibility::Visible;
-            image_node.texture_atlas.as_mut().unwrap().index = picked_up.item.to_index();
+            if let Some(atlas) = image_node.texture_atlas.as_mut() {
+                atlas.index = picked_up.item.to_index();
+            }
         }
     }
 }

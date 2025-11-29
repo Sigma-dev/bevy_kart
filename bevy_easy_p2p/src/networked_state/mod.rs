@@ -2,7 +2,7 @@ use crate::EasyP2PState;
 use crate::api::EasyP2PData;
 use crate::schedules::EasyProcess;
 use crate::state::P2PData;
-use crate::transports::api::EasyP2PTransportRequest;
+use crate::transports::api::{EasyP2PTransportRequest, Reliability};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::state::state::FreelyMutableState;
@@ -53,7 +53,7 @@ impl<S, T: EasyP2PData> Default for NetworkedStatePlugin<S, T> {
 
 #[derive(Resource, Default)]
 pub struct SyncedStateRegister {
-    pub readers: Vec<fn(&str, &mut Commands) -> ()>,
+    pub readers: Vec<fn(&[u8], &mut Commands) -> ()>,
     pub indexes: HashMap<TypeId, u8>,
     pub counter: u8,
 }
@@ -82,11 +82,12 @@ impl SyncedStateRegister {
         let idx = self.counter;
         self.indexes.insert(TypeId::of::<S>(), idx);
         self.counter = self.counter.wrapping_add(1);
-        self.readers.push(|payload: &str, commands: &mut Commands| {
-            if let Ok(value) = serde_json::from_str::<S>(payload) {
-                commands.set_state::<S>(value);
-            }
-        });
+        self.readers
+            .push(|payload: &[u8], commands: &mut Commands| {
+                if let Ok(value) = bincode::deserialize::<S>(payload) {
+                    commands.set_state::<S>(value);
+                }
+            });
     }
 }
 
@@ -141,9 +142,12 @@ pub(crate) fn host_broadcast_state_change<S, T: EasyP2PData>(
     }
     *last = Some(current_value.clone());
     if let Some(index) = register.indexes.get(&TypeId::of::<S>()) {
-        if let Ok(text) = serde_json::to_string(&current_value) {
-            let payload = P2PData::StateSync(*index, text);
-            w_send_all.write(EasyP2PTransportRequest::SendToAll(payload));
+        if let Ok(data) = bincode::serialize(&current_value) {
+            let payload = P2PData::StateSync(*index, data);
+            w_send_all.write(EasyP2PTransportRequest::SendToAll(
+                payload,
+                Reliability::Unreliable,
+            ));
         }
     }
 }

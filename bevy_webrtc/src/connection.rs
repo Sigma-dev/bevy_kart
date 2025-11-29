@@ -21,11 +21,12 @@ pub(crate) struct RtcConnection {
     // Peer connection slot
     pub(crate) pc_slot: Rc<RefCell<Option<RtcPeerConnection>>>,
     // Data channel slot
-    pub(crate) dc_slot: Rc<RefCell<Option<RtcDataChannel>>>,
+    pub(crate) dc_reliable_slot: Rc<RefCell<Option<RtcDataChannel>>>,
+    pub(crate) dc_unreliable_slot: Rc<RefCell<Option<RtcDataChannel>>>,
     // Buffers to bridge JS callbacks back into Bevy's world
     pub(crate) pending_open: Rc<Cell<bool>>,
     pub(crate) pending_closed: Rc<Cell<bool>>,
-    pub(crate) pending_messages: Rc<RefCell<Vec<String>>>,
+    pub(crate) pending_messages: Rc<RefCell<Vec<Vec<u8>>>>,
     pub(crate) pending_local_sdp: Rc<RefCell<Vec<String>>>,
 }
 
@@ -33,7 +34,8 @@ impl RtcConnection {
     pub(crate) fn new() -> Self {
         Self {
             pc_slot: Rc::new(RefCell::new(None)),
-            dc_slot: Rc::new(RefCell::new(None)),
+            dc_reliable_slot: Rc::new(RefCell::new(None)),
+            dc_unreliable_slot: Rc::new(RefCell::new(None)),
             pending_open: Rc::new(Cell::new(false)),
             pending_closed: Rc::new(Cell::new(false)),
             pending_messages: Rc::new(RefCell::new(Vec::new())),
@@ -45,13 +47,25 @@ impl RtcConnection {
         // Fresh peer connection
         let pc = make_and_hook_peer_connection(&connection)?;
 
-        // Create data channel immediately (offerer)
-        let dc = pc.create_data_channel("data");
+        // Create reliable data channel (ordered, reliable)
+        let dc_rel = pc.create_data_channel("reliable");
         hook_data_channel(
             connection.pending_open.clone(),
             connection.pending_closed.clone(),
             connection.pending_messages.clone(),
-            &dc,
+            &dc_rel,
+        );
+
+        // Create unreliable data channel (unordered, unreliable)
+        let init = web_sys::RtcDataChannelInit::new();
+        init.set_ordered(false);
+        init.set_max_retransmits(0);
+        let dc_unrel = pc.create_data_channel_with_data_channel_dict("unreliable", &init);
+        hook_data_channel(
+            connection.pending_open.clone(),
+            connection.pending_closed.clone(),
+            connection.pending_messages.clone(),
+            &dc_unrel,
         );
 
         // Proactively close on page unload (offerer side has DC now)
@@ -76,7 +90,8 @@ impl RtcConnection {
             }
         });
 
-        connection.dc_slot.borrow_mut().replace(dc);
+        connection.dc_reliable_slot.borrow_mut().replace(dc_rel);
+        connection.dc_unreliable_slot.borrow_mut().replace(dc_unrel);
         connection.pc_slot.borrow_mut().replace(pc);
         Ok(connection)
     }
@@ -89,16 +104,24 @@ impl RtcConnection {
         let on_dc_ctx_open = connection.pending_open.clone();
         let on_dc_ctx_closed = connection.pending_closed.clone();
         let on_dc_ctx_msgs = connection.pending_messages.clone();
-        let dc_slot = connection.dc_slot.clone();
+        let dc_reliable_slot = connection.dc_reliable_slot.clone();
+        let dc_unreliable_slot = connection.dc_unreliable_slot.clone();
+
         let on_dc = Closure::wrap(Box::new(move |ev: RtcDataChannelEvent| {
             let channel = ev.channel();
+            let label = channel.label();
             hook_data_channel(
                 on_dc_ctx_open.clone(),
                 on_dc_ctx_closed.clone(),
                 on_dc_ctx_msgs.clone(),
                 &channel,
             );
-            dc_slot.borrow_mut().replace(channel);
+            if label == "unreliable" {
+                dc_unreliable_slot.borrow_mut().replace(channel);
+            } else {
+                // Default to reliable if label matches "reliable" or others
+                dc_reliable_slot.borrow_mut().replace(channel);
+            }
         }) as Box<dyn FnMut(RtcDataChannelEvent)>);
         pc.set_ondatachannel(Some(on_dc.as_ref().unchecked_ref()));
         on_dc.forget();
@@ -149,19 +172,26 @@ impl RtcConnection {
     pub(crate) fn get_peer_connection(&self) -> Option<RtcPeerConnection> {
         self.pc_slot.borrow().clone()
     }
-    pub(crate) fn get_data_channel(&self) -> Option<RtcDataChannel> {
-        self.dc_slot.borrow().clone()
+    pub(crate) fn get_data_channel(&self, reliable: bool) -> Option<RtcDataChannel> {
+        if reliable {
+            self.dc_reliable_slot.borrow().clone()
+        } else {
+            self.dc_unreliable_slot.borrow().clone()
+        }
     }
-    pub(crate) fn send_data(&self, data: &Data) -> Result<(), String> {
-        self.get_data_channel()
-            .ok_or_else(|| format!("Data channel not found"))?
-            .send_with_str(data.as_str())
+    pub(crate) fn send_data(&self, data: &Data, reliable: bool) -> Result<(), String> {
+        self.get_data_channel(reliable)
+            .ok_or_else(|| format!("Data channel not found (reliable={})", reliable))?
+            .send_with_u8_array(data)
             .map_err(|err| format!("Failed to send data: {:?}", err))
     }
     pub(crate) fn close(&self) -> Result<(), String> {
-        self.get_data_channel()
-            .ok_or_else(|| format!("Data channel not found"))?
-            .close();
+        if let Some(dc) = self.get_data_channel(true) {
+            dc.close();
+        }
+        if let Some(dc) = self.get_data_channel(false) {
+            dc.close();
+        }
         self.get_peer_connection()
             .ok_or_else(|| format!("Peer connection not found"))?
             .close();
@@ -242,7 +272,7 @@ fn make_and_hook_peer_connection(connection: &RtcConnection) -> Result<RtcPeerCo
 fn hook_data_channel(
     pending_open: Rc<Cell<bool>>,
     pending_closed: Rc<Cell<bool>>,
-    pending_messages: Rc<RefCell<Vec<String>>>,
+    pending_messages: Rc<RefCell<Vec<Vec<u8>>>>,
     dc: &RtcDataChannel,
 ) {
     let on_open_flag = pending_open.clone();
@@ -263,22 +293,19 @@ fn hook_data_channel(
     dc.set_onclose(Some(close_closure.as_ref().unchecked_ref()));
     close_closure.forget();
 
-    // onmessage -> push string messages
+    // onmessage -> push binary messages
     let msg_closure = Closure::wrap(Box::new(move |ev: web_sys::MessageEvent| {
         let data = ev.data();
-        // Prefer string; if ArrayBuffer or Blob, try to convert to string for minimal impl
-        if let Some(s) = data.as_string() {
-            on_msg_buf.borrow_mut().push(s);
-        } else if let Ok(ab) = data.clone().dyn_into::<js_sys::ArrayBuffer>() {
+        if let Ok(ab) = data.clone().dyn_into::<js_sys::ArrayBuffer>() {
             let u8 = Uint8Array::new(&ab);
-            // Attempt UTF-8 decode
-            if let Ok(text) = std::str::from_utf8(&u8.to_vec()) {
-                on_msg_buf.borrow_mut().push(text.to_string());
-            }
-        } else if let Ok(js_str) = data.clone().dyn_into::<js_sys::JsString>() {
-            on_msg_buf.borrow_mut().push(String::from(js_str));
+            on_msg_buf.borrow_mut().push(u8.to_vec());
+        } else if let Ok(blob) = data.clone().dyn_into::<web_sys::Blob>() {
+            // Handle blob if necessary, for now assume ArrayBuffer (binaryType = "arraybuffer")
+            // Ideally we set binaryType on the channel
+            let _ = blob;
         }
     }) as Box<dyn FnMut(web_sys::MessageEvent)>);
+    dc.set_binary_type(web_sys::RtcDataChannelType::Arraybuffer);
     dc.set_onmessage(Some(msg_closure.as_ref().unchecked_ref()));
     msg_closure.forget();
 }

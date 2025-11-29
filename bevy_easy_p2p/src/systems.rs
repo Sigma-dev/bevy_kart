@@ -6,7 +6,7 @@ use crate::ping::PingUpdate;
 use crate::state::{
     EasyP2PState, NetworkedEntity, NetworkedId, P2PData, P2PLobbyState, PlayerInfo,
 };
-use crate::transports::api::{EasyP2PTransportRequest, EasyP2PTransportUpdate};
+use crate::transports::api::{EasyP2PTransportRequest, EasyP2PTransportUpdate, Reliability};
 use crate::updates::EasyP2PUpdate;
 use bevy::prelude::*;
 use std::time::Duration;
@@ -86,6 +86,7 @@ pub(crate) fn process_transport_updates<T: EasyP2PData>(
                             w_requests.write(EasyP2PTransportRequest::SendToClient(
                                 cid,
                                 P2PData::ClientIdAssignment(player.id),
+                                Reliability::Reliable,
                             ));
                         }
                     }
@@ -93,6 +94,7 @@ pub(crate) fn process_transport_updates<T: EasyP2PData>(
                     let players = state.get_players(state.is_host);
                     w_requests.write(EasyP2PTransportRequest::SendToAll(
                         P2PData::HostLobbyInfoUpdate(players.clone()),
+                        Reliability::Reliable,
                     ));
                     updates.write(EasyP2PUpdate::RosterUpdated { players });
                 }
@@ -161,6 +163,7 @@ fn handle_packet<T: EasyP2PData>(
                     w_requests.write(EasyP2PTransportRequest::SendToAllExcept(
                         *cid,
                         P2PData::ClientLobbyChatMessage(text.clone(), NetworkedId::ClientId(*cid)),
+                        Reliability::Reliable,
                     ));
                 }
             }
@@ -205,11 +208,13 @@ fn handle_packet<T: EasyP2PData>(
                     w_requests.write(EasyP2PTransportRequest::SendToClient(
                         cid,
                         P2PData::ClientIdAssignment(NetworkedId::ClientId(cid)),
+                        Reliability::Reliable,
                     ));
 
                     let payload = state.get_players(state.is_host);
                     w_requests.write(EasyP2PTransportRequest::SendToAll(
                         P2PData::HostLobbyInfoUpdate(payload.clone()),
+                        Reliability::Reliable,
                     ));
                     let players = state.get_players(state.is_host);
                     updates.write(EasyP2PUpdate::RosterUpdated { players });
@@ -246,6 +251,7 @@ fn handle_packet<T: EasyP2PData>(
                     w_requests.write(EasyP2PTransportRequest::SendToClient(
                         cid,
                         P2PData::PingRequest(*timestamp),
+                        Reliability::Reliable,
                     ));
                 }
             } else {
@@ -268,6 +274,7 @@ pub(crate) fn send_local_data_after_enter<T: EasyP2PData>(
             }
             w_send_host.write(EasyP2PTransportRequest::SendToHost(
                 P2PData::ClientDataUpdate(state.local_player_data.clone()),
+                Reliability::Reliable,
             ));
         }
     }

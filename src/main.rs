@@ -49,7 +49,7 @@ impl Default for AppPlayerData {
     fn default() -> Self {
         Self {
             name: "YOUR_NAME".to_string(),
-            kart_color: KartColor::default(),
+            kart_color: KartColor::new_random(),
         }
     }
 }

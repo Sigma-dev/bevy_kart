@@ -54,6 +54,10 @@ impl KartColor {
     pub fn to_u32(&self) -> u32 {
         self.0
     }
+
+    pub fn new_random() -> Self {
+        Self(rand::rng().random_range(0..KART_COLORS_COUNT))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

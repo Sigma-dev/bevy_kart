@@ -1,8 +1,7 @@
-use crate::{
-    EasyP2P, NetworkedEntity, NetworkedEventsExt,
-    api::EasyP2PData,
-    schedules::{EasyHydrate, EasyProcess},
-};
+use crate::api::EasyP2PData;
+use crate::networked_event::NetworkedEventsExt;
+use crate::schedules::EasyProcess;
+use crate::{EasyP2P, NetworkedEntity, schedules::EasyHydrate};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 

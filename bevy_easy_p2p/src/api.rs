@@ -1,15 +1,16 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use bevy::time::common_conditions::on_timer;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
-use crate::networked_transform;
-use crate::schedules::{EasyHydrate, EasyP2PSchedulePlugin};
-use crate::state::{
-    InstantiationData, InstantiationDataNet, IsHost, NetworkedEntity, NetworkedId, P2PData,
-    P2PLobbyState, PlayerInfo, SyncedEventRegister, SyncedStateRegister,
+use crate::networked_event::SyncedEventRegister;
+use crate::networked_instantiation::{
+    HandleInstantiation, InstantiationData, InstantiationDataNet,
 };
+use crate::networked_state::SyncedStateRegister;
+use crate::networked_transform;
+use crate::ping::PingPlugin;
+use crate::schedules::{EasyHydrate, EasyP2PSchedulePlugin};
+use crate::state::{NetworkedEntity, NetworkedId, P2PData, P2PLobbyState, PlayerInfo};
 use crate::transports::api::{EasyP2PTransportRequest, EasyP2PTransportUpdate};
 use crate::updates::EasyP2PUpdate;
 
@@ -40,11 +41,6 @@ pub trait EasyP2PData: 'static + Send + Sync + Clone + core::fmt::Debug {
 }
 
 #[derive(Message)]
-pub struct OnApplyState<S>(pub S)
-where
-    S: States + Clone + Send + Sync + 'static;
-
-#[derive(Message)]
 pub(crate) struct DespawnEntity(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,11 +51,6 @@ pub enum ExitReason {
 
 #[derive(Message, Clone)]
 pub(crate) struct OnLobbyExit(pub ExitReason);
-#[derive(Message, Clone)]
-pub(crate) struct HandleInstantiation<Instantiations>(pub InstantiationData<Instantiations>);
-
-#[derive(Message)]
-pub struct PingUpdate(pub std::time::Duration);
 
 #[derive(SystemParam)]
 pub struct EasyP2P<'w, 's, T: EasyP2PData> {
@@ -241,7 +232,6 @@ impl<T: EasyP2PData> Default for EasyP2PPlugin<T> {
 impl<T: EasyP2PData> Plugin for EasyP2PPlugin<T> {
     fn build(&self, app: &mut App) {
         app.init_resource::<crate::state::EasyP2PState<T::PlayerData>>()
-            .init_resource::<IsHost>()
             .init_resource::<SyncedStateRegister>()
             .init_resource::<SyncedEventRegister>()
             .init_state::<P2PLobbyState>()
@@ -251,14 +241,7 @@ impl<T: EasyP2PData> Plugin for EasyP2PPlugin<T> {
             .add_message::<DespawnEntity>()
             .add_message::<OnLobbyExit>()
             .add_message::<HandleInstantiation<T::Instantiations>>()
-            .add_message::<PingUpdate>()
-            .add_systems(
-                EasyHydrate,
-                (
-                    crate::systems::process_transport_updates::<T>,
-                    crate::systems::send_ping::<T>.run_if(on_timer(Duration::from_secs(1))),
-                ),
-            )
+            .add_systems(EasyHydrate, crate::systems::process_transport_updates::<T>)
             .add_systems(
                 Update,
                 (
@@ -268,6 +251,7 @@ impl<T: EasyP2PData> Plugin for EasyP2PPlugin<T> {
                 ),
             )
             .add_plugins(networked_transform::NetworkedTransformPlugin::<T>::default())
+            .add_plugins(PingPlugin::<T>::default())
             .add_plugins(EasyP2PSchedulePlugin);
     }
 }

@@ -1,5 +1,6 @@
 use crate::api::EasyP2PData;
-use crate::state::{InstantiationData, PlayerInfo};
+use crate::networked_instantiation::InstantiationData;
+use crate::state::PlayerInfo;
 use crate::{ClientId, ExitReason, NetworkedId};
 use bevy::prelude::*;
 

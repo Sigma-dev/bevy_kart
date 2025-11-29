@@ -2,7 +2,6 @@ use bevy::input::{ButtonInput, keyboard::Key};
 use bevy::prelude::*;
 use bevy_easy_p2p::easy_firestore_p2p::FirestoreP2PPlugin;
 use bevy_easy_p2p::prelude::*;
-use bevy_easy_p2p::{EasyP2PData, NetworkedEventsExt, NetworkedStatesExt, P2PData};
 use serde::{Deserialize, Serialize};
 use web_sys::window;
 

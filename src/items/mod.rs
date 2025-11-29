@@ -2,9 +2,7 @@ use audio_manager::prelude::*;
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy_bundled_observers::observers;
-use bevy_easy_p2p::{
-    EasyP2PUpdate, NetworkedEntity, NetworkedEventsExt, prelude::NetworkedTransform,
-};
+use bevy_easy_p2p::prelude::*;
 use bevy_timer::{Timer, TimerFinished};
 use rand::seq::IndexedRandom;
 use serde::{Deserialize, Serialize};

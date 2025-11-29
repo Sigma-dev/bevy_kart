@@ -13,8 +13,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_easy_p2p::easy_firestore_p2p::FirestoreP2PPlugin;
-use bevy_easy_p2p::{EasyP2PData, P2PData, prelude::*};
-use bevy_easy_p2p::{EasyP2PUpdate, NetworkedId, NetworkedStatesExt};
+use bevy_easy_p2p::prelude::*;
 use bevy_ui_text_input::TextInputPlugin;
 use serde::{Deserialize, Serialize};
 

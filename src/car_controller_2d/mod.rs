@@ -1,7 +1,7 @@
 use crate::{AppP2PUpdate, KartEasyP2P};
 use avian2d::prelude::*;
 use bevy::prelude::*;
-use bevy_easy_p2p::{EasyP2PUpdate, NetworkedEntity};
+use bevy_easy_p2p::prelude::*;
 
 pub struct CarController2dPlugin;
 

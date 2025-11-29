@@ -1,8 +1,10 @@
-use crate::api::{DespawnEntity, EasyP2PData, HandleInstantiation, OnLobbyExit, PingUpdate};
-use crate::networked_event::EmitSyncedEvent;
+use crate::api::{DespawnEntity, EasyP2PData, OnLobbyExit};
+use crate::networked_event::{EmitSyncedEvent, SyncedEventRegister};
+use crate::networked_instantiation::{HandleInstantiation, InstantiationData};
+use crate::networked_state::SyncedStateRegister;
+use crate::ping::PingUpdate;
 use crate::state::{
-    EasyP2PState, InstantiationData, IsHost, NetworkedEntity, NetworkedId, P2PData, P2PLobbyState,
-    PlayerInfo, SyncedEventRegister, SyncedStateRegister,
+    EasyP2PState, NetworkedEntity, NetworkedId, P2PData, P2PLobbyState, PlayerInfo,
 };
 use crate::transports::api::{EasyP2PTransportRequest, EasyP2PTransportUpdate};
 use crate::updates::EasyP2PUpdate;
@@ -13,7 +15,6 @@ pub(crate) fn on_external_lobby_exit<T: EasyP2PData>(
     mut state: ResMut<EasyP2PState<T::PlayerData>>,
     mut r: MessageReader<OnLobbyExit>,
     mut lobby_state: ResMut<NextState<P2PLobbyState>>,
-    mut host_flag: ResMut<IsHost>,
     mut updates: MessageWriter<EasyP2PUpdate<T>>,
 ) {
     let mut exit_reason = None;
@@ -25,7 +26,6 @@ pub(crate) fn on_external_lobby_exit<T: EasyP2PData>(
     }
     let reason = exit_reason.unwrap();
     state.is_host = false;
-    host_flag.0 = false;
     state.lobby_code.clear();
     state.players.clear();
     state.local_networked_id = None;
@@ -38,7 +38,6 @@ pub(crate) fn process_transport_updates<T: EasyP2PData>(
     mut commands: Commands,
     mut state: ResMut<EasyP2PState<T::PlayerData>>,
     mut lobby_state: ResMut<NextState<P2PLobbyState>>,
-    mut host_flag: ResMut<IsHost>,
     mut updates: MessageWriter<EasyP2PUpdate<T>>,
     mut inst_w: MessageWriter<HandleInstantiation<T::Instantiations>>,
     mut despawn_w: MessageWriter<DespawnEntity>,
@@ -54,7 +53,6 @@ pub(crate) fn process_transport_updates<T: EasyP2PData>(
                 state.is_host = true;
                 state.lobby_code = code.clone();
                 state.local_networked_id = Some(NetworkedId::Host);
-                host_flag.0 = true;
                 updates.write(EasyP2PUpdate::LobbyCreated { code: code.clone() });
                 updates.write(EasyP2PUpdate::LobbyEntered { code: code.clone() });
                 lobby_state.set(P2PLobbyState::InLobby);
@@ -62,7 +60,6 @@ pub(crate) fn process_transport_updates<T: EasyP2PData>(
             EasyP2PTransportUpdate::LobbyJoined(code) => {
                 state.is_host = false;
                 state.lobby_code = code.clone();
-                host_flag.0 = false;
                 updates.write(EasyP2PUpdate::LobbyJoined { code: code.clone() });
                 updates.write(EasyP2PUpdate::LobbyEntered { code: code.clone() });
                 lobby_state.set(P2PLobbyState::InLobby);
@@ -73,7 +70,6 @@ pub(crate) fn process_transport_updates<T: EasyP2PData>(
                 state.players.clear();
                 state.local_networked_id = None;
                 lobby_state.set(P2PLobbyState::OutOfLobby);
-                host_flag.0 = false;
                 updates.write(EasyP2PUpdate::LobbyExited {
                     reason: crate::api::ExitReason::Disconnected,
                 });
@@ -275,20 +271,6 @@ pub(crate) fn send_local_data_after_enter<T: EasyP2PData>(
             ));
         }
     }
-}
-
-pub(crate) fn send_ping<T: EasyP2PData>(
-    time: Res<Time>,
-    state: Res<EasyP2PState<T::PlayerData>>,
-    mut w_send_host: MessageWriter<EasyP2PTransportRequest<P2PData<T>>>,
-) {
-    if state.is_host {
-        return;
-    }
-
-    w_send_host.write(EasyP2PTransportRequest::SendToHost(P2PData::PingRequest(
-        time.elapsed_secs(),
-    )));
 }
 
 pub(crate) fn despawn_entity(

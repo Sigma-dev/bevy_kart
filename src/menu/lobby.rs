@@ -7,7 +7,6 @@ use crate::{
 use bevy::prelude::*;
 use bevy_bundled_observers::observers;
 use bevy_easy_p2p::prelude::*;
-use bevy_easy_p2p::{EasyP2PUpdate, NetworkedId};
 use bevy_ui_text_input::{SubmitText, TextInputMode, TextInputNode};
 use rand::distr::Distribution;
 use rand::distr::weighted::WeightedIndex;

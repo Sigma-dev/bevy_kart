@@ -1,14 +1,80 @@
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::EasyP2PState;
 use crate::api::EasyP2PData;
 use crate::schedules::EasyProcess;
 use crate::state::P2PData;
-use crate::state::{IsHost, SyncedEventRegister};
 use crate::transports::api::EasyP2PTransportRequest;
 use core::any::TypeId;
 
+pub trait NetworkedEventsExt {
+    fn init_networked_event<E, T>(&mut self) -> &mut Self
+    where
+        E: Serialize
+            + for<'de> Deserialize<'de>
+            + Clone
+            + Send
+            + Sync
+            + core::fmt::Debug
+            + 'static
+            + Message,
+        T: EasyP2PData;
+}
+
+impl NetworkedEventsExt for App {
+    fn init_networked_event<E, T>(&mut self) -> &mut Self
+    where
+        E: Serialize
+            + for<'de> Deserialize<'de>
+            + Clone
+            + Send
+            + Sync
+            + core::fmt::Debug
+            + 'static
+            + Message,
+        T: EasyP2PData,
+    {
+        self.add_plugins(NetworkedEventPlugin::<E, T>::default());
+        self
+    }
+}
+
 pub struct NetworkedEventPlugin<E, T: EasyP2PData>(std::marker::PhantomData<(E, T)>);
+
+#[derive(Resource, Default)]
+pub struct SyncedEventRegister {
+    pub readers: Vec<fn(&str, &mut World) -> ()>,
+    pub indexes: HashMap<TypeId, u8>,
+    pub counter: u8,
+}
+
+impl SyncedEventRegister {
+    pub fn register_event<E>(&mut self)
+    where
+        E: Serialize
+            + for<'de> Deserialize<'de>
+            + Clone
+            + Send
+            + Sync
+            + core::fmt::Debug
+            + 'static
+            + Message,
+    {
+        if self.indexes.contains_key(&TypeId::of::<E>()) {
+            return;
+        }
+        let idx = self.counter;
+        self.indexes.insert(TypeId::of::<E>(), idx);
+        self.counter = self.counter.wrapping_add(1);
+        self.readers.push(|payload: &str, world: &mut World| {
+            if let Ok(value) = serde_json::from_str::<E>(payload) {
+                world.write_message(value);
+            }
+        });
+    }
+}
 
 impl<E, T: EasyP2PData> Default for NetworkedEventPlugin<E, T> {
     fn default() -> Self {
@@ -41,7 +107,7 @@ where
 }
 
 pub(crate) fn host_broadcast_event<E, T: EasyP2PData>(
-    host_flag: Res<IsHost>,
+    state: Res<EasyP2PState<T::PlayerData>>,
     mut events: MessageReader<E>,
     register: Res<SyncedEventRegister>,
     mut w_send_all: MessageWriter<EasyP2PTransportRequest<P2PData<T>>>,
@@ -55,7 +121,7 @@ pub(crate) fn host_broadcast_event<E, T: EasyP2PData>(
         + 'static
         + Message,
 {
-    if !host_flag.0 {
+    if !state.is_host {
         return;
     }
     for e in events.read() {

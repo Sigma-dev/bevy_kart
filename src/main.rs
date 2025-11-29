@@ -137,6 +137,12 @@ impl AppColors {
     }
 }
 
+#[derive(Component)]
+#[require(Text)]
+struct FpsText {
+    pub current: f64,
+}
+
 fn main() {
     App::new()
         .add_plugins((
@@ -228,7 +234,7 @@ fn main() {
         .add_systems(OnEnter(P2PLobbyState::InLobby), spawn_lobby)
         .add_systems(OnEnter(AppState::Game), spawn_track)
         .add_systems(OnExit(AppState::Game), spawn_lobby)
-        .add_systems(Update, (send_inputs, cursor_positon_log))
+        .add_systems(Update, (send_inputs, cursor_positon_log, update_fps))
         .insert_resource(ClearColor(AppColors::Grass.color()))
         .run();
 }
@@ -329,6 +335,29 @@ fn setup(mut commands: Commands) {
         height: RESOLUTION.y,
     };
     commands.spawn((Camera2d, Projection::Orthographic(projection)));
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(5),
+            ..default()
+        },
+        FpsText { current: 0.0 },
+    ));
+}
+
+fn update_fps(time: Res<Time>, mut texts: Query<(&mut Text, &mut FpsText)>) {
+    let delta = time.delta_secs_f64();
+    if delta <= 0.0 || delta.is_nan() {
+        return;
+    }
+    let current = 1.0 / delta;
+    if current.is_infinite() || current.is_nan() {
+        return;
+    }
+    for (mut text, mut fps) in texts.iter_mut() {
+        fps.current = fps.current * 0.9 + current * 0.1;
+        *text = Text::new(format!("FPS: {:.0}", fps.current));
+    }
 }
 
 fn cursor_positon_log(

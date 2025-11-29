@@ -41,7 +41,7 @@ fn pump_js_callbacks(
 fn read_api_calls(
     mut ctx: NonSendMut<RtcContext>,
     mut ev: MessageReader<WebRtcApiCall>,
-    mut event_writer: MessageWriter<WebRtcUpdate>,
+    mut update_w: MessageWriter<WebRtcUpdate>,
 ) {
     for call in ev.read() {
         if let Err(err) = match call {
@@ -49,12 +49,8 @@ fn read_api_calls(
             WebRtcApiCall::CreateAnswer(id, remote_sdp) => create_answer(&mut ctx, *id, remote_sdp),
             WebRtcApiCall::AcceptAnswer(id, sdp) => accept_answer(&ctx, *id, sdp),
             WebRtcApiCall::SendData(id, data) => send_data(&ctx, *id, data),
-            WebRtcApiCall::CloseConnection(connection_id) => {
-                close_connection(&mut ctx, *connection_id, &mut event_writer)
-            }
-            WebRtcApiCall::CloseAllConnections => {
-                close_all_connections(&mut ctx, &mut event_writer)
-            }
+            WebRtcApiCall::CloseConnection(id) => close_connection(&mut ctx, *id, &mut update_w),
+            WebRtcApiCall::CloseAllConnections => close_all_connections(&mut ctx, &mut update_w),
         } {
             error!("Failed to process API call: {:?}", err);
         }

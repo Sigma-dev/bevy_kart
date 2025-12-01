@@ -357,6 +357,7 @@ fn on_receive_finish_times(mut commands: Commands, mut r: MessageReader<OnFinish
 fn handle_end_race(
     time: Res<Time>,
     mut commands: Commands,
+    input: Res<ButtonInput<KeyCode>>,
     easy: KartEasyP2P,
     cars: Query<&LapsCounter>,
     mut events_w: MessageWriter<OnFinishTimeUpdate>,
@@ -366,7 +367,8 @@ fn handle_end_race(
     if !easy.is_host() {
         return;
     }
-    if cars.iter().count() == 0 || cars.iter().any(|car| car.0 != LAPS_TO_WIN) {
+    let race_not_over = cars.iter().count() == 0 || cars.iter().any(|car| car.0 < LAPS_TO_WIN);
+    if race_not_over && !(input.pressed(KeyCode::KeyU) && input.pressed(KeyCode::KeyK)) {
         return;
     }
     if race_ended.is_some() {

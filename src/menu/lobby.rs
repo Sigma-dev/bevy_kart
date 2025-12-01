@@ -234,7 +234,7 @@ fn spawn_lobby_players_buttons(
     }
     let players = set.p0().get_players();
     let count = players.len();
-    for player in players {
+    for (i, player) in players.iter().enumerate() {
         if cars.iter().any(|car| car.0 == player.id) {
             continue;
         }
@@ -245,9 +245,10 @@ fn spawn_lobby_players_buttons(
             continue;
         };
         let is_local = local_player_id == player.id;
+        let is_last = i == count - 1;
         let left_spawn = -RESOLUTION.x / 2.;
         let starting_pos = if first_time {
-            if is_local {
+            if is_local && is_last {
                 left_spawn
             } else {
                 compute_desired_x(player_index, count)

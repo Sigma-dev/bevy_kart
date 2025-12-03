@@ -27,7 +27,6 @@ impl Plugin for LobbyPlugin {
                         lobby_chat_input_history,
                         spawn_lobby_players_buttons,
                         on_client_message_received,
-                        on_host_message_received,
                         receive_ping,
                         update_lobby_cars,
                     )
@@ -56,7 +55,7 @@ struct LobbyChatInputHistory(Vec<String>);
 impl LobbyChatInputHistory {
     fn add(&mut self, text: String) {
         self.0.push(text);
-        if self.0.len() > 10 {
+        if self.0.len() > 12 {
             self.0.remove(0);
         }
     }
@@ -173,30 +172,20 @@ fn lobby_chat_input_history(
     }
 }
 
-fn on_client_message_received(
-    mut events: MessageReader<AppP2PUpdate>,
-    mut history: ResMut<LobbyChatInputHistory>,
-    easy: KartEasyP2P,
-) {
-    for AppP2PUpdate(update) in events.read() {
-        if let EasyP2PUpdate::ClientChat { client_id, text } = update {
-            if let Some(data) = easy.get_player_data(NetworkedId::ClientId(*client_id)) {
-                history.add(format!("{}: {}", data.name, text));
+fn on_client_message_received(mut history: ResMut<LobbyChatInputHistory>, mut easy: KartEasyP2P) {
+    for update in easy.read_updates() {
+        match update {
+            EasyP2PUpdate::ClientChat { client_id, text } => {
+                if let Some(data) = easy.get_player_data(NetworkedId::ClientId(client_id)) {
+                    history.add(format!("{}: {}", data.name, text));
+                }
             }
-        }
-    }
-}
-
-fn on_host_message_received(
-    mut events: MessageReader<AppP2PUpdate>,
-    mut history: ResMut<LobbyChatInputHistory>,
-    easy: KartEasyP2P,
-) {
-    for AppP2PUpdate(update) in events.read() {
-        if let EasyP2PUpdate::HostChat { text } = update {
-            if let Some(data) = easy.get_player_data(NetworkedId::Host) {
-                history.add(format!("{}: {}", data.name, text));
+            EasyP2PUpdate::HostChat { text } => {
+                if let Some(data) = easy.get_player_data(NetworkedId::Host) {
+                    history.add(format!("{}: {}", data.name, text));
+                }
             }
+            _ => {}
         }
     }
 }
@@ -368,49 +357,55 @@ pub fn spawn_lobby(
         ))
         .id();
 
-    let lobby_chat_input_text = commands
+    let lobby_chat = commands
         .spawn((
-            // Accepts a `String` or any type that converts into a `String`, such as `&str`
-            TextInputNode {
-                mode: TextInputMode::SingleLine,
-                ..default()
-            },
             Node {
                 position_type: PositionType::Absolute,
-                bottom: px(5),
-                right: px(5),
-                height: px(25),
+                top: px(50),
+                left: px(5),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(5),
                 ..default()
             },
-            BackgroundColor(AppColors::Dark.color()),
+            children![
+                (
+                    // Accepts a `String` or any type that converts into a `String`, such as `&str`
+                    Text::new(""),
+                    LobbyChatInputHistoryText,
+                    Node {
+                        height: px(300),
+                        width: px(300),
+                        ..default()
+                    },
+                ),
+                (
+                    // Accepts a `String` or any type that converts into a `String`, such as `&str`
+                    TextInputNode {
+                        mode: TextInputMode::SingleLine,
+                        ..default()
+                    },
+                    Node {
+                        height: px(25),
+                        ..default()
+                    },
+                    BackgroundColor(AppColors::Dark.color()),
+                    observers!(
+                        |trigger: On<SubmitText>,
+                         mut easy: KartEasyP2P,
+                         mut history: ResMut<LobbyChatInputHistory>| {
+                            if easy.is_host() {
+                                easy.send_message_all(trigger.text.clone());
+                            } else {
+                                easy.send_message_to_host(trigger.text.clone());
+                            }
+                            history.add(format!("You: {}", trigger.text));
+                        }
+                    ),
+                )
+            ],
         ))
-        .observe(
-            |trigger: On<SubmitText>,
-             mut easy: KartEasyP2P,
-             mut history: ResMut<LobbyChatInputHistory>| {
-                if easy.is_host() {
-                    easy.send_message_all(trigger.text.clone());
-                } else {
-                    easy.send_message_to_host(trigger.text.clone());
-                }
-                history.add(format!("You: {}", trigger.text));
-            },
-        )
         .id();
 
-    let lobby_chat_input_history = commands
-        .spawn((
-            // Accepts a `String` or any type that converts into a `String`, such as `&str`
-            Text::new(""),
-            LobbyChatInputHistoryText,
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(5),
-                left: px(5),
-                ..default()
-            },
-        ))
-        .id();
     let players_buttons = commands
         .spawn((
             LobbyPlayersButtons,
@@ -433,13 +428,9 @@ pub fn spawn_lobby(
             ),
         ));
     }
-    commands.entity(lobby).add_children(&[
-        lobby_code_text,
-        lobby_chat_input_text,
-        lobby_chat_input_history,
-        players_buttons,
-        buttons,
-    ]);
+    commands
+        .entity(lobby)
+        .add_children(&[lobby_code_text, lobby_chat, players_buttons, buttons]);
 
     commands.spawn((
         DespawnOnExit(P2PLobbyState::InLobby),

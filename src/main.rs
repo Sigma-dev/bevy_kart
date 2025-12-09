@@ -70,6 +70,8 @@ pub struct AppPlayerInputData {
 
 #[derive(Resource)]
 pub struct AssetHandles {
+    numbers_texture: Handle<Image>,
+    numbers_atlas: Handle<TextureAtlasLayout>,
     menu_background_texture: Handle<Image>,
     logo_texture: Handle<Image>,
     buttons_texture: Handle<Image>,
@@ -181,6 +183,14 @@ fn main() {
                 .get_resource_mut::<Assets<TextureAtlasLayout>>()
                 .unwrap();
             let asset_handles = AssetHandles {
+                numbers_texture: asset_server.load("sprites/numbers.png"),
+                numbers_atlas: texture_atlases.add(TextureAtlasLayout::from_grid(
+                    UVec2::new(32, 32),
+                    10,
+                    1,
+                    None,
+                    None,
+                )),
                 menu_background_texture: asset_server.load("sprites/menu_background.png"),
                 logo_texture: asset_server.load("sprites/logo.png"),
                 buttons_texture: asset_server.load("sprites/buttons.png"),

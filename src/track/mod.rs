@@ -1,3 +1,10 @@
+use crate::{
+    AppInstantiations, AppState, AssetHandles, FinishTimes, KartEasyP2P, KartP2PData, SpriteLayers,
+    car_controller_2d::CarControllerDisabled,
+    items::{ItemPickedUp, spawn_spawner},
+    kart::{LapsCounter, LocalKart},
+    track::position::{RacePosition, RacePositionPlugin, progress_line::ProgressLine},
+};
 use audio_manager::prelude::*;
 use avian2d::prelude::*;
 use bevy::prelude::*;
@@ -5,18 +12,14 @@ use bevy_easy_p2p::prelude::*;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    AppInstantiations, AppState, AssetHandles, FinishTimes, KartEasyP2P, KartP2PData, SpriteLayers,
-    car_controller_2d::CarControllerDisabled,
-    items::{ItemPickedUp, spawn_spawner},
-    kart::LapsCounter,
-};
+pub(crate) mod position;
 
 pub struct TrackPlugin;
 
 impl Plugin for TrackPlugin {
     fn build(&self, app: &mut App) {
-        app.init_networked_event::<OnFinishTimeUpdate, KartP2PData>();
+        app.add_plugins(RacePositionPlugin)
+            .init_networked_event::<OnFinishTimeUpdate, KartP2PData>();
         app.add_systems(
             Update,
             (
@@ -26,18 +29,13 @@ impl Plugin for TrackPlugin {
                 start_light,
                 update_held_item_icon,
                 update_on_item_used,
+                update_position_ui,
             ),
         );
     }
 }
 
-const LAPS_TO_WIN: u32 = 3;
-
-#[derive(Component)]
-struct HasPassedPostStart;
-
-#[derive(Component)]
-struct CanFinishLap;
+pub const LAPS_TO_WIN: u32 = 3;
 
 #[derive(Message, Clone, Debug, Serialize, Deserialize)]
 pub struct OnFinishTimeUpdate(FinishTimes);
@@ -53,6 +51,9 @@ struct RaceStarted(f32);
 
 #[derive(Component)]
 struct HeldItemIcon;
+
+#[derive(Component)]
+struct PositionUI;
 
 fn spawn_barriers(
     commands: &mut Commands,
@@ -184,6 +185,28 @@ pub(crate) fn spawn_track(
         Vec2::new(-100.6, -22.2),
         Vec2::new(-98.4, -35.2),
     ];
+    commands.spawn((
+        DespawnOnExit(AppState::Game),
+        ProgressLine::new(vec![
+            Vec2::new(-16.343735, -46.21621),
+            Vec2::new(32.428055, -46.21621),
+            Vec2::new(57.332794, -16.378376),
+            Vec2::new(75.80382, -19.783785),
+            Vec2::new(97.28415, -42.48648),
+            Vec2::new(107.86867, 2.4324331),
+            Vec2::new(99.35954, 47.837837),
+            Vec2::new(89.086334, 52.216213),
+            Vec2::new(10.3250885, -15.567566),
+            Vec2::new(-72.17187, -17.351353),
+            Vec2::new(-74.76611, 6.162163),
+            Vec2::new(4.825287, 19.945944),
+            Vec2::new(12.919342, 42.64865),
+            Vec2::new(-9.079857, 48.486485),
+            Vec2::new(-101.2274, 42.486485),
+            Vec2::new(-111.29307, 20.756758),
+            Vec2::new(-104.75557, -47.35135),
+        ]),
+    ));
     spawn_barriers(
         &mut commands,
         &mut meshes,
@@ -221,28 +244,44 @@ pub(crate) fn spawn_track(
     let texture_atlas_handle = texture_atlas_layouts.add(texture_atlas);
 
     commands.spawn((
-        DespawnOnExit(AppState::Game),
         Node {
             position_type: PositionType::Absolute,
             right: Val::Px(5.),
             bottom: Val::Px(5.),
-            height: Val::Px(100.),
-            width: Val::Px(100.),
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
+            //         height: px(100.),
+            //           width: px(100),
+            column_gap: px(8),
             ..default()
         },
-        BackgroundColor(Color::srgb(0.18039, 0.13333, 0.18431)),
-        children![(
-            ImageNode::from_atlas_image(texture_handle, TextureAtlas::from(texture_atlas_handle)),
-            Node {
-                height: Val::Px(80.),
-                width: Val::Px(80.),
-                ..default()
-            },
-            Visibility::Hidden,
-            HeldItemIcon,
-        )],
+        DespawnOnExit(AppState::Game),
+        children![
+            (PositionUI),
+            (
+                Node {
+                    height: Val::Px(100.),
+                    width: Val::Px(100.),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.18039, 0.13333, 0.18431)),
+                children![
+                    ((
+                        ImageNode::from_atlas_image(
+                            texture_handle,
+                            TextureAtlas::from(texture_atlas_handle)
+                        ),
+                        Node {
+                            height: Val::Px(80.),
+                            width: Val::Px(80.),
+                            ..default()
+                        },
+                        Visibility::Hidden,
+                        HeldItemIcon,
+                    ))
+                ],
+            )
+        ],
     ));
     if !easy.is_host() {
         return;
@@ -276,76 +315,6 @@ pub(crate) fn spawn_track(
             Vec2::new(-106.66667, 20.86859),
         ],
     );
-
-    commands
-        .spawn((
-            DespawnOnExit(AppState::Game),
-            Transform::from_translation(Vec3::new(-60., -47.5, 100.)),
-            Collider::rectangle(10., 30.),
-            Sensor,
-            CollisionEventsEnabled,
-        ))
-        .observe(
-            |trigger: On<CollisionStart>,
-             mut commands: Commands,
-             can_finish_lap: Query<Entity, With<HasPassedPostStart>>| {
-                if let Ok(entity) = can_finish_lap.get(trigger.collider2) {
-                    commands.entity(entity).insert(CanFinishLap);
-                }
-            },
-        );
-
-    commands
-        .spawn((
-            DespawnOnExit(AppState::Game),
-            Transform::from_translation(Vec3::new(-18., -47.5, 0.)),
-            Collider::rectangle(10., 30.),
-            Sensor,
-            CollisionEventsEnabled,
-        ))
-        .observe(
-            |trigger: On<CollisionStart>,
-             time: Res<Time>,
-             mut car: Query<(Entity, &mut LapsCounter, Option<&CanFinishLap>)>,
-             mut commands: Commands,
-             mut finish_times: ResMut<FinishTimes>,
-             easy: KartEasyP2P| {
-                if let Ok((entity, mut lap_counter, maybe_can_finish_lap)) =
-                    car.get_mut(trigger.collider2)
-                {
-                    commands.entity(entity).remove::<HasPassedPostStart>();
-                    commands.entity(entity).remove::<CanFinishLap>();
-                    if maybe_can_finish_lap.is_none() {
-                        return;
-                    }
-                    lap_counter.0 += 1;
-                    if lap_counter.0 == LAPS_TO_WIN {
-                        if let Some(id) = easy.get_closest_networked_id(entity) {
-                            commands.entity(entity).insert(CarControllerDisabled);
-                            finish_times.times.insert(id, time.elapsed_secs());
-                        }
-                    }
-                }
-            },
-        );
-
-    commands
-        .spawn((
-            DespawnOnExit(AppState::Game),
-            Transform::from_translation(Vec3::new(-2., -47.5, 0.)),
-            Collider::rectangle(10., 30.),
-            Sensor,
-            CollisionEventsEnabled,
-        ))
-        .observe(
-            |trigger: On<CollisionStart>,
-             car: Query<Entity, With<LapsCounter>>,
-             mut commands: Commands| {
-                if let Ok(entity) = car.get(trigger.collider2) {
-                    commands.entity(entity).insert(HasPassedPostStart);
-                }
-            },
-        );
 }
 
 fn on_receive_finish_times(mut commands: Commands, mut r: MessageReader<OnFinishTimeUpdate>) {
@@ -367,7 +336,8 @@ fn handle_end_race(
     if !easy.is_host() {
         return;
     }
-    let race_not_over = cars.iter().count() == 0 || cars.iter().any(|car| car.0 < LAPS_TO_WIN);
+    let race_not_over =
+        cars.iter().count() == 0 || cars.iter().any(|car| car.count < LAPS_TO_WIN as i32);
     if race_not_over && !(input.pressed(KeyCode::KeyU) && input.pressed(KeyCode::KeyK)) {
         return;
     }
@@ -456,4 +426,42 @@ fn update_on_item_used(
             *visibility = Visibility::Hidden;
         }
     }
+}
+
+fn update_position_ui(
+    mut commands: Commands,
+    asset_handles: Res<AssetHandles>,
+    counter: Single<Entity, With<PositionUI>>,
+    local_kart: Single<&RacePosition, With<LocalKart>>,
+) {
+    let position = local_kart.position + 1;
+    commands
+        .entity(*counter)
+        .insert(Node {
+            height: px(100),
+            ..default()
+        })
+        .despawn_children();
+
+    let tens_part = position / 10;
+    if tens_part > 0 {
+        commands
+            .entity(*counter)
+            .with_child((ImageNode::from_atlas_image(
+                asset_handles.numbers_texture.clone(),
+                TextureAtlas {
+                    layout: asset_handles.numbers_atlas.clone(),
+                    index: tens_part as usize,
+                },
+            ),));
+    }
+    commands
+        .entity(*counter)
+        .with_child((ImageNode::from_atlas_image(
+            asset_handles.numbers_texture.clone(),
+            TextureAtlas {
+                layout: asset_handles.numbers_atlas.clone(),
+                index: (position % 10) as usize,
+            },
+        ),));
 }

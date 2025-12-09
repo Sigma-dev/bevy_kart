@@ -1,7 +1,9 @@
 use crate::car_controller_2d::{CarController2d, CarControllerDisabled, CarControllerInputs};
 use crate::menu::lobby::LobbyCar;
+use crate::track::LAPS_TO_WIN;
+use crate::track::position::TrackPosition;
 use crate::{AppP2PUpdate, KartEasyP2P, NetworkedEntity, car_controller_2d::CarController2dWheel};
-use crate::{AppPlayerData, AppState, AssetHandles, KartP2PData, SpriteLayers};
+use crate::{AppPlayerData, AppState, AssetHandles, FinishTimes, KartP2PData, SpriteLayers};
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy_bundled_observers::observers;
@@ -29,8 +31,36 @@ impl Plugin for KartPlugin {
 pub const KART_SIZE: UVec2 = UVec2::new(4, 8);
 pub const KART_COLORS_COUNT: u32 = 10;
 
-#[derive(Component)]
-pub struct LapsCounter(pub u32);
+#[derive(Component, Debug)]
+pub struct LapsCounter {
+    pub count: i32,
+    pub last_frame_progress: f32,
+}
+
+impl LapsCounter {
+    pub fn new() -> Self {
+        Self {
+            count: 0,
+            last_frame_progress: 0.,
+        }
+    }
+
+    pub fn update(&mut self, progress: f32) {
+        if self.last_frame_progress > 0.95 && progress < 0.05 {
+            self.count += 1;
+        }
+        if self.last_frame_progress < 0.05 && progress > 0.95 {
+            self.count -= 1;
+        }
+        self.last_frame_progress = progress;
+    }
+}
+
+#[derive(EntityEvent)]
+pub struct LapUpdate {
+    pub count: i32,
+    pub entity: Entity,
+}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct KartColor(pub u32);
@@ -78,6 +108,9 @@ pub enum KartControlType {
     AutoCar,
     LobbyCar(NetworkedId, Option<usize>),
 }
+
+#[derive(Component)]
+pub struct LocalKart;
 
 pub(crate) fn spawn_kart(
     In((control_type, transform)): In<(KartControlType, Transform)>,
@@ -142,10 +175,13 @@ pub(crate) fn spawn_kart(
                 commands.entity(id).despawn();
                 return;
             };
+            let is_local = easy
+                .get_local_player_id()
+                .is_some_and(|id| id == networked_entity.owner_id());
             commands.entity(id).insert((
                 networked_entity,
                 CarControllerDisabled,
-                LapsCounter(0),
+                LapsCounter::new(),
                 Sprite::from_atlas_image(
                     asset_handles.karts_texture.clone(),
                     TextureAtlas {
@@ -154,7 +190,31 @@ pub(crate) fn spawn_kart(
                     },
                 ),
                 NetworkedTransform,
+                TrackPosition,
+                observers![|trigger: On<LapUpdate>,
+                            time: Res<Time>,
+                            karts: Query<&CarControllerDisabled>,
+                            mut commands: Commands,
+                            easy: KartEasyP2P,
+                            mut finish_times: ResMut<FinishTimes>| {
+                    if trigger.event().count == LAPS_TO_WIN as i32 {
+                        if karts.get(trigger.event_target()).is_ok() {
+                            return;
+                        }
+
+                        if let Some(id) = easy.get_closest_networked_id(trigger.event_target()) {
+                            commands
+                                .entity(trigger.event_target())
+                                .insert(CarControllerDisabled);
+                            finish_times.times.insert(id, time.elapsed_secs());
+                        }
+                    }
+                }],
             ));
+
+            if is_local {
+                commands.entity(id).insert(LocalKart);
+            }
 
             commands.spawn((
                 DespawnOnExit(AppState::Game),

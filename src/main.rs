@@ -8,10 +8,32 @@ use crate::menu::start::spawn_menu;
 use crate::track::{TrackPlugin, spawn_track};
 use audio_manager::AudioManagerPlugin;
 use avian2d::prelude::*;
+use bevy::a11y::AccessibilityPlugin;
+use bevy::app::{PanicHandlerPlugin, TaskPoolPlugin};
 use bevy::asset::AssetMetaCheck;
+use bevy::audio::AudioPlugin;
+use bevy::camera::CameraPlugin;
+use bevy::core_pipeline::CorePipelinePlugin;
+use bevy::diagnostic::{DiagnosticsPlugin, FrameCountPlugin};
+use bevy::gizmos::GizmoPlugin;
+use bevy::input::InputPlugin;
+use bevy::log::LogPlugin;
+use bevy::mesh::MeshPlugin;
+use bevy::picking::{InteractionPlugin, PickingPlugin, input::PointerInputPlugin};
 use bevy::platform::collections::HashMap;
+use bevy::scene::ScenePlugin;
 use bevy::prelude::*;
+use bevy::render::RenderPlugin;
+use bevy::sprite::SpritePlugin;
+use bevy::sprite_render::SpriteRenderPlugin;
+use bevy::state::app::StatesPlugin;
+use bevy::text::TextPlugin;
+use bevy::time::TimePlugin;
+use bevy::transform::TransformPlugin;
+use bevy::ui::UiPlugin;
+use bevy::ui_render::UiRenderPlugin;
 use bevy::window::PrimaryWindow;
+use bevy::winit::WinitPlugin;
 use bevy_easy_p2p::easy_firestore_p2p::FirestoreP2PPlugin;
 use bevy_easy_p2p::prelude::*;
 use bevy_ui_text_input::TextInputPlugin;
@@ -139,6 +161,58 @@ impl AppColors {
     }
 }
 
+struct NecessaryBevyPlugins;
+
+impl Plugin for NecessaryBevyPlugins {
+    fn build(&self, app: &mut App) {
+        // Order matches DefaultPlugins, with unused plugins removed.
+        app.add_plugins((
+            PanicHandlerPlugin,
+            LogPlugin::default(),
+            TaskPoolPlugin::default(),
+            FrameCountPlugin,
+            TimePlugin,
+            TransformPlugin,
+            DiagnosticsPlugin,
+            InputPlugin,
+            WindowPlugin::default(),
+            AccessibilityPlugin,
+        ));
+        app.add_plugins((
+            AssetPlugin {
+                // Wasm builds will check for meta files (that don't exist) if this isn't set.
+                // This causes errors and even panics on web build on itch or with SPA dev-servers.
+                // See https://github.com/bevyengine/bevy_github_ci_template/issues/48.
+                meta_check: AssetMetaCheck::Never,
+                ..default()
+            },
+            ScenePlugin,
+            WinitPlugin::<bevy::winit::WakeUp>::default(),
+            RenderPlugin::default(),
+            ImagePlugin::default_nearest(),
+            MeshPlugin,
+            CameraPlugin,
+            CorePipelinePlugin,
+        ));
+        app.add_plugins((
+            SpritePlugin,
+            SpriteRenderPlugin,
+            TextPlugin,
+            UiPlugin,
+            UiRenderPlugin,
+            AudioPlugin::default(),
+            GizmoPlugin,
+            StatesPlugin,
+        ));
+        // Picking — after UiPlugin, matching DefaultPlugins order
+        app.add_plugins((
+            PointerInputPlugin,
+            PickingPlugin,
+            InteractionPlugin,
+        ));
+    }
+}
+
 #[derive(Component)]
 #[require(Text)]
 struct FpsText {
@@ -148,15 +222,7 @@ struct FpsText {
 fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins
-                .set(ImagePlugin::default_nearest())
-                .set(AssetPlugin {
-                    // Wasm builds will check for meta files (that don't exist) if this isn't set.
-                    // This causes errors and even panics on web build on itch or with SPA dev-servers.
-                    // See https://github.com/bevyengine/bevy_github_ci_template/issues/48.
-                    meta_check: AssetMetaCheck::Never,
-                    ..default()
-                }),
+            NecessaryBevyPlugins,
             PhysicsPlugins::default(),
             TextInputPlugin,
         ))

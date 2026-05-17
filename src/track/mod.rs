@@ -1,5 +1,5 @@
 use crate::{
-    AppInstantiations, AppState, AssetHandles, FinishTimes, KartEasyP2P, KartP2PData, SpriteLayers,
+    AppState, AssetHandles, EntityKind, FinishTimes, OwnerPlayer, SpriteLayers,
     car_controller_2d::CarControllerDisabled,
     items::{ItemPickedUp, spawn_spawner},
     kart::{LapsCounter, LocalKart},
@@ -8,7 +8,9 @@ use crate::{
 use audio_manager::prelude::*;
 use avian2d::prelude::*;
 use bevy::prelude::*;
-use bevy_easy_p2p::prelude::*;
+use bevy_ensemble::prelude::*;
+use bevy_ticked::prelude::*;
+use bevy_ticked_networking::prelude::*;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
@@ -18,13 +20,12 @@ pub struct TrackPlugin;
 
 impl Plugin for TrackPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(RacePositionPlugin)
-            .init_networked_event::<OnFinishTimeUpdate, KartP2PData>();
+        app.add_plugins(RacePositionPlugin);
         app.add_systems(
             Update,
             (
                 on_receive_finish_times,
-                handle_end_race,
+                handle_end_race.run_if(in_state(AppState::Game)),
                 end_with_delay,
                 start_light,
                 update_held_item_icon,
@@ -37,8 +38,10 @@ impl Plugin for TrackPlugin {
 
 pub const LAPS_TO_WIN: u32 = 3;
 
-#[derive(Message, Clone, Debug, Serialize, Deserialize)]
-pub struct OnFinishTimeUpdate(FinishTimes);
+/// Ensemble message: finish times update.
+#[derive(Clone, Debug, Serialize, Deserialize, Message)]
+pub struct OnFinishTimeUpdate(pub FinishTimes);
+
 
 #[derive(Resource)]
 struct RaceEnded(f32);
@@ -95,12 +98,15 @@ pub(crate) fn spawn_track(
     mut commands: Commands,
     mut audio_manager: AudioManager,
     asset_handles: Res<AssetHandles>,
-    mut easy: KartEasyP2P,
+    server_player: Option<Res<LocalServerPlayer>>,
+    participants: Query<&LobbyParticipant>,
+    mut counter: ResMut<TickTrackedEntityCounter>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
     finish_times.times.clear();
+    commands.remove_resource::<RaceEnded>();
     commands.spawn((
         DespawnOnExit(AppState::Game),
         Sprite::from_image(asset_handles.track_texture.clone()),
@@ -248,8 +254,6 @@ pub(crate) fn spawn_track(
             position_type: PositionType::Absolute,
             right: Val::Px(5.),
             bottom: Val::Px(5.),
-            //         height: px(100.),
-            //           width: px(100),
             column_gap: px(8),
             ..default()
         },
@@ -283,23 +287,34 @@ pub(crate) fn spawn_track(
             )
         ],
     ));
-    if !easy.is_host() {
+    if server_player.is_none() {
         return;
     }
-    let mut players = easy.get_players();
-    players.shuffle(&mut rand::rng());
-    for (i, player) in players.iter().enumerate() {
+    let mut player_uuids: Vec<u128> = participants
+        .iter()
+        .map(|p| p.player_uuid)
+        .collect();
+    player_uuids.shuffle(&mut rand::rng());
+    for (i, uuid) in player_uuids.iter().enumerate() {
         let i = i as i32;
         let position: Vec3 = Vec3::new(
             (-25 + (i / 3) * -10) as f32,
             (-39 + (i % 3) * -7) as f32,
             SpriteLayers::Car.to_z(),
         );
-        easy.instantiate(
-            AppInstantiations::Kart(player.id.clone()),
+        let tracked_id = counter.next();
+        commands.spawn((
+            DespawnOnExit(AppState::Game),
+            tracked_id,
+            EntityKind::Kart,
+            OwnerPlayer(*uuid),
+            Mass(1.),
+            RigidBody::Dynamic,
+            Collider::rectangle(4., 8.),
             Transform::from_translation(position)
                 .with_rotation(Quat::from_rotation_z(-90_f32.to_radians())),
-        );
+            CarControllerDisabled,
+        ));
     }
 
     spawn_item_spawners(
@@ -317,9 +332,12 @@ pub(crate) fn spawn_track(
     );
 }
 
-fn on_receive_finish_times(mut commands: Commands, mut r: MessageReader<OnFinishTimeUpdate>) {
-    for OnFinishTimeUpdate(finish_times) in r.read() {
-        commands.insert_resource(finish_times.clone());
+fn on_receive_finish_times(
+    mut commands: Commands,
+    mut reader: MessageReader<ReceivedEnsembleMessage<OnFinishTimeUpdate>>,
+) {
+    for msg in reader.read() {
+        commands.insert_resource(msg.message.0.clone());
     }
 }
 
@@ -327,24 +345,32 @@ fn handle_end_race(
     time: Res<Time>,
     mut commands: Commands,
     input: Res<ButtonInput<KeyCode>>,
-    easy: KartEasyP2P,
+    server_player: Option<Res<LocalServerPlayer>>,
     cars: Query<&LapsCounter>,
-    mut events_w: MessageWriter<OnFinishTimeUpdate>,
+    lobbies: Query<Entity, With<Lobby>>,
     finish_times: Res<FinishTimes>,
     race_ended: Option<Res<RaceEnded>>,
 ) {
-    if !easy.is_host() {
+    if server_player.is_none() {
         return;
     }
+    let car_counts: Vec<i32> = cars.iter().map(|c| c.count).collect();
     let race_not_over =
-        cars.iter().count() == 0 || cars.iter().any(|car| car.count < LAPS_TO_WIN as i32);
-    if race_not_over && !(input.pressed(KeyCode::KeyU) && input.pressed(KeyCode::KeyK)) {
+        car_counts.is_empty() || car_counts.iter().any(|&c| c < LAPS_TO_WIN as i32);
+    let cheat = input.pressed(KeyCode::KeyU) && input.pressed(KeyCode::KeyK);
+    if race_not_over && !cheat {
         return;
     }
     if race_ended.is_some() {
         return;
     }
-    events_w.write(OnFinishTimeUpdate(finish_times.clone()));
+    info!("Race ended! car_counts={:?}, cheat={}", car_counts, cheat);
+    if let Some(lobby) = lobbies.iter().next() {
+        let msg = OnFinishTimeUpdate(finish_times.clone());
+        commands
+            .entity(lobby)
+            .trigger(move |entity| BroadcastLobbyMessage::new(entity, msg));
+    }
     commands.insert_resource(RaceEnded(time.elapsed_secs()));
 }
 
@@ -352,19 +378,28 @@ fn end_with_delay(
     mut commands: Commands,
     time: Res<Time>,
     race_ended: Option<Res<RaceEnded>>,
-    easy: KartEasyP2P,
+    server_player: Option<Res<LocalServerPlayer>>,
     mut next_state: ResMut<NextState<AppState>>,
+    lobbies: Query<Entity, With<Lobby>>,
 ) {
-    if !easy.is_host() {
+    if server_player.is_none() {
         return;
     }
     let Some(race_ended) = race_ended else {
         return;
     };
-    if time.elapsed_secs() - race_ended.0 < 3. {
+    let elapsed = time.elapsed_secs() - race_ended.0;
+    if elapsed < 3. {
         return;
     }
+    info!("end_with_delay: transitioning to OutOfGame (waited {:.1}s)", elapsed);
     next_state.set(AppState::OutOfGame);
+    if let Some(lobby) = lobbies.iter().next() {
+        let msg = crate::GameStateChanged(crate::AppState::OutOfGame);
+        commands
+            .entity(lobby)
+            .trigger(move |e| BroadcastLobbyMessage::new(e, msg));
+    }
     commands.remove_resource::<RaceEnded>();
 }
 
@@ -397,15 +432,18 @@ fn start_light(
 }
 
 fn update_held_item_icon(
-    easy: KartEasyP2P,
+    local_player: Option<Res<LocalMultiplayerPlayerId>>,
+    local_server: Option<Res<LocalServerPlayer>>,
     mut held_item_icon: Query<(&mut Visibility, &mut ImageNode), With<HeldItemIcon>>,
-    mut pickup_reader: MessageReader<ItemPickedUp>,
+    mut pickup_reader: MessageReader<ReceivedEnsembleMessage<ItemPickedUp>>,
 ) {
-    for picked_up in pickup_reader.read() {
-        if !easy
-            .get_local_player_id()
-            .is_some_and(|id| id == picked_up.car.owner_id())
-        {
+    let local_uuid = local_player
+        .as_ref()
+        .map(|p| p.0)
+        .or_else(|| local_server.as_ref().map(|p| p.0));
+    for msg in pickup_reader.read() {
+        let picked_up = &msg.message;
+        if !local_uuid.is_some_and(|uuid| uuid == picked_up.car_uuid) {
             continue;
         }
         for (mut visibility, mut image_node) in held_item_icon.iter_mut() {

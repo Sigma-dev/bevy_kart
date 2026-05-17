@@ -1,14 +1,15 @@
 use crate::{
-    AppColors, AppPlayerData, AppState, AssetHandles, KartColor, KartEasyP2P, RESOLUTION,
-    SpriteLayers,
+    AppColors, AppState, AssetHandles, LobbyState, LocalPlayerData,
+    RESOLUTION, SpriteLayers,
     kart::{AutoCar, KartControlType, spawn_kart},
     menu::animated_button_bundle,
 };
 use bevy::prelude::*;
 use bevy_bundled_observers::observers;
-use bevy_easy_p2p::prelude::*;
+use bevy_ensemble::prelude::*;
+use bevy_ensemble_webrtc::JoinWebrtcLobbyByCode;
 use bevy_ui_text_input::{
-    ModifyText, SubmitText, TextInputBuffer, TextInputContents, TextInputFilter, TextInputMode,
+    SubmitText, TextInputBuffer, TextInputContents, TextInputFilter, TextInputMode,
     TextInputModifier, TextInputNode,
 };
 use rand::Rng;
@@ -21,7 +22,13 @@ impl Plugin for StartPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (handle_spawning_menu_cars, handle_despawning_menu_cars),
+            (
+                handle_spawning_menu_cars,
+                handle_despawning_menu_cars,
+                handle_code_submit,
+                handle_name_change,
+                hide_controls_while_joining,
+            ),
         );
     }
 }
@@ -38,13 +45,19 @@ impl MenuCarSpawner {
 }
 
 #[derive(Component)]
+struct MenuControls;
+
+#[derive(Component)]
 struct CodeInput;
+
+#[derive(Component)]
+struct NameInput;
 
 pub(crate) fn spawn_menu(
     mut commands: Commands,
     mut texture_atlases: ResMut<Assets<TextureAtlasLayout>>,
-    easy: KartEasyP2P,
     handles: Res<AssetHandles>,
+    local_data: Res<LocalPlayerData>,
 ) {
     let name_atlas = texture_atlases.add(TextureAtlasLayout::from_grid(
         UVec2::new(32, 8),
@@ -62,7 +75,7 @@ pub(crate) fn spawn_menu(
     ));
     let menu = commands
         .spawn((
-            DespawnOnExit(P2PLobbyState::OutOfLobby),
+            DespawnOnExit(LobbyState::OutOfLobby),
             DespawnOnExit(AppState::OutOfGame),
             Node {
                 width: percent(100),
@@ -115,6 +128,7 @@ pub(crate) fn spawn_menu(
         .id();
     let buttons = commands
         .spawn((
+            MenuControls,
             Node {
                 position_type: PositionType::Absolute,
                 bottom: vh(20),
@@ -130,8 +144,9 @@ pub(crate) fn spawn_menu(
                         &handles,
                         handles.buttons_atlas.clone()
                     ),
-                    observers!(|_trigger: On<Pointer<Press>>, mut easy: KartEasyP2P| {
-                        easy.create_lobby();
+                    observers!(|_trigger: On<Pointer<Press>>,
+                                mut start_hosting: MessageWriter<StartHosting>| {
+                        start_hosting.write(StartHosting);
                     }),
                 ),
                 (
@@ -164,9 +179,6 @@ pub(crate) fn spawn_menu(
                             },
                             BackgroundColor(AppColors::Dark.color()),
                             CodeInput,
-                            observers![|trigger: On<SubmitText>, mut easy: KartEasyP2P| {
-                                easy.join_lobby(&trigger.text.to_string());
-                            }]
                         ),
                         (
                             animated_button_bundle(
@@ -176,9 +188,9 @@ pub(crate) fn spawn_menu(
                             ),
                             observers!(
                             |_: On<Pointer<Press>>,
-                             mut easy: KartEasyP2P,
+                             mut join_writer: MessageWriter<JoinWebrtcLobbyByCode>,
                              code: Single<&TextInputContents, With<CodeInput>>| {
-                                easy.join_lobby(&code.get());
+                                join_writer.write(JoinWebrtcLobbyByCode(code.get().to_string()));
                             }
                         ),
                         ),
@@ -203,16 +215,14 @@ pub(crate) fn spawn_menu(
             AnimatedButton(0),
         ))
         .id();
-    let player_name = easy.get_local_player_data().name.clone();
     let name_parent = commands
         .spawn((
+            MenuControls,
             Node {
                 position_type: PositionType::Absolute,
                 bottom: px(15),
                 column_gap: px(10),
-                // horizontally center child text
                 justify_content: JustifyContent::Center,
-                // vertically center child text
                 align_items: AlignItems::Center,
                 ..default()
             },
@@ -237,7 +247,8 @@ pub(crate) fn spawn_menu(
                         clear_on_submit: false,
                         ..default()
                     },
-                    TextInputBuffer::new(player_name),
+                    TextInputBuffer::new(local_data.0.name.clone()),
+                    TextInputContents::default(),
                     TextFont {
                         font_size: 28.,
                         ..default()
@@ -248,12 +259,7 @@ pub(crate) fn spawn_menu(
                         width: px(200),
                         ..default()
                     },
-                    observers!(|trigger: On<ModifyText>, mut easy: KartEasyP2P| {
-                        easy.set_local_player_data(AppPlayerData {
-                            name: trigger.text.to_string(),
-                            kart_color: KartColor::new(),
-                        });
-                    })
+                    NameInput,
                 )
             ],
         ))
@@ -265,6 +271,38 @@ pub(crate) fn spawn_menu(
         logo,
         car_spawners,
     ]);
+}
+
+/// Handle code input submission (join lobby by code).
+fn handle_code_submit(
+    mut submit_reader: MessageReader<SubmitText>,
+    code_inputs: Query<Entity, With<CodeInput>>,
+    mut join_writer: MessageWriter<JoinWebrtcLobbyByCode>,
+) {
+    for submit in submit_reader.read() {
+        // Only act on submits from a CodeInput entity
+        if code_inputs.get(submit.entity).is_ok() {
+            join_writer.write(JoinWebrtcLobbyByCode(submit.text.to_string()));
+        }
+    }
+}
+
+/// Sync name input text to local player data.
+fn handle_name_change(
+    name_inputs: Query<&TextInputContents, (With<NameInput>, Changed<TextInputContents>)>,
+    mut local_data: ResMut<LocalPlayerData>,
+    mut commands: Commands,
+    lobbies: Query<Entity, With<Lobby>>,
+) {
+    for contents in name_inputs.iter() {
+        local_data.0.name = contents.get().to_string();
+        if let Some(lobby) = lobbies.iter().next() {
+            let data = local_data.0.clone();
+            commands
+                .entity(lobby)
+                .trigger(move |entity| SetPlayerData::new(entity, data));
+        }
+    }
 }
 
 fn handle_spawning_menu_cars(
@@ -296,6 +334,20 @@ fn handle_despawning_menu_cars(
         if outside_of(transform.translation.xy(), RESOLUTION) {
             commands.entity(entity).despawn();
         }
+    }
+}
+
+fn hide_controls_while_joining(
+    pending: Query<(), With<PendingLobby>>,
+    mut controls: Query<&mut Visibility, With<MenuControls>>,
+) {
+    let hidden = !pending.is_empty();
+    for mut vis in controls.iter_mut() {
+        *vis = if hidden {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
     }
 }
 

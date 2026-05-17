@@ -1,13 +1,41 @@
 use crate::kart::{KART_SIZE, KartControlType, spawn_kart};
 use crate::menu::{AnimatedButton, animated_button_bundle};
 use crate::{
-    AppColors, AppP2PUpdate, AppPlayerData, AppState, AssetHandles, FinishTimes, KartEasyP2P,
-    RESOLUTION, SpriteLayers,
+    AppColors, AppPlayerData, AppState, AssetHandles, ChatMessage, FinishTimes, LobbyState, RESOLUTION, SpriteLayers,
 };
 use bevy::prelude::*;
 use bevy_bundled_observers::observers;
-use bevy_easy_p2p::prelude::*;
+use bevy_ensemble::prelude::*;
+use bevy_ensemble_webrtc::LobbyWebrtcCode;
+use bevy_ticked_networking::prelude::*;
 use bevy_ui_text_input::{SubmitText, TextInputMode, TextInputNode};
+
+/// Handle chat text submissions as a system (SubmitText is a Message, not EntityEvent).
+fn on_chat_submit(
+    mut submit_reader: MessageReader<SubmitText>,
+    mut commands: Commands,
+    lobbies: Query<Entity, With<Lobby>>,
+    local_player: Option<Res<LocalMultiplayerPlayerId>>,
+    local_server: Option<Res<LocalServerPlayer>>,
+    mut history: ResMut<LobbyChatInputHistory>,
+) {
+    for submit in submit_reader.read() {
+        let uuid = local_player
+            .as_ref()
+            .map(|p| p.0)
+            .or_else(|| local_server.as_ref().map(|p| p.0));
+        if let (Some(lobby), Some(uuid)) = (lobbies.iter().next(), uuid) {
+            let msg = ChatMessage {
+                sender: uuid,
+                text: submit.text.clone(),
+            };
+            commands
+                .entity(lobby)
+                .trigger(move |entity| BroadcastLobbyMessage::new(entity, msg));
+        }
+        history.add(format!("You: {}", submit.text));
+    }
+}
 use rand::distr::Distribution;
 use rand::distr::weighted::WeightedIndex;
 use rand::{Rng, rng};
@@ -27,11 +55,12 @@ impl Plugin for LobbyPlugin {
                         lobby_chat_input_history,
                         spawn_lobby_players_buttons,
                         on_client_message_received,
-                        receive_ping,
+                        on_chat_submit,
                         update_lobby_cars,
+                        receive_ping,
                     )
                         .run_if(in_state(AppState::OutOfGame))
-                        .run_if(in_state(P2PLobbyState::InLobby)),
+                        .run_if(in_state(LobbyState::InLobby)),
                     on_lobby_exit,
                     spawn_background_elements,
                     handle_background_elements,
@@ -46,7 +75,6 @@ struct LobbyCodeText;
 
 #[derive(Component)]
 #[require(Text)]
-
 struct PingText;
 
 #[derive(Resource)]
@@ -68,7 +96,10 @@ struct LobbyChatInputHistoryText;
 struct LobbyPlayersButtons;
 
 #[derive(Component)]
-pub struct LobbyCar(pub NetworkedId);
+pub struct LobbyCar(pub u128);
+
+#[derive(Component)]
+pub struct LobbyCarName(pub u128);
 
 #[derive(Component, Clone, Copy)]
 enum BackgroundElement {
@@ -155,11 +186,13 @@ impl BackgroundElement {
 }
 
 fn lobby_code(
-    state: Res<EasyP2PState<AppPlayerData>>,
+    lobby_codes: Query<&LobbyWebrtcCode, With<Lobby>>,
     mut texts: Query<&mut Text, With<LobbyCodeText>>,
 ) {
-    for mut text in texts.iter_mut() {
-        *text = Text::new(state.lobby_code.clone());
+    for code in lobby_codes.iter() {
+        for mut text in texts.iter_mut() {
+            *text = Text::new(code.0.clone());
+        }
     }
 }
 
@@ -172,75 +205,81 @@ fn lobby_chat_input_history(
     }
 }
 
-fn on_client_message_received(mut history: ResMut<LobbyChatInputHistory>, mut easy: KartEasyP2P) {
-    for update in easy.read_updates() {
-        match update {
-            EasyP2PUpdate::ClientChat { client_id, text } => {
-                if let Some(data) = easy.get_player_data(NetworkedId::ClientId(client_id)) {
-                    history.add(format!("{}: {}", data.name, text));
-                }
-            }
-            EasyP2PUpdate::HostChat { text } => {
-                if let Some(data) = easy.get_player_data(NetworkedId::Host) {
-                    history.add(format!("{}: {}", data.name, text));
-                }
-            }
-            _ => {}
+fn on_client_message_received(
+    mut history: ResMut<LobbyChatInputHistory>,
+    mut reader: MessageReader<ReceivedEnsembleMessage<ChatMessage>>,
+    participants: Query<(&LobbyParticipant, Option<&PlayerData<AppPlayerData>>)>,
+    local_player: Option<Res<LocalMultiplayerPlayerId>>,
+    local_server: Option<Res<LocalServerPlayer>>,
+) {
+    let local_uuid = local_player
+        .as_ref()
+        .map(|p| p.0)
+        .or_else(|| local_server.as_ref().map(|p| p.0));
+    for msg in reader.read() {
+        let chat = &msg.message;
+        // Skip own messages — already added locally by on_chat_submit
+        if local_uuid.is_some_and(|uuid| uuid == chat.sender) {
+            continue;
         }
+        let sender_name = participants
+            .iter()
+            .find(|(p, _)| p.player_uuid == chat.sender)
+            .and_then(|(_, data)| data.map(|d| d.0.name.as_str()))
+            .unwrap_or("Unknown");
+        history.add(format!("{}: {}", sender_name, chat.text));
     }
 }
 
 fn on_lobby_exit(
-    mut events: MessageReader<AppP2PUpdate>,
+    mut removed_lobbies: RemovedComponents<Lobby>,
     mut inputs: Query<&mut Text, With<TextInputNode>>,
     mut history: ResMut<LobbyChatInputHistory>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    for AppP2PUpdate(update) in events.read() {
-        if let EasyP2PUpdate::LobbyExited { reason: _ } = update {
-            for mut input in inputs.iter_mut() {
-                input.0.clear();
-            }
-            history.0.clear();
-            next_state.set(AppState::OutOfGame);
-        }
+    if removed_lobbies.read().next().is_none() {
+        return;
     }
+    for mut input in inputs.iter_mut() {
+        input.0.clear();
+    }
+    history.0.clear();
+    next_state.set(AppState::OutOfGame);
 }
 
 fn spawn_lobby_players_buttons(
-    mut set: ParamSet<(KartEasyP2P, MessageReader<AppP2PUpdate>)>,
     mut commands: Commands,
     finish_times: Res<FinishTimes>,
     cars: Query<&LobbyCar>,
+    participants: Query<&LobbyParticipant>,
+    local_player: Option<Res<LocalMultiplayerPlayerId>>,
+    local_server: Option<Res<LocalServerPlayer>>,
+    new_participants: Query<(), Added<LobbyParticipant>>,
 ) {
-    let has_update = set
-        .p1()
-        .read()
-        .any(|AppP2PUpdate(update)| matches!(update, EasyP2PUpdate::RosterUpdated { .. }));
     let first_time = cars.count() == 0;
-    if !has_update && !first_time {
+    let has_new = !new_participants.is_empty();
+    if !has_new && !first_time {
         return;
     }
-    let players = set.p0().get_players();
-    let count = players.len();
-    for (i, player) in players.iter().enumerate() {
-        if cars.iter().any(|car| car.0 == player.id) {
+    let local_uuid = local_player
+        .as_ref()
+        .map(|p| p.0)
+        .or_else(|| local_server.as_ref().map(|p| p.0));
+    let all_participants: Vec<_> = participants.iter().collect();
+    let count = all_participants.len();
+    for (i, participant) in all_participants.iter().enumerate() {
+        let player_uuid = participant.player_uuid;
+        if cars.iter().any(|car| car.0 == player_uuid) {
             continue;
         }
-        let Some(local_player_id) = set.p0().get_local_player_id() else {
-            continue;
-        };
-        let Some(player_index) = set.p0().get_player_index(player.id) else {
-            continue;
-        };
-        let is_local = local_player_id == player.id;
+        let is_local = local_uuid.is_some_and(|uuid| uuid == player_uuid);
         let is_last = i == count - 1;
         let left_spawn = -RESOLUTION.x / 2.;
         let starting_pos = if first_time {
             if is_local && is_last {
                 left_spawn
             } else {
-                compute_desired_x(player_index, count)
+                compute_desired_x(i, count)
             }
         } else {
             left_spawn
@@ -248,7 +287,7 @@ fn spawn_lobby_players_buttons(
         commands.run_system_cached_with(
             spawn_kart,
             (
-                KartControlType::LobbyCar(player.id, finish_times.get_player_rank(player.id)),
+                KartControlType::LobbyCar(player_uuid, finish_times.get_player_rank(player_uuid)),
                 Transform::from_translation(Vec3::X * starting_pos)
                     .with_rotation(Quat::from_rotation_z(-90_f32.to_radians())),
             ),
@@ -268,40 +307,60 @@ fn compute_desired_x(player_index: usize, count: usize) -> f32 {
 fn update_lobby_cars(
     time: Res<Time>,
     mut commands: Commands,
-    easy: KartEasyP2P,
+    participants: Query<(&LobbyParticipant, Option<&PlayerData<AppPlayerData>>)>,
     mut cars: Query<(Entity, &LobbyCar, &mut Transform, &mut Sprite)>,
+    mut names: Query<(&LobbyCarName, &mut Text2d)>,
 ) {
-    let count = easy.get_players().len();
+    let all_participants: Vec<_> = participants.iter().collect();
+    let count = all_participants.len();
     if count == 0 {
         return;
     }
     for (entity, car, mut transform, mut sprite) in cars.iter_mut() {
-        let Some(player) = easy.get_player_data(car.0) else {
+        let Some((player_index, _)) = all_participants
+            .iter()
+            .enumerate()
+            .find(|(_, (p, _))| p.player_uuid == car.0)
+        else {
+            // Participant is truly gone — despawn the car
             commands.entity(entity).despawn();
             continue;
         };
-        let Some(player_index) = easy.get_player_index(car.0) else {
-            continue;
-        };
-        if let Some(atlas) = sprite.texture_atlas.as_mut() {
-            atlas.index = player.kart_color.to_u32() as usize;
+        // PlayerData may not have arrived yet — only update visuals if present
+        if let Some(player) = all_participants[player_index].1.map(|d| &d.0) {
+            if let Some(atlas) = sprite.texture_atlas.as_mut() {
+                atlas.index = player.kart_color.to_u32() as usize;
+            }
         }
         let desired_x = compute_desired_x(player_index, count);
         transform.translation.x = transform.translation.x.lerp(desired_x, time.delta_secs());
+    }
+    // Update lobby car name labels when PlayerData arrives or changes
+    for (car_name, mut text) in names.iter_mut() {
+        if let Some(player) = all_participants
+            .iter()
+            .find(|(p, _)| p.player_uuid == car_name.0)
+            .and_then(|(_, data)| data.map(|d| &d.0))
+        {
+            let new_name = player.name.as_str();
+            if text.0 != new_name && new_name != "..." {
+                text.0 = new_name.to_string();
+            }
+        }
     }
 }
 
 pub fn spawn_lobby(
     mut commands: Commands,
-    easy: KartEasyP2P,
+    server_player: Option<Res<LocalServerPlayer>>,
     handles: Res<AssetHandles>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    let is_host = easy.is_host();
+    let is_host = server_player.is_some();
     let lobby = commands
         .spawn((
-            DespawnOnExit(P2PLobbyState::InLobby),
+            DespawnOnExit(LobbyState::InLobby),
             DespawnOnExit(AppState::OutOfGame),
             Node {
                 width: percent(100),
@@ -318,7 +377,7 @@ pub fn spawn_lobby(
         Mesh2d(meshes.add(Rectangle::new(RESOLUTION.x, 10.))),
         MeshMaterial2d(materials.add(AppColors::Road.color())),
         Transform::from_xyz(0., 0., SpriteLayers::Background.to_z()),
-        DespawnOnExit(P2PLobbyState::InLobby),
+        DespawnOnExit(LobbyState::InLobby),
         DespawnOnExit(AppState::OutOfGame),
     ));
     let buttons = commands
@@ -332,8 +391,12 @@ pub fn spawn_lobby(
             },
             children![(
                 animated_button_bundle(AnimatedButton(6), &handles, handles.buttons_atlas.clone()),
-                observers!(|_: On<Pointer<Press>>, mut easy: KartEasyP2P| {
-                    easy.exit_lobby();
+                observers!(|_: On<Pointer<Press>>,
+                            mut commands: Commands,
+                            lobbies: Query<Entity, With<Lobby>>| {
+                    for lobby in lobbies.iter() {
+                        commands.entity(lobby).despawn();
+                    }
                 }),
             )],
         ))
@@ -341,10 +404,8 @@ pub fn spawn_lobby(
 
     let lobby_code_text = commands
         .spawn((
-            // Accepts a `String` or any type that converts into a `String`, such as `&str`
             Text::new(""),
             TextFont {
-                // This font is loaded and will be used instead of the default font.
                 font_size: 80.0,
                 ..default()
             },
@@ -369,7 +430,6 @@ pub fn spawn_lobby(
             },
             children![
                 (
-                    // Accepts a `String` or any type that converts into a `String`, such as `&str`
                     Text::new(""),
                     LobbyChatInputHistoryText,
                     Node {
@@ -379,7 +439,6 @@ pub fn spawn_lobby(
                     },
                 ),
                 (
-                    // Accepts a `String` or any type that converts into a `String`, such as `&str`
                     TextInputNode {
                         mode: TextInputMode::SingleLine,
                         ..default()
@@ -389,18 +448,6 @@ pub fn spawn_lobby(
                         ..default()
                     },
                     BackgroundColor(AppColors::Dark.color()),
-                    observers!(
-                        |trigger: On<SubmitText>,
-                         mut easy: KartEasyP2P,
-                         mut history: ResMut<LobbyChatInputHistory>| {
-                            if easy.is_host() {
-                                easy.send_message_all(trigger.text.clone());
-                            } else {
-                                easy.send_message_to_host(trigger.text.clone());
-                            }
-                            history.add(format!("You: {}", trigger.text));
-                        }
-                    ),
                 )
             ],
         ))
@@ -422,8 +469,17 @@ pub fn spawn_lobby(
         commands.entity(buttons).with_child((
             animated_button_bundle(AnimatedButton(4), &handles, handles.buttons_atlas.clone()),
             observers!(
-                |_: On<Pointer<Press>>, mut next_state: ResMut<NextState<AppState>>| {
+                |_: On<Pointer<Press>>,
+                 mut next_state: ResMut<NextState<AppState>>,
+                 mut commands: Commands,
+                 lobbies: Query<Entity, With<Lobby>>| {
                     next_state.set(AppState::Game);
+                    if let Some(lobby) = lobbies.iter().next() {
+                        let msg = crate::GameStateChanged(AppState::Game);
+                        commands
+                            .entity(lobby)
+                            .trigger(move |e| BroadcastLobbyMessage::new(e, msg));
+                    }
                 }
             ),
         ));
@@ -433,7 +489,7 @@ pub fn spawn_lobby(
         .add_children(&[lobby_code_text, lobby_chat, players_buttons, buttons]);
 
     commands.spawn((
-        DespawnOnExit(P2PLobbyState::InLobby),
+        DespawnOnExit(LobbyState::InLobby),
         Node {
             position_type: PositionType::Absolute,
             bottom: px(5),
@@ -444,13 +500,15 @@ pub fn spawn_lobby(
 }
 
 fn receive_ping(
-    mut updates: MessageReader<PingUpdate>,
+    lobby_rtt: Query<&PeerRtt, With<Lobby>>,
     mut texts: Query<&mut Text, With<PingText>>,
 ) {
-    for PingUpdate(ping) in updates.read() {
-        for mut text in texts.iter_mut() {
-            *text = Text::new(format!("Ping: {} ms", ping.as_millis()));
-        }
+    let Ok(rtt) = lobby_rtt.single() else {
+        return;
+    };
+    let ms = (rtt.0 * 1000.0) as u64;
+    for mut text in texts.iter_mut() {
+        *text = Text::new(format!("Ping: {} ms", ms));
     }
 }
 
@@ -481,7 +539,7 @@ fn handle_background_elements(
     mut commands: Commands,
     mut background_elements: Query<(Entity, &mut Visibility, &mut Transform, &BackgroundElement)>,
     app_state: Res<State<AppState>>,
-    p2p_state: Res<State<P2PLobbyState>>,
+    lobby_state: Res<State<LobbyState>>,
 ) {
     for (entity, mut visibility, mut transform, element) in background_elements.iter_mut() {
         let speed = if time.elapsed_secs() < 0.5 {
@@ -495,7 +553,7 @@ fn handle_background_elements(
             commands.entity(entity).despawn();
         }
         *visibility = if *app_state.get() == AppState::OutOfGame
-            && *p2p_state.get() == P2PLobbyState::InLobby
+            && *lobby_state.get() == LobbyState::InLobby
         {
             Visibility::Visible
         } else {

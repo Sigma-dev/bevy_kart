@@ -4,15 +4,28 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy_easy_p2p = { git = "https://github.com/Sigma-dev/bevy_easy_p2p.git" }
+# Networking stack
+bevy_ticked = { path = "../bevy_ticked" }
+bevy_ticked_networking = { path = "../bevy_ticked/crates/bevy_ticked_networking" }
+bevy_ticked_networking_ensemble = { path = "../bevy_ticked/crates/bevy_ticked_networking_ensemble" }
+bevy_ensemble = { path = "../bevy_ensemble" }
+bevy_ensemble_webrtc = { path = "../bevy_ensemble/crates/bevy_ensemble_webrtc" }
+postcard = { version = "1", features = ["alloc"] }
+
 audio_manager = { path = "audio_manager" }
 bevy_timer = { path = "bevy_timer" }
 bevy_bundled_observers = { git = "https://github.com/fallible-algebra/bevy_observers.git" }
 bevy_ui_text_input = { git = "https://github.com/Sigma-dev/bevy_ui_text_input.git" }
-bevy = { version = "0.17", features = ["wav"] }
-avian2d = "0.4"
+bevy = { version = "0.18", features = ["wav"] }
+avian2d = { version = "0.6", features = ["serialize"] }
 serde = { version = "1", features = ["derive"] }
-# Browser API access used directly by this crate
+# For compact codes: deflate compression + base62 encoding
+miniz_oxide = "0.7"
+base-x = "0.2"
+serde_json = "1"
+rand = "0.9.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = [
     "Window",
     "Location",
@@ -24,18 +37,10 @@ web-sys = { version = "0.3", features = [
     "Headers",
     "Crypto"
 ] }
-# For compact codes: deflate compression + base62 encoding
-miniz_oxide = "0.7"
-base-x = "0.2"
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-serde_json = "1"
 serde-wasm-bindgen = "0.6"
-rand = "0.9.2"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-gcloud-sdk = { version = "0.28.2" }
 
 # Idiomatic Bevy code often triggers these lints, and the CI workflow treats them as errors.
 # In some cases they may still signal poor code quality however, so consider commenting out these lines.

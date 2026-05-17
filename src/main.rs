@@ -1,6 +1,7 @@
-use crate::items::{ItemType, ItemsPlugin, spawn_item_pickup, spawn_rocket};
+use crate::items::{ItemType, ItemsPlugin};
 use crate::kart::{
-    KART_COLORS_COUNT, KART_SIZE, KartColor, KartControlType, KartPlugin, spawn_kart,
+    FollowTransform, KART_COLORS_COUNT, KART_SIZE, KartColor, KartPlugin, LapUpdate, LapsCounter,
+    LocalKart,
 };
 use crate::menu::MenuPlugin;
 use crate::menu::lobby::{BACKGROUND_ELEMENT_TYPES_COUNT, spawn_lobby};
@@ -23,6 +24,7 @@ use bevy::picking::{InteractionPlugin, PickingPlugin, input::PointerInputPlugin}
 use bevy::platform::collections::HashMap;
 use bevy::scene::ScenePlugin;
 use bevy::prelude::*;
+use bevy_bundled_observers::observers;
 use bevy::render::RenderPlugin;
 use bevy::sprite::SpritePlugin;
 use bevy::sprite_render::SpriteRenderPlugin;
@@ -34,8 +36,13 @@ use bevy::ui::UiPlugin;
 use bevy::ui_render::UiRenderPlugin;
 use bevy::window::PrimaryWindow;
 use bevy::winit::WinitPlugin;
-use bevy_easy_p2p::easy_firestore_p2p::FirestoreP2PPlugin;
-use bevy_easy_p2p::prelude::*;
+use bevy_ensemble::prelude::*;
+use bevy_ensemble_webrtc::{
+    BevyEnsembleWebrtcPlugin, JoinWebrtcLobbyByCode, LobbyWebrtcCode,
+};
+use bevy_ticked::prelude::*;
+use bevy_ticked_networking::prelude::*;
+use bevy_ticked_networking_ensemble::TickedNetworkingEnsemblePlugin;
 use bevy_ui_text_input::TextInputPlugin;
 use serde::{Deserialize, Serialize};
 
@@ -49,18 +56,44 @@ use car_controller_2d::CarController2dPlugin;
 
 const RESOLUTION: Vec2 = Vec2::new(256., 144.);
 
-#[derive(Clone, Debug, Default)]
-pub struct KartP2PData;
+// --- Networking types ---
 
-impl EasyP2PData for KartP2PData {
-    type PlayerData = AppPlayerData;
-    type PlayerInputData = AppPlayerInputData;
-    type Instantiations = AppInstantiations;
+/// Input data sent each tick from each player.
+/// This is the tick input type for bevy_ticked.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct PlayerInput {
+    pub forward: bool,
+    pub backward: bool,
+    pub left: bool,
+    pub right: bool,
+    pub using_item: bool,
 }
 
-pub type KartEasyP2P<'w, 's> = EasyP2P<'w, 's, KartP2PData>;
+/// Networked component: identifies which player owns an entity.
+#[derive(Component, Clone, Debug, Serialize, Deserialize)]
+pub struct OwnerPlayer(pub u128);
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+/// Networked position proxy for non-physics tracked entities (items, rockets).
+/// Copied to Transform.translation by sync_non_physics_visuals.
+#[derive(Component, Clone, Debug, Serialize, Deserialize, Default)]
+pub struct NetworkedPosition(pub Vec2);
+
+/// Networked rotation proxy for non-physics tracked entities (rockets).
+/// Copied to Transform.rotation by sync_non_physics_visuals.
+#[derive(Component, Clone, Debug, Serialize, Deserialize, Default)]
+pub struct NetworkedRotation(pub f32);
+
+/// Networked component: what kind of networked entity this is.
+/// Used by clients in On<Add, TickTrackedEntity> observer to add visuals.
+#[derive(Component, Clone, Debug, Serialize, Deserialize)]
+pub enum EntityKind {
+    Kart,
+    ItemPickup(ItemType),
+    Rocket,
+}
+
+/// Player metadata shared via ensemble messages.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Message)]
 pub struct AppPlayerData {
     pub name: String,
     pub kart_color: KartColor,
@@ -74,20 +107,41 @@ impl Default for AppPlayerData {
         }
     }
 }
+
+/// Ensemble message for chat.
+#[derive(Clone, Debug, Serialize, Deserialize, Message)]
+pub struct ChatMessage {
+    pub sender: u128,
+    pub text: String,
+}
+
+/// Broadcast message: game state changed (host -> all peers).
+#[derive(Clone, Debug, Serialize, Deserialize, Message)]
+pub struct GameStateChanged(pub AppState);
+
+/// Local player's data (stored locally, pushed via SetPlayerData when in a lobby).
+#[derive(Resource)]
+pub struct LocalPlayerData(pub AppPlayerData);
+
+impl Default for LocalPlayerData {
+    fn default() -> Self {
+        Self(AppPlayerData::default())
+    }
+}
+
 #[derive(States, Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-enum AppState {
+pub enum AppState {
     #[default]
     OutOfGame,
     Game,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AppPlayerInputData {
-    pub forward: bool,
-    pub backward: bool,
-    pub left: bool,
-    pub right: bool,
-    pub using_item: bool,
+/// Replaces P2PLobbyState from bevy_easy_p2p.
+#[derive(States, Default, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum LobbyState {
+    #[default]
+    OutOfLobby,
+    InLobby,
 }
 
 #[derive(Resource)]
@@ -115,13 +169,6 @@ pub struct AssetHandles {
     clouds_atlas: Handle<TextureAtlasLayout>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum AppInstantiations {
-    Kart(NetworkedId),
-    ItemPickup(ItemType),
-    Rocket,
-}
-
 pub enum SpriteLayers {
     Background,
     OnGround,
@@ -141,9 +188,6 @@ impl SpriteLayers {
         }
     }
 }
-
-#[derive(Clone, Message, Debug)]
-struct AppP2PUpdate(EasyP2PUpdate<KartP2PData>);
 
 pub enum AppColors {
     Dark,
@@ -180,14 +224,11 @@ impl Plugin for NecessaryBevyPlugins {
         ));
         app.add_plugins((
             AssetPlugin {
-                // Wasm builds will check for meta files (that don't exist) if this isn't set.
-                // This causes errors and even panics on web build on itch or with SPA dev-servers.
-                // See https://github.com/bevyengine/bevy_github_ci_template/issues/48.
                 meta_check: AssetMetaCheck::Never,
                 ..default()
             },
             ScenePlugin,
-            WinitPlugin::<bevy::winit::WakeUp>::default(),
+            WinitPlugin::default(),
             RenderPlugin::default(),
             ImagePlugin::default_nearest(),
             MeshPlugin,
@@ -223,25 +264,53 @@ fn main() {
     App::new()
         .add_plugins((
             NecessaryBevyPlugins,
-            PhysicsPlugins::default(),
             TextInputPlugin,
         ))
+        // Networking stack
+        .add_plugins((EnsemblePlugin, LobbyBroadcastPlugin, PlayerDataPlugin::<AppPlayerData>::default()))
+        .add_plugins(BevyEnsembleWebrtcPlugin {
+            server_url: "wss://signal.sigma-dev.eu/ws".into(),
+            display_name: "Player".into(),
+            ..default()
+        })
+        .add_plugins(TickedPlugin)
+        .add_plugins(PhysicsPlugins::new(TickedSimulation))
         .insert_resource(Gravity::ZERO)
+        .add_plugins(TickedServerPlugin::<PlayerInput>::new())
+        .add_plugins(TickedClientPlugin::<PlayerInput>::new())
+        .add_plugins(TickedNetworkingEnsemblePlugin::<PlayerInput>::new())
+        // Register networked components (ORDER MUST MATCH ON ALL PEERS)
+        .register_networked_ticked_component::<Position>()
+        .register_networked_ticked_component::<Rotation>()
+        .register_networked_ticked_component::<LinearVelocity>()
+        .register_networked_ticked_component::<AngularVelocity>()
+        .register_networked_ticked_component::<OwnerPlayer>()
+        .register_networked_ticked_component::<EntityKind>()
+        .register_networked_ticked_component::<NetworkedPosition>()
+        .register_networked_ticked_component::<NetworkedRotation>()
+        .register_networked_ticked_component::<car_controller_2d::CarControllerInputs>()
+        // Register ensemble messages
+        .register_broadcast_message::<ChatMessage>()
+        .register_broadcast_message::<items::ItemPickedUp>()
+        .register_broadcast_message::<items::RocketExploded>()
+        .register_broadcast_message::<track::OnFinishTimeUpdate>()
+        .register_broadcast_message::<GameStateChanged>()
+        // Game plugins
         .add_plugins((
-            EasyP2PPlugin::<KartP2PData>::default(),
-            FirestoreP2PPlugin::<P2PData<KartP2PData>>::default(),
             CarController2dPlugin,
             AudioManagerPlugin::default(),
             TimerPlugin,
         ))
         .add_plugins((MenuPlugin, TrackPlugin, ItemsPlugin, KartPlugin))
-        .add_systems(Startup, (auto_join_from_url, setup))
+        // States
         .init_state::<AppState>()
-        .init_networked_state::<AppState, KartP2PData>()
-        .add_message::<AppP2PUpdate>()
+        .init_state::<LobbyState>()
+        // Resources
+        .init_resource::<LocalPlayerData>()
         .insert_resource(FinishTimes {
             times: HashMap::new(),
         })
+        // Asset loading
         .add_plugins(|app: &mut App| {
             let asset_server = app.world().get_resource::<AssetServer>().unwrap().clone();
             let mut texture_atlases = app
@@ -303,20 +372,36 @@ fn main() {
             };
             app.insert_resource(asset_handles);
         })
-        .add_systems(Update, emit_easy_updates)
-        .add_systems(Update, on_lobby_created)
-        .add_systems(Update, on_instantiation)
-        .add_systems(OnEnter(P2PLobbyState::OutOfLobby), spawn_menu)
-        .add_systems(OnEnter(P2PLobbyState::InLobby), spawn_lobby)
+        // Systems
+        .add_systems(Startup, (auto_join_from_url, setup))
+        .add_observer(on_tracked_entity_spawned)
+        .add_systems(
+            Update,
+            (
+                on_lobby_ready,
+                cleanup_on_lobby_gone,
+                receive_game_state_changed,
+                cursor_positon_log,
+                update_fps,
+            ),
+        )
+        .add_systems(Update, (capture_local_input, sync_visuals))
+        .add_systems(OnEnter(LobbyState::OutOfLobby), spawn_menu)
+        .add_systems(OnEnter(LobbyState::InLobby), spawn_lobby)
         .add_systems(OnEnter(AppState::Game), spawn_track)
         .add_systems(OnExit(AppState::Game), spawn_lobby)
-        .add_systems(Update, (send_inputs, cursor_positon_log, update_fps))
         .insert_resource(ClearColor(AppColors::Grass.color()))
         .run();
 }
 
+#[cfg(target_arch = "wasm32")]
 fn get_url() -> Option<String> {
     web_sys::window()?.location().href().ok()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn get_url() -> Option<String> {
+    None
 }
 
 fn current_base_url() -> Option<String> {
@@ -341,67 +426,123 @@ fn extract_query_param(target: &str) -> Option<String> {
     None
 }
 
-fn send_inputs(mut easy: KartEasyP2P, keyboard: Res<ButtonInput<KeyCode>>) {
-    easy.send_inputs(AppPlayerInputData {
-        forward: keyboard.pressed(KeyCode::KeyW) || keyboard.pressed(KeyCode::ArrowUp),
-        backward: keyboard.pressed(KeyCode::KeyS) || keyboard.pressed(KeyCode::ArrowDown),
-        left: keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::ArrowLeft),
-        right: keyboard.pressed(KeyCode::KeyD) || keyboard.pressed(KeyCode::ArrowRight),
-        using_item: keyboard.pressed(KeyCode::Space),
-    });
+/// Capture keyboard input and write to InputQueue each tick.
+fn capture_local_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    tick: Res<CurrentTick>,
+    local_client: Option<Res<LocalClientPlayer>>,
+    local_server: Option<Res<LocalServerPlayer>>,
+    mut input_queue: ResMut<InputQueue<PlayerInput>>,
+) {
+    let uuid = local_client
+        .as_ref()
+        .map(|p| p.0)
+        .or_else(|| local_server.as_ref().map(|p| p.0));
+    let Some(uuid) = uuid else { return };
+    let input = PlayerInput {
+        forward: keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp),
+        backward: keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown),
+        left: keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft),
+        right: keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight),
+        using_item: keys.pressed(KeyCode::Space),
+    };
+    input_queue.insert(tick.0 + 1, uuid, input);
 }
 
-fn auto_join_from_url(mut easy: KartEasyP2P) {
+/// Auto-join lobby from URL query parameter.
+fn auto_join_from_url(mut join_writer: MessageWriter<JoinWebrtcLobbyByCode>) {
     if let Some(room) = extract_query_param("room") {
         info!("room code in url: {}", room);
         if !room.trim().is_empty() {
-            easy.join_lobby(&room);
+            join_writer.write(JoinWebrtcLobbyByCode(room));
         }
     }
 }
 
-fn on_lobby_created(mut events: MessageReader<AppP2PUpdate>) {
-    for AppP2PUpdate(update) in events.read() {
-        if let EasyP2PUpdate::LobbyCreated { code } = update {
-            info!("Hosting room: {}", code);
+/// Detect when a lobby is ready and insert LocalServerPlayer/LocalClientPlayer.
+fn on_lobby_ready(
+    mut commands: Commands,
+    local_player: Option<Res<LocalMultiplayerPlayerId>>,
+    server_player: Option<Res<LocalServerPlayer>>,
+    client_player: Option<Res<LocalClientPlayer>>,
+    host_lobbies: Query<(Entity, &LobbyWebrtcCode), (With<Lobby>, With<Host>)>,
+    client_lobbies: Query<Entity, (With<Lobby>, Without<Host>)>,
+    mut lobby_state: ResMut<NextState<LobbyState>>,
+    local_data: Res<LocalPlayerData>,
+) {
+    let Some(local_player) = local_player else {
+        return;
+    };
+
+    if let Ok((lobby_entity, code)) = host_lobbies.single() {
+        if server_player.is_none() {
+            info!("Hosting room: {}", code.0);
             if let Some(base) = current_base_url() {
-                info!("Share link: {}?room={}", base, code);
+                info!("Share link: {}?room={}", base, code.0);
             }
+            commands.insert_resource(LocalServerPlayer(local_player.0));
+            commands.insert_resource(TickConfig { paused: false });
+            lobby_state.set(LobbyState::InLobby);
+            let data = local_data.0.clone();
+            commands
+                .entity(lobby_entity)
+                .trigger(move |entity| SetPlayerData::new(entity, data));
+        }
+    }
+    if let Ok(lobby_entity) = client_lobbies.single() {
+        if client_player.is_none() {
+            commands.insert_resource(LocalClientPlayer(local_player.0));
+            lobby_state.set(LobbyState::InLobby);
+            let data = local_data.0.clone();
+            commands
+                .entity(lobby_entity)
+                .trigger(move |entity| SetPlayerData::new(entity, data));
         }
     }
 }
 
-fn on_instantiation(mut commands: Commands, mut easy: KartEasyP2P) {
-    for data in easy.get_instantiations() {
-        match &data.instantiation {
-            AppInstantiations::Kart(id) => {
-                commands.run_system_cached_with(
-                    spawn_kart,
-                    (
-                        KartControlType::Player(NetworkedEntity::new(*id, data.uuid)),
-                        data.transform,
-                    ),
-                );
-            }
-            AppInstantiations::ItemPickup(item) => {
-                commands.run_system_cached_with(
-                    spawn_item_pickup,
-                    (
-                        *item,
-                        data.transform,
-                        NetworkedEntity::new(NetworkedId::Host, data.uuid),
-                    ),
-                );
-            }
-            AppInstantiations::Rocket => commands.run_system_cached_with(
-                spawn_rocket,
-                (
-                    data.transform,
-                    NetworkedEntity::new(NetworkedId::Host, data.uuid),
-                ),
-            ),
-        }
+
+/// Clean up when lobby is destroyed.
+fn cleanup_on_lobby_gone(
+    mut commands: Commands,
+    mut removed_lobbies: RemovedComponents<Lobby>,
+    game_entities: Query<Entity, With<TickTrackedEntity>>,
+    mut lobby_state: ResMut<NextState<LobbyState>>,
+    mut app_state: ResMut<NextState<AppState>>,
+) {
+    if removed_lobbies.read().next().is_none() {
+        return;
     }
+
+    for entity in game_entities.iter() {
+        commands.entity(entity).try_despawn();
+    }
+    commands.remove_resource::<LocalMultiplayerPlayerId>();
+    commands.remove_resource::<LocalServerPlayer>();
+    commands.remove_resource::<LocalClientPlayer>();
+
+    commands.insert_resource(CurrentTick(0));
+    commands.insert_resource(TickConfig { paused: true });
+
+    lobby_state.set(LobbyState::OutOfLobby);
+    app_state.set(AppState::OutOfGame);
+}
+
+
+/// Helper to check if we are the host.
+pub fn is_host(server_player: Option<Res<LocalServerPlayer>>) -> bool {
+    server_player.is_some()
+}
+
+/// Helper to get the local player's UUID.
+pub fn local_player_uuid(
+    local_client: Option<Res<LocalClientPlayer>>,
+    local_server: Option<Res<LocalServerPlayer>>,
+) -> Option<u128> {
+    local_client
+        .as_ref()
+        .map(|p| p.0)
+        .or_else(|| local_server.as_ref().map(|p| p.0))
 }
 
 fn setup(mut commands: Commands) {
@@ -458,46 +599,239 @@ fn cursor_positon_log(
 }
 
 #[derive(Resource, Clone, Debug, Serialize, Deserialize)]
-struct FinishTimes {
-    #[serde(serialize_with = "ser_times", deserialize_with = "de_times")]
-    pub times: HashMap<NetworkedId, f32>,
-}
-
-fn ser_times<S>(map: &HashMap<NetworkedId, f32>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let as_vec: Vec<(NetworkedId, f32)> = map.iter().map(|(k, v)| (*k, *v)).collect();
-    as_vec.serialize(serializer)
-}
-
-fn de_times<'de, D>(deserializer: D) -> Result<HashMap<NetworkedId, f32>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let vec: Vec<(NetworkedId, f32)> = Vec::deserialize(deserializer)?;
-    Ok(vec.into_iter().collect())
+pub struct FinishTimes {
+    pub times: HashMap<u128, f32>,
 }
 
 impl FinishTimes {
-    fn get_player_rank(&self, player_id: NetworkedId) -> Option<usize> {
+    pub fn get_player_rank(&self, player_uuid: u128) -> Option<usize> {
         let mut all_times = self
             .times
             .iter()
-            .map(|(id, time)| (id.clone(), *time))
+            .map(|(id, time)| (*id, *time))
             .collect::<Vec<_>>();
         all_times.sort_by(|(_, time), (_, time2)| time.partial_cmp(time2).unwrap());
         let rank = all_times
             .iter()
-            .position(|(id, _)| *id == player_id)
+            .position(|(id, _)| *id == player_uuid)
             .map(|index| index + 1)?;
         Some(rank)
     }
 }
 
-// TODO Remove this, useless
-fn emit_easy_updates(mut easy: KartEasyP2P, mut writer: MessageWriter<AppP2PUpdate>) {
-    for update in easy.read_updates() {
-        writer.write(AppP2PUpdate(update));
+/// Observer: when a TickTrackedEntity is added (host spawn or client snapshot),
+/// add visual and physics components based on EntityKind.
+fn on_tracked_entity_spawned(
+    trigger: On<Add, TickTrackedEntity>,
+    mut commands: Commands,
+    query: Query<(
+        &EntityKind,
+        Option<&OwnerPlayer>,
+        Option<&Position>,
+        Option<&Rotation>,
+        Option<&NetworkedPosition>,
+        Option<&NetworkedRotation>,
+    )>,
+    asset_handles: Res<AssetHandles>,
+    participants_with_data: Query<(&LobbyParticipant, Option<&PlayerData<AppPlayerData>>)>,
+    local_player: Option<Res<LocalMultiplayerPlayerId>>,
+    local_server: Option<Res<LocalServerPlayer>>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+) {
+    let entity = trigger.entity;
+    let Ok((kind, maybe_owner, maybe_pos, maybe_rot, maybe_net_pos, maybe_net_rot)) =
+        query.get(entity)
+    else {
+        return;
+    };
+
+    match kind {
+        EntityKind::Kart => {
+            // Set initial Transform from avian2d Position/Rotation (snapshot sync)
+            if let Some(pos) = maybe_pos {
+                let z = SpriteLayers::Car.to_z();
+                let mut t = Transform::from_xyz(pos.x, pos.y, z);
+                if let Some(rot) = maybe_rot {
+                    t.rotation = Quat::from_rotation_z(rot.as_radians());
+                }
+                commands.entity(entity).insert(t);
+            }
+            let owner_uuid = maybe_owner.map(|o| o.0).unwrap_or(0);
+            let local_uuid = local_player
+                .as_ref()
+                .map(|p| p.0)
+                .or_else(|| local_server.as_ref().map(|p| p.0));
+            let is_local = local_uuid.is_some_and(|uuid| uuid == owner_uuid);
+
+            let player = participants_with_data
+                .iter()
+                .find(|(p, _)| p.player_uuid == owner_uuid)
+                .and_then(|(_, data)| data.map(|d| &d.0));
+            let kart_color_index = player
+                .map(|p| p.kart_color.to_u32() as usize)
+                .unwrap_or(0);
+            let player_name = player
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            let half_car_width = 2.5;
+            let half_car_length = 3.0;
+
+            commands.entity(entity).insert((
+                DespawnOnExit(AppState::Game),
+                car_controller_2d::CarController2d::new(1.),
+                car_controller_2d::CarControllerDisabled,
+                Mass(1.),
+                RigidBody::Dynamic,
+                Collider::rectangle(4., 8.),
+                Visibility::Inherited,
+                LapsCounter::new(),
+                track::position::TrackPosition,
+                Sprite::from_atlas_image(
+                    asset_handles.karts_texture.clone(),
+                    TextureAtlas {
+                        layout: asset_handles.karts_atlas.clone(),
+                        index: kart_color_index,
+                    },
+                ),
+                observers![|trigger: On<LapUpdate>,
+                            tick: Res<CurrentTick>,
+                            karts: Query<&car_controller_2d::CarControllerDisabled>,
+                            mut commands: Commands,
+                            owners: Query<&OwnerPlayer>,
+                            mut finish_times: ResMut<FinishTimes>| {
+                    if trigger.event().count == track::LAPS_TO_WIN as i32 {
+                        if karts.get(trigger.event_target()).is_ok() {
+                            return;
+                        }
+                        if let Ok(owner) = owners.get(trigger.event_target()) {
+                            commands
+                                .entity(trigger.event_target())
+                                .insert(car_controller_2d::CarControllerDisabled);
+                            finish_times.times.insert(owner.0, tick.0 as f32);
+                        }
+                    }
+                }],
+            ));
+
+            let wheel_tex = asset_handles.wheel_texture.clone();
+            commands.entity(entity).with_children(|parent| {
+                parent.spawn((
+                    Transform::from_xyz(
+                        half_car_width,
+                        half_car_length - 1.,
+                        SpriteLayers::Wheels.to_z(),
+                    ),
+                    car_controller_2d::CarController2dWheel::new(true, true),
+                    Sprite::from_image(wheel_tex.clone()),
+                ));
+                parent.spawn((
+                    Transform::from_xyz(
+                        -half_car_width,
+                        half_car_length - 1.,
+                        SpriteLayers::Wheels.to_z(),
+                    ),
+                    car_controller_2d::CarController2dWheel::new(true, true),
+                    Sprite::from_image(wheel_tex.clone()),
+                ));
+                parent.spawn((
+                    Transform::from_xyz(
+                        half_car_width,
+                        -half_car_length,
+                        SpriteLayers::Wheels.to_z(),
+                    ),
+                    car_controller_2d::CarController2dWheel::new(false, false),
+                    Sprite::from_image(wheel_tex.clone()),
+                ));
+                parent.spawn((
+                    Transform::from_xyz(
+                        -half_car_width,
+                        -half_car_length,
+                        SpriteLayers::Wheels.to_z(),
+                    ),
+                    car_controller_2d::CarController2dWheel::new(false, false),
+                    Sprite::from_image(wheel_tex.clone()),
+                ));
+            });
+
+            if is_local {
+                commands.entity(entity).insert(LocalKart);
+            }
+
+            commands.spawn((
+                DespawnOnExit(AppState::Game),
+                FollowTransform(entity),
+                children![(
+                    Text2d::new(player_name),
+                    Transform::from_xyz(0., 5., SpriteLayers::AboveCar.to_z())
+                        .with_scale(Vec3::splat(0.1)),
+                )],
+            ));
+        }
+        EntityKind::ItemPickup(_) => {
+            let pos = maybe_net_pos.map(|p| p.0).unwrap_or_default();
+            commands.entity(entity).insert((
+                DespawnOnExit(AppState::Game),
+                Transform::from_xyz(pos.x, pos.y, SpriteLayers::Car.to_z()),
+                Sprite::from_image(asset_handles.crate_texture.clone()),
+            ));
+        }
+        EntityKind::Rocket => {
+            let pos = maybe_net_pos.map(|p| p.0).unwrap_or_default();
+            let rot = maybe_net_rot.map(|r| r.0).unwrap_or(0.0);
+            let layout = TextureAtlasLayout::from_grid(UVec2::new(3, 8), 2, 1, None, None);
+            let atlas_layout = texture_atlas_layouts.add(layout);
+            commands.entity(entity).insert((
+                DespawnOnExit(AppState::Game),
+                Transform::from_xyz(pos.x, pos.y, SpriteLayers::Car.to_z())
+                    .with_rotation(Quat::from_rotation_z(rot)),
+                Sprite::from_atlas_image(
+                    asset_handles.rocket_texture.clone(),
+                    TextureAtlas {
+                        layout: atlas_layout,
+                        index: 0,
+                    },
+                ),
+            ));
+        }
+    }
+}
+
+/// Sync avian2d Position/Rotation to Transform every frame for physics entities.
+fn sync_visuals(
+    mut physics: Query<
+        (&Position, &Rotation, &mut Transform),
+        (With<TickTrackedEntity>, With<RigidBody>),
+    >,
+    mut non_physics: Query<
+        (&NetworkedPosition, Option<&NetworkedRotation>, &mut Transform),
+        (With<TickTrackedEntity>, Without<RigidBody>),
+    >,
+) {
+    for (pos, rot, mut transform) in physics.iter_mut() {
+        transform.translation.x = pos.x;
+        transform.translation.y = pos.y;
+        transform.rotation = Quat::from_rotation_z(rot.as_radians());
+    }
+    for (pos, rot, mut transform) in non_physics.iter_mut() {
+        transform.translation.x = pos.0.x;
+        transform.translation.y = pos.0.y;
+        if let Some(rot) = rot {
+            transform.rotation = Quat::from_rotation_z(rot.0);
+        }
+    }
+}
+
+/// Receive game state changes broadcast by the host.
+fn receive_game_state_changed(
+    server_player: Option<Res<LocalServerPlayer>>,
+    mut reader: MessageReader<ReceivedEnsembleMessage<GameStateChanged>>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    for msg in reader.read() {
+        if server_player.is_some() {
+            continue; // Host already set state locally
+        }
+        next_state.set(msg.message.0.clone());
     }
 }

@@ -1,30 +1,29 @@
 use crate::car_controller_2d::{CarController2d, CarControllerDisabled, CarControllerInputs};
-use crate::menu::lobby::LobbyCar;
+use crate::menu::lobby::{LobbyCar, LobbyCarName};
 use crate::track::LAPS_TO_WIN;
 use crate::track::position::TrackPosition;
-use crate::{AppP2PUpdate, KartEasyP2P, NetworkedEntity, car_controller_2d::CarController2dWheel};
-use crate::{AppPlayerData, AppState, AssetHandles, FinishTimes, KartP2PData, SpriteLayers};
+use crate::{
+    AppPlayerData, AppState, AssetHandles, FinishTimes, LobbyState, LocalPlayerData,
+    OwnerPlayer, SpriteLayers,
+    car_controller_2d::CarController2dWheel,
+};
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy_bundled_observers::observers;
-use bevy_easy_p2p::prelude::*;
+use bevy_ensemble::prelude::*;
+use bevy_ensemble::LobbyClientPlayerUuid;
+use bevy_ticked::prelude::*;
+use bevy_ticked_networking::prelude::*;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 pub struct KartPlugin;
 
 impl Plugin for KartPlugin {
     fn build(&self, app: &mut App) {
-        app.init_networked_event::<WheelPositionUpdate, KartP2PData>()
-            .add_systems(
-                Update,
-                (
-                    sync_wheel_rotation,
-                    receive_wheel_rotation,
-                    follow_transform,
-                    sync_wheel_rotation,
-                    receive_wheel_rotation,
-                ),
-            );
+        app.add_systems(
+            Update,
+            (follow_transform,),
+        );
     }
 }
 
@@ -90,23 +89,13 @@ impl KartColor {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum WheelRotation {
-    Left,
-    Right,
-    Straight,
-}
-
-#[derive(Message, Clone, Debug, Serialize, Deserialize)]
-struct WheelPositionUpdate(NetworkedId, WheelRotation);
-
 #[derive(Component)]
 pub struct AutoCar;
 
 pub enum KartControlType {
-    Player(NetworkedEntity),
+    Player(OwnerPlayer),
     AutoCar,
-    LobbyCar(NetworkedId, Option<usize>),
+    LobbyCar(u128, Option<usize>),
 }
 
 #[derive(Component)]
@@ -115,7 +104,9 @@ pub struct LocalKart;
 pub(crate) fn spawn_kart(
     In((control_type, transform)): In<(KartControlType, Transform)>,
     mut commands: Commands,
-    easy: KartEasyP2P,
+    participants_with_data: Query<(&LobbyParticipant, Option<&PlayerData<AppPlayerData>>)>,
+    local_player: Option<Res<LocalMultiplayerPlayerId>>,
+    server_player: Option<Res<LocalServerPlayer>>,
     asset_handles: Res<AssetHandles>,
 ) {
     let half_car_width = 2.5;
@@ -170,16 +161,22 @@ pub(crate) fn spawn_kart(
         ))
         .id();
     match control_type {
-        KartControlType::Player(networked_entity) => {
-            let Some(player) = easy.get_player_data(networked_entity.owner_id().clone()) else {
+        KartControlType::Player(owner) => {
+            let Some(player) = participants_with_data
+                .iter()
+                .find(|(p, _)| p.player_uuid == owner.0)
+                .and_then(|(_, data)| data.map(|d| &d.0))
+            else {
                 commands.entity(id).despawn();
                 return;
             };
-            let is_local = easy
-                .get_local_player_id()
-                .is_some_and(|id| id == networked_entity.owner_id());
+            let local_uuid = local_player
+                .as_ref()
+                .map(|p| p.0)
+                .or_else(|| server_player.as_ref().map(|p| p.0));
+            let is_local = local_uuid.is_some_and(|uuid| uuid == owner.0);
             commands.entity(id).insert((
-                networked_entity,
+                owner,
                 CarControllerDisabled,
                 LapsCounter::new(),
                 Sprite::from_atlas_image(
@@ -189,24 +186,22 @@ pub(crate) fn spawn_kart(
                         index: player.kart_color.to_u32() as usize,
                     },
                 ),
-                NetworkedTransform,
                 TrackPosition,
                 observers![|trigger: On<LapUpdate>,
-                            time: Res<Time>,
+                            tick: Res<CurrentTick>,
                             karts: Query<&CarControllerDisabled>,
                             mut commands: Commands,
-                            easy: KartEasyP2P,
+                            owners: Query<&OwnerPlayer>,
                             mut finish_times: ResMut<FinishTimes>| {
                     if trigger.event().count == LAPS_TO_WIN as i32 {
                         if karts.get(trigger.event_target()).is_ok() {
                             return;
                         }
-
-                        if let Some(id) = easy.get_closest_networked_id(trigger.event_target()) {
+                        if let Ok(owner) = owners.get(trigger.event_target()) {
                             commands
                                 .entity(trigger.event_target())
                                 .insert(CarControllerDisabled);
-                            finish_times.times.insert(id, time.elapsed_secs());
+                            finish_times.times.insert(owner.0, tick.0 as f32);
                         }
                     }
                 }],
@@ -220,7 +215,7 @@ pub(crate) fn spawn_kart(
                 DespawnOnExit(AppState::Game),
                 FollowTransform(id),
                 children![(
-                    Text2d::new(player.name),
+                    Text2d::new(player.name.clone()),
                     Transform::from_xyz(0., 5., SpriteLayers::AboveCar.to_z())
                         .with_scale(Vec3::splat(0.1)),
                 )],
@@ -240,19 +235,27 @@ pub(crate) fn spawn_kart(
                     forward: true,
                     ..default()
                 },
-                DespawnOnExit(P2PLobbyState::OutOfLobby),
+                DespawnOnExit(LobbyState::OutOfLobby),
             ));
         }
-        KartControlType::LobbyCar(networked_id, rank) => {
-            let is_local = easy
-                .get_local_player_id()
-                .is_some_and(|id| id == networked_id);
-            let is_host = easy.is_host();
-            let Some(player) = easy.get_player_data(networked_id) else {
-                commands.entity(id).despawn();
-                return;
-            };
-            let name = if is_local { "(YOU)\n" } else { "" }.to_string() + &player.name;
+        KartControlType::LobbyCar(player_uuid, rank) => {
+            let local_uuid = local_player
+                .as_ref()
+                .map(|p| p.0)
+                .or_else(|| server_player.as_ref().map(|p| p.0));
+            let is_local = local_uuid.is_some_and(|uuid| uuid == player_uuid);
+            let is_host = server_player.is_some();
+            let player_data = participants_with_data
+                .iter()
+                .find(|(p, _)| p.player_uuid == player_uuid)
+                .and_then(|(_, data)| data.map(|d| &d.0));
+            let player_name = player_data
+                .map(|d| d.name.as_str())
+                .unwrap_or("...");
+            let player_color = player_data
+                .map(|d| d.kart_color.to_u32() as usize)
+                .unwrap_or(0);
+            let name = if is_local { "(YOU)\n" } else { "" }.to_string() + player_name;
             let name = rank
                 .map(|r| format!("({})\n", r))
                 .unwrap_or_default()
@@ -266,11 +269,11 @@ pub(crate) fn spawn_kart(
                         asset_handles.karts_texture.clone(),
                         TextureAtlas {
                             layout: asset_handles.karts_atlas.clone(),
-                            index: 0,
+                            index: player_color,
                         },
                     ),
-                    LobbyCar(networked_id),
-                    DespawnOnExit(P2PLobbyState::InLobby),
+                    LobbyCar(player_uuid),
+                    DespawnOnExit(LobbyState::InLobby),
                     DespawnOnExit(AppState::OutOfGame),
                 ))
                 .remove::<Collider>();
@@ -280,6 +283,7 @@ pub(crate) fn spawn_kart(
                 FollowTransform(id),
                 children![(
                     Text2d::new(name),
+                    LobbyCarName(player_uuid),
                     TextLayout::new_with_justify(Justify::Center),
                     Transform::from_xyz(0., 5., SpriteLayers::AboveCar.to_z())
                         .with_scale(Vec3::splat(0.1)),
@@ -296,12 +300,15 @@ pub(crate) fn spawn_kart(
                             ..default()
                         },
                         Pickable::default(),
-                        observers!(|_: On<Pointer<Press>>, mut easy: KartEasyP2P| {
-                            let local_player_data = easy.get_local_player_data();
-                            easy.set_local_player_data(AppPlayerData {
-                                name: local_player_data.name,
-                                kart_color: local_player_data.kart_color.left(),
-                            });
+                        observers!(|_: On<Pointer<Press>>,
+                                    mut local_data: ResMut<LocalPlayerData>,
+                                    mut commands: Commands,
+                                    lobbies: Query<Entity, With<Lobby>>| {
+                            local_data.0.kart_color = local_data.0.kart_color.left();
+                            if let Some(lobby) = lobbies.iter().next() {
+                                let data = local_data.0.clone();
+                                commands.entity(lobby).trigger(move |entity| SetPlayerData::new(entity, data));
+                            }
                         }),
                     ));
                     parent.spawn((
@@ -309,81 +316,33 @@ pub(crate) fn spawn_kart(
                         Button,
                         Sprite::from_image(asset_handles.arrow_texture.clone()),
                         Pickable::default(),
-                        observers![|_: On<Pointer<Press>>, mut easy: KartEasyP2P| {
-                            let local_player_data = easy.get_local_player_data();
-                            easy.set_local_player_data(AppPlayerData {
-                                name: local_player_data.name,
-                                kart_color: local_player_data.kart_color.right(),
-                            });
+                        observers![|_: On<Pointer<Press>>,
+                                    mut local_data: ResMut<LocalPlayerData>,
+                                    mut commands: Commands,
+                                    lobbies: Query<Entity, With<Lobby>>| {
+                            local_data.0.kart_color = local_data.0.kart_color.right();
+                            if let Some(lobby) = lobbies.iter().next() {
+                                let data = local_data.0.clone();
+                                commands.entity(lobby).trigger(move |entity| SetPlayerData::new(entity, data));
+                            }
                         },],
                     ));
                 });
             } else if is_host {
+                let kick_uuid = player_uuid;
                 ui.with_child((
                     Transform::from_xyz(0., -6., SpriteLayers::Car.to_z()),
                     Button,
                     Sprite::from_image(asset_handles.kick_texture.clone()),
                     Pickable::default(),
-                    networked_id,
-                    observers![|trigger: On<Pointer<Press>>,
-                                mut easy: KartEasyP2P,
-                                ids: Query<&NetworkedId>| {
-                        if let Ok(id) = ids.get(trigger.event_target()) {
-                            easy.kick(*id);
+                    observers![move |_: On<Pointer<Press>>,
+                                mut commands: Commands,
+                                lobby_clients: Query<(Entity, &LobbyClientPlayerUuid)>| {
+                        if let Some((entity, _)) = lobby_clients.iter().find(|(_, uuid)| uuid.0 == kick_uuid) {
+                            commands.entity(entity).try_despawn();
                         }
-                    },],
+                    }],
                 ));
-            }
-        }
-    }
-}
-
-fn sync_wheel_rotation(
-    mut updates: MessageReader<AppP2PUpdate>,
-    mut w: MessageWriter<WheelPositionUpdate>,
-) {
-    for AppP2PUpdate(update) in updates.read() {
-        if let EasyP2PUpdate::ClientInput { sender, input } = update {
-            let update = WheelPositionUpdate(
-                sender.clone(),
-                if input.right {
-                    WheelRotation::Right
-                } else if input.left {
-                    WheelRotation::Left
-                } else {
-                    WheelRotation::Straight
-                },
-            );
-            w.write(update);
-        }
-    }
-}
-
-fn receive_wheel_rotation(
-    easy: KartEasyP2P,
-    mut r: MessageReader<WheelPositionUpdate>,
-    mut wheels: Query<(Entity, &mut Transform, &CarController2dWheel)>,
-) {
-    if easy.is_host() {
-        return;
-    }
-    for WheelPositionUpdate(target, rotation) in r.read() {
-        for (entity, mut transform, wheel) in wheels.iter_mut() {
-            if easy.get_closest_networked_id(entity) != Some(target.clone()) {
-                continue;
-            }
-            if wheel.steerable {
-                match rotation {
-                    WheelRotation::Left => {
-                        transform.rotation = Quat::from_rotation_z(45_f32.to_radians());
-                    }
-                    WheelRotation::Right => {
-                        transform.rotation = Quat::from_rotation_z(-45_f32.to_radians());
-                    }
-                    WheelRotation::Straight => {
-                        transform.rotation = Quat::from_rotation_z(0_f32.to_radians());
-                    }
-                }
             }
         }
     }
@@ -391,8 +350,7 @@ fn receive_wheel_rotation(
 
 #[derive(Component)]
 #[require(Transform)]
-
-struct FollowTransform(Entity);
+pub struct FollowTransform(pub Entity);
 
 fn follow_transform(
     mut commands: Commands,

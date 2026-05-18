@@ -59,6 +59,12 @@ impl CarController2d {
     }
 }
 
+#[derive(Component, Default, Clone, Debug, Serialize, Deserialize)]
+pub struct SteeringState {
+    /// Current steering angle, smoothly interpolated from -1.0 (right) to 1.0 (left).
+    pub angle: f32,
+}
+
 #[derive(Component)]
 pub struct BoostEffect {
     pub multiplier: f32,
@@ -132,18 +138,18 @@ fn car_controller_power(
     }
 }
 
+/// Smoothing rate per tick. At 64 tps, reaches ~95% of target in ~16 ticks (≈0.25s).
+const STEERING_RATE: f32 = 0.18;
+
 fn car_controller_steering(
-    cars: Query<(&CarControllerInputs, &Children), With<CarController2d>>,
+    mut cars: Query<(&CarControllerInputs, &mut SteeringState, &Children), With<CarController2d>>,
     mut wheels: Query<(&mut Transform, &CarController2dWheel)>,
 ) {
-    for (inputs, children) in cars.iter() {
-        let mut dir: f32 = 0.;
-        if inputs.left {
-            dir = 1.;
-        } else if inputs.right {
-            dir = -1.;
-        }
-        let rotation = Quat::from_rotation_z((dir * 45.).to_radians());
+    for (inputs, mut steering, children) in cars.iter_mut() {
+        let target: f32 = if inputs.left { 1. } else if inputs.right { -1. } else { 0. };
+        steering.angle += (target - steering.angle) * STEERING_RATE;
+
+        let rotation = Quat::from_rotation_z((steering.angle * 45.).to_radians());
         for child in children.iter() {
             let Ok((mut transform, wheel)) = wheels.get_mut(child) else {
                 continue;

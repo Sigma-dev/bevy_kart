@@ -8,6 +8,7 @@ use crate::menu::lobby::{BACKGROUND_ELEMENT_TYPES_COUNT, spawn_lobby};
 use crate::menu::start::spawn_menu;
 use crate::track::{TrackPlugin, spawn_track};
 use audio_manager::AudioManagerPlugin;
+use avian2d::interpolation::PhysicsInterpolationPlugin;
 use avian2d::prelude::*;
 use bevy::a11y::AccessibilityPlugin;
 use bevy::app::{PanicHandlerPlugin, TaskPoolPlugin};
@@ -274,7 +275,7 @@ fn main() {
             ..default()
         })
         .add_plugins(TickedPlugin)
-        .add_plugins(PhysicsPlugins::new(TickedSimulation))
+        .add_plugins(PhysicsPlugins::new(TickedSimulation).set(PhysicsInterpolationPlugin::interpolate_all()))
         .insert_resource(Gravity::ZERO)
         .add_plugins(TickedServerPlugin::<PlayerInput>::new())
         .add_plugins(TickedClientPlugin::<PlayerInput>::new())
@@ -289,6 +290,7 @@ fn main() {
         .register_networked_ticked_component::<NetworkedPosition>()
         .register_networked_ticked_component::<NetworkedRotation>()
         .register_networked_ticked_component::<car_controller_2d::CarControllerInputs>()
+        .register_networked_ticked_component::<car_controller_2d::SteeringState>()
         // Register ensemble messages
         .register_broadcast_message::<ChatMessage>()
         .register_broadcast_message::<items::ItemPickedUp>()
@@ -481,7 +483,7 @@ fn on_lobby_ready(
                 info!("Share link: {}?room={}", base, code.0);
             }
             commands.insert_resource(LocalServerPlayer(local_player.0));
-            commands.insert_resource(TickConfig { paused: false });
+            commands.remove_resource::<TicksPaused>();
             lobby_state.set(LobbyState::InLobby);
             let data = local_data.0.clone();
             commands
@@ -522,7 +524,7 @@ fn cleanup_on_lobby_gone(
     commands.remove_resource::<LocalClientPlayer>();
 
     commands.insert_resource(CurrentTick(0));
-    commands.insert_resource(TickConfig { paused: true });
+    commands.insert_resource(TicksPaused);
 
     lobby_state.set(LobbyState::OutOfLobby);
     app_state.set(AppState::OutOfGame);
@@ -680,6 +682,7 @@ fn on_tracked_entity_spawned(
             commands.entity(entity).insert((
                 DespawnOnExit(AppState::Game),
                 car_controller_2d::CarController2d::new(1.),
+                car_controller_2d::SteeringState::default(),
                 car_controller_2d::CarControllerDisabled,
                 Mass(1.),
                 RigidBody::Dynamic,
@@ -797,22 +800,14 @@ fn on_tracked_entity_spawned(
     }
 }
 
-/// Sync avian2d Position/Rotation to Transform every frame for physics entities.
+/// Sync networked Position/Rotation to Transform every frame for non-physics entities.
+/// Physics entities (RigidBody) are handled by Avian's PhysicsInterpolationPlugin.
 fn sync_visuals(
-    mut physics: Query<
-        (&Position, &Rotation, &mut Transform),
-        (With<TickTrackedEntity>, With<RigidBody>),
-    >,
     mut non_physics: Query<
         (&NetworkedPosition, Option<&NetworkedRotation>, &mut Transform),
         (With<TickTrackedEntity>, Without<RigidBody>),
     >,
 ) {
-    for (pos, rot, mut transform) in physics.iter_mut() {
-        transform.translation.x = pos.x;
-        transform.translation.y = pos.y;
-        transform.rotation = Quat::from_rotation_z(rot.as_radians());
-    }
     for (pos, rot, mut transform) in non_physics.iter_mut() {
         transform.translation.x = pos.0.x;
         transform.translation.y = pos.0.y;

@@ -1,4 +1,4 @@
-use crate::car_controller_2d::{CarController2d, CarControllerDisabled, CarControllerInputs};
+use crate::car_controller_2d::{CarController2d, CarControllerDisabled, CarControllerInputs, SteeringState};
 use crate::menu::lobby::{LobbyCar, LobbyCarName};
 use crate::track::LAPS_TO_WIN;
 use crate::track::position::TrackPosition;
@@ -119,6 +119,7 @@ pub(crate) fn spawn_kart(
             Collider::rectangle(4., 8.),
             transform,
             CarController2d::new(1.),
+            SteeringState::default(),
             Visibility::Inherited,
             children![
                 (

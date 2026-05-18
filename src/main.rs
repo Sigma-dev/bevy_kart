@@ -23,10 +23,9 @@ use bevy::log::LogPlugin;
 use bevy::mesh::MeshPlugin;
 use bevy::picking::{InteractionPlugin, PickingPlugin, input::PointerInputPlugin};
 use bevy::platform::collections::HashMap;
-use bevy::scene::ScenePlugin;
 use bevy::prelude::*;
-use bevy_bundled_observers::observers;
 use bevy::render::RenderPlugin;
+use bevy::scene::ScenePlugin;
 use bevy::sprite::SpritePlugin;
 use bevy::sprite_render::SpriteRenderPlugin;
 use bevy::state::app::StatesPlugin;
@@ -37,10 +36,9 @@ use bevy::ui::UiPlugin;
 use bevy::ui_render::UiRenderPlugin;
 use bevy::window::PrimaryWindow;
 use bevy::winit::WinitPlugin;
+use bevy_bundled_observers::observers;
 use bevy_ensemble::prelude::*;
-use bevy_ensemble_webrtc::{
-    BevyEnsembleWebrtcPlugin, JoinWebrtcLobbyByCode, LobbyWebrtcCode,
-};
+use bevy_ensemble_webrtc::{BevyEnsembleWebrtcPlugin, JoinWebrtcLobbyByCode, LobbyWebrtcCode};
 use bevy_ticked::prelude::*;
 use bevy_ticked_networking::prelude::*;
 use bevy_ticked_networking_ensemble::TickedNetworkingEnsemblePlugin;
@@ -247,11 +245,7 @@ impl Plugin for NecessaryBevyPlugins {
             StatesPlugin,
         ));
         // Picking — after UiPlugin, matching DefaultPlugins order
-        app.add_plugins((
-            PointerInputPlugin,
-            PickingPlugin,
-            InteractionPlugin,
-        ));
+        app.add_plugins((PointerInputPlugin, PickingPlugin, InteractionPlugin));
     }
 }
 
@@ -263,19 +257,23 @@ struct FpsText {
 
 fn main() {
     App::new()
-        .add_plugins((
-            NecessaryBevyPlugins,
-            TextInputPlugin,
-        ))
+        .add_plugins((NecessaryBevyPlugins, TextInputPlugin))
         // Networking stack
-        .add_plugins((EnsemblePlugin, LobbyBroadcastPlugin, PlayerDataPlugin::<AppPlayerData>::default()))
+        .add_plugins((
+            EnsemblePlugin,
+            LobbyBroadcastPlugin,
+            PlayerDataPlugin::<AppPlayerData>::default(),
+        ))
         .add_plugins(BevyEnsembleWebrtcPlugin {
             server_url: "wss://signal.sigma-dev.eu/ws".into(),
             display_name: "Player".into(),
             ..default()
         })
         .add_plugins(TickedPlugin)
-        .add_plugins(PhysicsPlugins::new(TickedSimulation).set(PhysicsInterpolationPlugin::interpolate_all()))
+        .add_plugins(
+            PhysicsPlugins::new(TickedSimulation)
+                .set(PhysicsInterpolationPlugin::interpolate_all()),
+        )
         .insert_resource(Gravity::ZERO)
         .add_plugins(TickedServerPlugin::<PlayerInput>::new())
         .add_plugins(TickedClientPlugin::<PlayerInput>::new())
@@ -300,7 +298,10 @@ fn main() {
         // Game plugins
         .add_plugins((
             CarController2dPlugin,
-            AudioManagerPlugin::default(),
+            AudioManagerPlugin {
+                volume_mult: 0.3,
+                ..default()
+            },
             TimerPlugin,
         ))
         .add_plugins((MenuPlugin, TrackPlugin, ItemsPlugin, KartPlugin))
@@ -503,7 +504,6 @@ fn on_lobby_ready(
     }
 }
 
-
 /// Clean up when lobby is destroyed.
 fn cleanup_on_lobby_gone(
     mut commands: Commands,
@@ -529,7 +529,6 @@ fn cleanup_on_lobby_gone(
     lobby_state.set(LobbyState::OutOfLobby);
     app_state.set(AppState::OutOfGame);
 }
-
 
 /// Helper to check if we are the host.
 pub fn is_host(server_player: Option<Res<LocalServerPlayer>>) -> bool {
@@ -669,9 +668,7 @@ fn on_tracked_entity_spawned(
                 .iter()
                 .find(|(p, _)| p.player_uuid == owner_uuid)
                 .and_then(|(_, data)| data.map(|d| &d.0));
-            let kart_color_index = player
-                .map(|p| p.kart_color.to_u32() as usize)
-                .unwrap_or(0);
+            let kart_color_index = player.map(|p| p.kart_color.to_u32() as usize).unwrap_or(0);
             let player_name = player
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
@@ -804,7 +801,11 @@ fn on_tracked_entity_spawned(
 /// Physics entities (RigidBody) are handled by Avian's PhysicsInterpolationPlugin.
 fn sync_visuals(
     mut non_physics: Query<
-        (&NetworkedPosition, Option<&NetworkedRotation>, &mut Transform),
+        (
+            &NetworkedPosition,
+            Option<&NetworkedRotation>,
+            &mut Transform,
+        ),
         (With<TickTrackedEntity>, Without<RigidBody>),
     >,
 ) {

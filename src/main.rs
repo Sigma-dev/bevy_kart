@@ -1,6 +1,6 @@
 use crate::items::{ItemType, ItemsPlugin};
 use crate::kart::{
-    FollowTransform, KART_COLORS_COUNT, KART_SIZE, KartColor, KartPlugin, LapUpdate, LapsCounter,
+    FollowTransform, KART_COLORS_COUNT, KART_SIZE, KartColor, KartPlugin, LapsCounter,
     LocalKart,
 };
 use crate::menu::MenuPlugin;
@@ -8,6 +8,7 @@ use crate::menu::lobby::{BACKGROUND_ELEMENT_TYPES_COUNT, spawn_lobby};
 use crate::menu::start::spawn_menu;
 use crate::track::{TrackPlugin, spawn_track};
 use audio_manager::AudioManagerPlugin;
+use audio_manager::prelude::*;
 use avian2d::interpolation::PhysicsInterpolationPlugin;
 use avian2d::prelude::*;
 use bevy::a11y::AccessibilityPlugin;
@@ -36,12 +37,13 @@ use bevy::ui::UiPlugin;
 use bevy::ui_render::UiRenderPlugin;
 use bevy::window::PrimaryWindow;
 use bevy::winit::WinitPlugin;
-use bevy_bundled_observers::observers;
+
 use bevy_ensemble::prelude::*;
 use bevy_ensemble_webrtc::{BevyEnsembleWebrtcPlugin, JoinWebrtcLobbyByCode, LobbyWebrtcCode};
 use bevy_ticked::prelude::*;
 use bevy_ticked_networking::prelude::*;
 use bevy_ticked_networking_ensemble::TickedNetworkingEnsemblePlugin;
+use bevy_timer::{Timer as GameTimer, TimerFinished};
 use bevy_ui_text_input::TextInputPlugin;
 use serde::{Deserialize, Serialize};
 
@@ -89,6 +91,7 @@ pub enum EntityKind {
     Kart,
     ItemPickup(ItemType),
     Rocket,
+    Explosion,
 }
 
 /// Player metadata shared via ensemble messages.
@@ -288,11 +291,9 @@ fn main() {
         .register_networked_ticked_component::<NetworkedPosition>()
         .register_networked_ticked_component::<NetworkedRotation>()
         .register_networked_ticked_component::<car_controller_2d::CarControllerInputs>()
-        .register_networked_ticked_component::<car_controller_2d::SteeringState>()
+        .register_networked_ticked_component::<items::HeldItem>()
         // Register ensemble messages
         .register_broadcast_message::<ChatMessage>()
-        .register_broadcast_message::<items::ItemPickedUp>()
-        .register_broadcast_message::<items::RocketExploded>()
         .register_broadcast_message::<track::OnFinishTimeUpdate>()
         .register_broadcast_message::<GameStateChanged>()
         // Game plugins
@@ -384,7 +385,7 @@ fn main() {
                 on_lobby_ready,
                 cleanup_on_lobby_gone,
                 receive_game_state_changed,
-                cursor_positon_log,
+                cursor_position_log,
                 update_fps,
             ),
         )
@@ -578,7 +579,7 @@ fn update_fps(time: Res<Time>, mut texts: Query<(&mut Text, &mut FpsText)>) {
     }
 }
 
-fn cursor_positon_log(
+fn cursor_position_log(
     q_window: Query<&Window, With<PrimaryWindow>>,
     q_camera: Query<(&Camera, &GlobalTransform)>,
     button_input: Res<ButtonInput<MouseButton>>,
@@ -638,6 +639,9 @@ fn on_tracked_entity_spawned(
     local_player: Option<Res<LocalMultiplayerPlayerId>>,
     local_server: Option<Res<LocalServerPlayer>>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut audio_manager: AudioManager,
 ) {
     let entity = trigger.entity;
     let Ok((kind, maybe_owner, maybe_pos, maybe_rot, maybe_net_pos, maybe_net_rot)) =
@@ -673,9 +677,6 @@ fn on_tracked_entity_spawned(
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "Unknown".to_string());
 
-            let half_car_width = 2.5;
-            let half_car_length = 3.0;
-
             commands.entity(entity).insert((
                 DespawnOnExit(AppState::Game),
                 car_controller_2d::CarController2d::new(1.),
@@ -694,65 +695,13 @@ fn on_tracked_entity_spawned(
                         index: kart_color_index,
                     },
                 ),
-                observers![|trigger: On<LapUpdate>,
-                            tick: Res<CurrentTick>,
-                            karts: Query<&car_controller_2d::CarControllerDisabled>,
-                            mut commands: Commands,
-                            owners: Query<&OwnerPlayer>,
-                            mut finish_times: ResMut<FinishTimes>| {
-                    if trigger.event().count == track::LAPS_TO_WIN as i32 {
-                        if karts.get(trigger.event_target()).is_ok() {
-                            return;
-                        }
-                        if let Ok(owner) = owners.get(trigger.event_target()) {
-                            commands
-                                .entity(trigger.event_target())
-                                .insert(car_controller_2d::CarControllerDisabled);
-                            finish_times.times.insert(owner.0, tick.0 as f32);
-                        }
-                    }
-                }],
             ));
+            commands.entity(entity).observe(kart::on_lap_update);
 
             let wheel_tex = asset_handles.wheel_texture.clone();
-            commands.entity(entity).with_children(|parent| {
-                parent.spawn((
-                    Transform::from_xyz(
-                        half_car_width,
-                        half_car_length - 1.,
-                        SpriteLayers::Wheels.to_z(),
-                    ),
-                    car_controller_2d::CarController2dWheel::new(true, true),
-                    Sprite::from_image(wheel_tex.clone()),
-                ));
-                parent.spawn((
-                    Transform::from_xyz(
-                        -half_car_width,
-                        half_car_length - 1.,
-                        SpriteLayers::Wheels.to_z(),
-                    ),
-                    car_controller_2d::CarController2dWheel::new(true, true),
-                    Sprite::from_image(wheel_tex.clone()),
-                ));
-                parent.spawn((
-                    Transform::from_xyz(
-                        half_car_width,
-                        -half_car_length,
-                        SpriteLayers::Wheels.to_z(),
-                    ),
-                    car_controller_2d::CarController2dWheel::new(false, false),
-                    Sprite::from_image(wheel_tex.clone()),
-                ));
-                parent.spawn((
-                    Transform::from_xyz(
-                        -half_car_width,
-                        -half_car_length,
-                        SpriteLayers::Wheels.to_z(),
-                    ),
-                    car_controller_2d::CarController2dWheel::new(false, false),
-                    Sprite::from_image(wheel_tex.clone()),
-                ));
-            });
+            commands
+                .entity(entity)
+                .with_children(|parent| kart::spawn_kart_wheels(parent, wheel_tex));
 
             if is_local {
                 commands.entity(entity).insert(LocalKart);
@@ -775,6 +724,11 @@ fn on_tracked_entity_spawned(
                 Transform::from_xyz(pos.x, pos.y, SpriteLayers::Car.to_z()),
                 Sprite::from_image(asset_handles.crate_texture.clone()),
             ));
+            commands.entity(entity).observe(
+                |_trigger: On<Despawn>, mut audio_manager: AudioManager| {
+                    audio_manager.play_sound(PlayAudio2D::new_once("sounds/pickup.wav"));
+                },
+            );
         }
         EntityKind::Rocket => {
             let pos = maybe_net_pos.map(|p| p.0).unwrap_or_default();
@@ -793,6 +747,26 @@ fn on_tracked_entity_spawned(
                     },
                 ),
             ));
+            audio_manager.play_sound(
+                PlayAudio2D::new_once("sounds/rocket.wav")
+                    .with_spatial(SpatialSettings2D::Entity(entity)),
+            );
+        }
+        EntityKind::Explosion => {
+            let pos = maybe_net_pos.map(|p| p.0).unwrap_or_default();
+            audio_manager
+                .play_sound(PlayAudio2D::new_once("sounds/explosion.wav").with_volume(0.3));
+            commands
+                .entity(entity)
+                .insert((
+                    Transform::from_xyz(pos.x, pos.y, SpriteLayers::AboveCar.to_z()),
+                    Mesh2d(meshes.add(Circle::new(items::ROCKET_EXPLOSION_RADIUS))),
+                    MeshMaterial2d(materials.add(Color::WHITE)),
+                    GameTimer::new_running().with_target_duration(0.1),
+                ))
+                .observe(|timer: On<TimerFinished>, mut commands: Commands| {
+                    commands.entity(timer.event_target()).try_despawn();
+                });
         }
     }
 }

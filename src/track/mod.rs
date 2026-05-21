@@ -1,7 +1,7 @@
 use crate::{
     AppState, AssetHandles, EntityKind, FinishTimes, OwnerPlayer, SpriteLayers,
     car_controller_2d::CarControllerDisabled,
-    items::{ItemPickedUp, spawn_spawner},
+    items::{HeldItem, spawn_spawner},
     kart::{LapsCounter, LocalKart},
     track::position::{RacePosition, RacePositionPlugin, progress_line::ProgressLine},
 };
@@ -29,7 +29,6 @@ impl Plugin for TrackPlugin {
                 end_with_delay,
                 start_light,
                 update_held_item_icon,
-                update_on_item_used,
                 update_position_ui,
             ),
         );
@@ -432,36 +431,23 @@ fn start_light(
 }
 
 fn update_held_item_icon(
-    local_player: Option<Res<LocalMultiplayerPlayerId>>,
-    local_server: Option<Res<LocalServerPlayer>>,
+    local_kart: Query<Option<&HeldItem>, With<LocalKart>>,
     mut held_item_icon: Query<(&mut Visibility, &mut ImageNode), With<HeldItemIcon>>,
-    mut pickup_reader: MessageReader<ReceivedEnsembleMessage<ItemPickedUp>>,
 ) {
-    let local_uuid = local_player
-        .as_ref()
-        .map(|p| p.0)
-        .or_else(|| local_server.as_ref().map(|p| p.0));
-    for msg in pickup_reader.read() {
-        let picked_up = &msg.message;
-        if !local_uuid.is_some_and(|uuid| uuid == picked_up.car_uuid) {
-            continue;
-        }
-        for (mut visibility, mut image_node) in held_item_icon.iter_mut() {
-            *visibility = Visibility::Visible;
-            if let Some(atlas) = image_node.texture_atlas.as_mut() {
-                atlas.index = picked_up.item.to_index();
+    let Ok(maybe_held) = local_kart.single() else {
+        return;
+    };
+    for (mut visibility, mut image_node) in held_item_icon.iter_mut() {
+        match maybe_held.and_then(|h| h.0.as_ref()) {
+            Some(item) => {
+                *visibility = Visibility::Visible;
+                if let Some(atlas) = image_node.texture_atlas.as_mut() {
+                    atlas.index = item.to_index();
+                }
             }
-        }
-    }
-}
-
-fn update_on_item_used(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut held_item_icon: Query<&mut Visibility, With<HeldItemIcon>>,
-) {
-    if keyboard.just_pressed(KeyCode::Space) {
-        for mut visibility in held_item_icon.iter_mut() {
-            *visibility = Visibility::Hidden;
+            None => {
+                *visibility = Visibility::Hidden;
+            }
         }
     }
 }

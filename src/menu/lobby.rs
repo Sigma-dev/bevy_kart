@@ -1,7 +1,8 @@
 use crate::kart::{KART_SIZE, KartControlType, spawn_kart};
 use crate::menu::{AnimatedButton, animated_button_bundle};
 use crate::{
-    AppColors, AppPlayerData, AppState, AssetHandles, ChatMessage, FinishTimes, LobbyState, RESOLUTION, SpriteLayers,
+    AppColors, AppPlayerData, AppState, AssetHandles, ChatMessage, FinishTimes, LobbyState,
+    RESOLUTION, SpriteLayers,
 };
 use bevy::prelude::*;
 use bevy_bundled_observers::observers;
@@ -64,6 +65,7 @@ impl Plugin for LobbyPlugin {
                     on_lobby_exit,
                     spawn_background_elements,
                     handle_background_elements,
+                    log_last_pong,
                 ),
             )
             .insert_resource(LobbyChatInputHistory(Vec::new()));
@@ -468,20 +470,18 @@ pub fn spawn_lobby(
     if is_host {
         commands.entity(buttons).with_child((
             animated_button_bundle(AnimatedButton(4), &handles, handles.buttons_atlas.clone()),
-            observers!(
-                |_: On<Pointer<Press>>,
-                 mut next_state: ResMut<NextState<AppState>>,
-                 mut commands: Commands,
-                 lobbies: Query<Entity, With<Lobby>>| {
-                    next_state.set(AppState::Game);
-                    if let Some(lobby) = lobbies.iter().next() {
-                        let msg = crate::GameStateChanged(AppState::Game);
-                        commands
-                            .entity(lobby)
-                            .trigger(move |e| BroadcastLobbyMessage::new(e, msg));
-                    }
+            observers!(|_: On<Pointer<Press>>,
+                        mut next_state: ResMut<NextState<AppState>>,
+                        mut commands: Commands,
+                        lobbies: Query<Entity, With<Lobby>>| {
+                next_state.set(AppState::Game);
+                if let Some(lobby) = lobbies.iter().next() {
+                    let msg = crate::GameStateChanged(AppState::Game);
+                    commands
+                        .entity(lobby)
+                        .trigger(move |e| BroadcastLobbyMessage::new(e, msg));
                 }
-            ),
+            }),
         ));
     }
     commands
@@ -500,16 +500,29 @@ pub fn spawn_lobby(
 }
 
 fn receive_ping(
-    lobby_rtt: Query<&PeerRtt, With<Lobby>>,
+    lobby_rtt: Query<(&PeerRtt, Option<&PeerLastPong>), With<Lobby>>,
     mut texts: Query<&mut Text, With<PingText>>,
 ) {
-    let Ok(rtt) = lobby_rtt.single() else {
+    let Ok((rtt, last_pong)) = lobby_rtt.single() else {
         return;
     };
     let ms = (rtt.0 * 1000.0) as u64;
+    let bad = last_pong.is_some_and(|p| p.0 > 2.);
+    let label = if bad {
+        format!("Ping: {} ms - Bad connection", ms)
+    } else {
+        format!("Ping: {} ms", ms)
+    };
     for mut text in texts.iter_mut() {
-        *text = Text::new(format!("Ping: {} ms", ms));
+        *text = Text::new(label.clone());
     }
+}
+
+fn log_last_pong(lobby: Query<&PeerLastPong, With<Lobby>>) {
+    let Ok(last_pong) = lobby.single() else {
+        return;
+    };
+    info!("Last pong: {} ms ago", (last_pong.0 * 1000.0) as u64);
 }
 
 fn spawn_background_elements(

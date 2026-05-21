@@ -9,6 +9,7 @@ use crate::{
 };
 use avian2d::prelude::*;
 use bevy::prelude::*;
+use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy_bundled_observers::observers;
 use bevy_ensemble::prelude::*;
 use bevy_ensemble::LobbyClientPlayerUuid;
@@ -89,6 +90,47 @@ impl KartColor {
     }
 }
 
+/// Spawn the 4 wheel child entities for a kart.
+pub fn spawn_kart_wheels(parent: &mut ChildSpawnerCommands, wheel_texture: Handle<Image>) {
+    let half_car_width = 2.5;
+    let half_car_length = 3.0;
+    let positions = [
+        (half_car_width, half_car_length - 1., true, true),
+        (-half_car_width, half_car_length - 1., true, true),
+        (half_car_width, -half_car_length, false, false),
+        (-half_car_width, -half_car_length, false, false),
+    ];
+    for (x, y, powered, steerable) in positions {
+        parent.spawn((
+            Transform::from_xyz(x, y, SpriteLayers::Wheels.to_z()),
+            CarController2dWheel::new(powered, steerable),
+            Sprite::from_image(wheel_texture.clone()),
+        ));
+    }
+}
+
+/// Observer for LapUpdate: disable car and record finish time when lap target reached.
+pub fn on_lap_update(
+    trigger: On<LapUpdate>,
+    tick: Res<CurrentTick>,
+    karts: Query<&CarControllerDisabled>,
+    mut commands: Commands,
+    owners: Query<&OwnerPlayer>,
+    mut finish_times: ResMut<FinishTimes>,
+) {
+    if trigger.event().count == LAPS_TO_WIN as i32 {
+        if karts.get(trigger.event_target()).is_ok() {
+            return;
+        }
+        if let Ok(owner) = owners.get(trigger.event_target()) {
+            commands
+                .entity(trigger.event_target())
+                .insert(CarControllerDisabled);
+            finish_times.times.insert(owner.0, tick.0 as f32);
+        }
+    }
+}
+
 #[derive(Component)]
 pub struct AutoCar;
 
@@ -109,8 +151,7 @@ pub(crate) fn spawn_kart(
     server_player: Option<Res<LocalServerPlayer>>,
     asset_handles: Res<AssetHandles>,
 ) {
-    let half_car_width = 2.5;
-    let half_car_length = 3.;
+    let wheel_tex = asset_handles.wheel_texture.clone();
     let id = commands
         .spawn((
             DespawnOnExit(AppState::Game),
@@ -121,45 +162,8 @@ pub(crate) fn spawn_kart(
             CarController2d::new(1.),
             SteeringState::default(),
             Visibility::Inherited,
-            children![
-                (
-                    Transform::from_xyz(
-                        half_car_width,
-                        half_car_length - 1.,
-                        SpriteLayers::Wheels.to_z()
-                    ),
-                    CarController2dWheel::new(true, true),
-                    Sprite::from_image(asset_handles.wheel_texture.clone()),
-                ),
-                (
-                    Transform::from_xyz(
-                        -half_car_width,
-                        half_car_length - 1.,
-                        SpriteLayers::Wheels.to_z()
-                    ),
-                    CarController2dWheel::new(true, true),
-                    Sprite::from_image(asset_handles.wheel_texture.clone()),
-                ),
-                (
-                    Transform::from_xyz(
-                        half_car_width,
-                        -half_car_length,
-                        SpriteLayers::Wheels.to_z()
-                    ),
-                    CarController2dWheel::new(false, false),
-                    Sprite::from_image(asset_handles.wheel_texture.clone()),
-                ),
-                (
-                    Transform::from_xyz(
-                        -half_car_width,
-                        -half_car_length,
-                        SpriteLayers::Wheels.to_z()
-                    ),
-                    CarController2dWheel::new(false, false),
-                    Sprite::from_image(asset_handles.wheel_texture.clone()),
-                ),
-            ],
         ))
+        .with_children(|parent| spawn_kart_wheels(parent, wheel_tex))
         .id();
     match control_type {
         KartControlType::Player(owner) => {
@@ -188,25 +192,8 @@ pub(crate) fn spawn_kart(
                     },
                 ),
                 TrackPosition,
-                observers![|trigger: On<LapUpdate>,
-                            tick: Res<CurrentTick>,
-                            karts: Query<&CarControllerDisabled>,
-                            mut commands: Commands,
-                            owners: Query<&OwnerPlayer>,
-                            mut finish_times: ResMut<FinishTimes>| {
-                    if trigger.event().count == LAPS_TO_WIN as i32 {
-                        if karts.get(trigger.event_target()).is_ok() {
-                            return;
-                        }
-                        if let Ok(owner) = owners.get(trigger.event_target()) {
-                            commands
-                                .entity(trigger.event_target())
-                                .insert(CarControllerDisabled);
-                            finish_times.times.insert(owner.0, tick.0 as f32);
-                        }
-                    }
-                }],
             ));
+            commands.entity(id).observe(on_lap_update);
 
             if is_local {
                 commands.entity(id).insert(LocalKart);
@@ -362,7 +349,7 @@ fn follow_transform(
         if let Ok(target_transform) = transforms.get(follow_transform.0) {
             transform.translation = target_transform.translation;
         } else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }

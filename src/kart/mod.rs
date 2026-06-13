@@ -3,8 +3,8 @@ use crate::menu::lobby::{LobbyCar, LobbyCarName};
 use crate::track::LAPS_TO_WIN;
 use crate::track::position::TrackPosition;
 use crate::{
-    AppPlayerData, AppState, AssetHandles, FinishTimes, LobbyState, LocalPlayerData,
-    OwnerPlayer, SpriteLayers,
+    AppPlayerData, AppState, ApplyCorrectionSet, AssetHandles, FinishTimes, LobbyState,
+    LocalPlayerData, OwnerPlayer, SpriteLayers,
     car_controller_2d::CarController2dWheel,
 };
 use avian2d::prelude::*;
@@ -22,8 +22,10 @@ pub struct KartPlugin;
 impl Plugin for KartPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
-            Update,
-            (follow_transform,),
+            PostUpdate,
+            follow_transform
+                .after(ApplyCorrectionSet)
+                .before(TransformSystems::Propagate),
         );
     }
 }

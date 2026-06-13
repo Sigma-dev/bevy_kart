@@ -1,5 +1,7 @@
+use bevy::platform::collections::HashMap;
+
 use crate::{
-    AppState, AssetHandles, EntityKind, FinishTimes, OwnerPlayer, SpriteLayers,
+    AppState, AssetHandles, EntityKind, OwnerPlayer, SpriteLayers,
     car_controller_2d::CarControllerDisabled,
     items::{HeldItem, spawn_spawner},
     kart::{LapsCounter, LocalKart},
@@ -36,6 +38,26 @@ impl Plugin for TrackPlugin {
 }
 
 pub const LAPS_TO_WIN: u32 = 3;
+
+#[derive(Resource, Clone, Debug, Serialize, Deserialize)]
+pub struct FinishTimes {
+    pub times: HashMap<u128, u64>,
+}
+
+impl FinishTimes {
+    pub fn get_player_rank(&self, player_uuid: u128) -> Option<usize> {
+        let mut all_times = self
+            .times
+            .iter()
+            .map(|(id, time)| (*id, *time))
+            .collect::<Vec<_>>();
+        all_times.sort_by(|(_, time), (_, time2)| time.cmp(time2));
+        all_times
+            .iter()
+            .position(|(id, _)| *id == player_uuid)
+            .map(|index| index + 1)
+    }
+}
 
 /// Ensemble message: finish times update.
 #[derive(Clone, Debug, Serialize, Deserialize, Message)]

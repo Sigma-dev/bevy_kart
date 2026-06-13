@@ -221,8 +221,12 @@ fn use_item(
 }
 
 fn move_rocket(
+    server_player: Option<Res<LocalServerPlayer>>,
     mut rockets: Query<(&mut crate::NetworkedPosition, &crate::NetworkedRotation), With<Rocket>>,
 ) {
+    if server_player.is_none() {
+        return;
+    }
     for (mut pos, rot) in rockets.iter_mut() {
         let dir = Vec2::new(-rot.0.sin(), rot.0.cos());
         pos.0 += dir * (100. * SECONDS_PER_TICK);

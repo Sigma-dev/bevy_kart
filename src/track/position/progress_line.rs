@@ -1,10 +1,13 @@
 pub use bevy::prelude::*;
+use avian2d::prelude::*;
+use bevy_ticked::prelude::*;
 
 pub struct ProgressLinePlugin;
 
 impl Plugin for ProgressLinePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (draw_progress_line, compute_progress));
+        app.add_systems(Update, draw_progress_line)
+            .add_systems(TickedSimulation, compute_progress);
     }
 }
 
@@ -114,11 +117,11 @@ fn draw_progress_line(
 
 fn compute_progress(
     mut commands: Commands,
-    progress: Query<(Entity, &Transform), With<TrackProgress>>,
+    progress: Query<(Entity, &Position), With<TrackProgress>>,
     progress_line: Single<&ProgressLine>,
 ) {
-    for (entity, transform) in progress.iter() {
-        let progress = progress_line.measure_progress(transform.translation.xy());
+    for (entity, pos) in progress.iter() {
+        let progress = progress_line.measure_progress(Vec2::new(pos.x, pos.y));
         commands.entity(entity).insert(Progress { progress });
     }
 }

@@ -18,7 +18,7 @@ pub(crate) struct AnimatedButton(usize);
 
 fn animate_button(time: Res<Time>, mut query: Query<(&mut ImageNode, &AnimatedButton)>) {
     for (mut image, button) in query.iter_mut() {
-        let offset = (time.elapsed_secs() as f32 * 2.0) as usize % 2;
+        let offset = (time.elapsed_secs() * 2.0) as usize % 2;
         let new_index = button.0 + offset;
         image.texture_atlas.as_mut().unwrap().index = new_index;
     }

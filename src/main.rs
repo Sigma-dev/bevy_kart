@@ -531,22 +531,6 @@ fn cleanup_on_lobby_gone(
     app_state.set(AppState::OutOfGame);
 }
 
-/// Helper to check if we are the host.
-pub fn is_host(server_player: Option<Res<LocalServerPlayer>>) -> bool {
-    server_player.is_some()
-}
-
-/// Helper to get the local player's UUID.
-pub fn local_player_uuid(
-    local_client: Option<Res<LocalClientPlayer>>,
-    local_server: Option<Res<LocalServerPlayer>>,
-) -> Option<u128> {
-    local_client
-        .as_ref()
-        .map(|p| p.0)
-        .or_else(|| local_server.as_ref().map(|p| p.0))
-}
-
 fn setup(mut commands: Commands) {
     let mut projection = OrthographicProjection::default_2d();
     projection.scaling_mode = bevy::camera::ScalingMode::Fixed {
@@ -602,7 +586,7 @@ fn cursor_position_log(
 
 #[derive(Resource, Clone, Debug, Serialize, Deserialize)]
 pub struct FinishTimes {
-    pub times: HashMap<u128, f32>,
+    pub times: HashMap<u128, u64>,
 }
 
 impl FinishTimes {
@@ -612,7 +596,7 @@ impl FinishTimes {
             .iter()
             .map(|(id, time)| (*id, *time))
             .collect::<Vec<_>>();
-        all_times.sort_by(|(_, time), (_, time2)| time.partial_cmp(time2).unwrap());
+        all_times.sort_by(|(_, time), (_, time2)| time.cmp(time2));
         let rank = all_times
             .iter()
             .position(|(id, _)| *id == player_uuid)

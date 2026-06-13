@@ -49,7 +49,7 @@ struct RaceEnded(f32);
 struct StartLight;
 
 #[derive(Resource)]
-struct RaceStarted(f32);
+struct RaceStarted(u64);
 
 #[derive(Component)]
 struct HeldItemIcon;
@@ -93,7 +93,7 @@ fn spawn_item_spawners(commands: &mut Commands, points: Vec<Vec2>) {
 
 pub(crate) fn spawn_track(
     mut finish_times: ResMut<FinishTimes>,
-    time: Res<Time>,
+    tick: Res<CurrentTick>,
     mut commands: Commands,
     mut audio_manager: AudioManager,
     asset_handles: Res<AssetHandles>,
@@ -242,7 +242,7 @@ pub(crate) fn spawn_track(
         StartLight,
     ));
     audio_manager.play_sound(PlayAudio2D::new_once("sounds/countdown.wav"));
-    commands.insert_resource(RaceStarted(time.elapsed_secs()));
+    commands.insert_resource(RaceStarted(tick.0));
 
     let texture_handle = asset_handles.items_texture.clone();
     let texture_atlas = TextureAtlasLayout::from_grid(UVec2::splat(8), 2, 1, None, None);
@@ -404,7 +404,7 @@ fn end_with_delay(
 
 fn start_light(
     mut commands: Commands,
-    time: Res<Time>,
+    tick: Res<CurrentTick>,
     mut lights: Query<&mut Sprite, With<StartLight>>,
     race_started: Option<Res<RaceStarted>>,
     disabled_cars: Query<Entity, With<CarControllerDisabled>>,
@@ -412,18 +412,19 @@ fn start_light(
     let Some(race) = race_started else {
         return;
     };
-    let time_since_start = time.elapsed_secs() - race.0;
+    let ticks_elapsed = tick.0.saturating_sub(race.0);
+    let seconds_elapsed = ticks_elapsed as f32 * SECONDS_PER_TICK;
     for mut light in lights.iter_mut() {
         let Some(texture_atlas) = &mut light.texture_atlas else {
             continue;
         };
-        let new_index = time_since_start.floor() as usize + 1;
+        let new_index = seconds_elapsed.floor() as usize + 1;
         if new_index > 4 {
             continue;
         }
         texture_atlas.index = new_index;
     }
-    if time_since_start > 3. && time_since_start < 4. {
+    if seconds_elapsed > 3. && seconds_elapsed < 4. {
         for entity in disabled_cars.iter() {
             commands.entity(entity).remove::<CarControllerDisabled>();
         }
@@ -455,12 +456,15 @@ fn update_held_item_icon(
 fn update_position_ui(
     mut commands: Commands,
     asset_handles: Res<AssetHandles>,
-    counter: Single<Entity, With<PositionUI>>,
-    local_kart: Single<&RacePosition, With<LocalKart>>,
+    counter: Query<Entity, With<PositionUI>>,
+    local_kart: Query<&RacePosition, With<LocalKart>>,
 ) {
+    let (Ok(counter), Ok(local_kart)) = (counter.single(), local_kart.single()) else {
+        return;
+    };
     let position = local_kart.position + 1;
     commands
-        .entity(*counter)
+        .entity(counter)
         .insert(Node {
             height: px(100),
             ..default()
@@ -470,7 +474,7 @@ fn update_position_ui(
     let tens_part = position / 10;
     if tens_part > 0 {
         commands
-            .entity(*counter)
+            .entity(counter)
             .with_child((ImageNode::from_atlas_image(
                 asset_handles.numbers_texture.clone(),
                 TextureAtlas {
@@ -480,7 +484,7 @@ fn update_position_ui(
             ),));
     }
     commands
-        .entity(*counter)
+        .entity(counter)
         .with_child((ImageNode::from_atlas_image(
             asset_handles.numbers_texture.clone(),
             TextureAtlas {

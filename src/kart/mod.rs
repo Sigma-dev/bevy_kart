@@ -126,7 +126,7 @@ pub fn on_lap_update(
             commands
                 .entity(trigger.event_target())
                 .insert(CarControllerDisabled);
-            finish_times.times.insert(owner.0, tick.0 as f32);
+            finish_times.times.insert(owner.0, tick.0);
         }
     }
 }

@@ -65,10 +65,8 @@ impl Plugin for LobbyPlugin {
                     on_lobby_exit,
                     spawn_background_elements,
                     handle_background_elements,
-                    log_last_pong,
                 ),
-            )
-            .insert_resource(LobbyChatInputHistory(Vec::new()));
+            );
     }
 }
 
@@ -518,13 +516,6 @@ fn receive_ping(
     }
 }
 
-fn log_last_pong(lobby: Query<&PeerLastPong, With<Lobby>>) {
-    let Ok(last_pong) = lobby.single() else {
-        return;
-    };
-    info!("Last pong: {} ms ago", (last_pong.0 * 1000.0) as u64);
-}
-
 fn spawn_background_elements(
     mut commands: Commands,
     background_elements: Query<&BackgroundElement>,
@@ -544,6 +535,7 @@ fn spawn_background_elements(
         element,
         Transform::from_translation(Vec3::new(random_x, random_y, element.layer().to_z())),
         element.as_sprite(&handles),
+        DespawnOnExit(LobbyState::InLobby),
     ));
 }
 

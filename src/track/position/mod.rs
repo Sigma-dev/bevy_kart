@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_ticked::prelude::*;
 
 use crate::{
     kart::{LapUpdate, LapsCounter},
@@ -12,7 +13,7 @@ pub mod progress_line;
 impl Plugin for RacePositionPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(progress_line::ProgressLinePlugin)
-            .add_systems(Update, compute_race_position);
+            .add_systems(TickedSimulation, compute_race_position);
     }
 }
 

@@ -10,7 +10,6 @@ use bevy_ticked::prelude::*;
 use bevy_ticked_networking::prelude::*;
 use bevy_ticked_networking_ensemble::TickedNetworkingEnsemblePlugin;
 use bevy_timer::TimerPlugin;
-use bevy_ui_text_input::TextInputPlugin;
 
 pub mod assets;
 pub mod bevy_plugins;
@@ -23,6 +22,7 @@ pub mod lobby;
 pub mod menu;
 pub mod networking;
 pub mod rollback_smoothing;
+pub mod scene_util;
 pub mod theme;
 pub mod track;
 
@@ -46,8 +46,8 @@ use rollback_smoothing::RollbackSmoothingPlugin;
 use track::{TrackPlugin, spawn_track};
 
 fn main() {
-    App::new()
-        .add_plugins((NecessaryBevyPlugins, TextInputPlugin))
+    let mut app = App::new();
+    app.add_plugins(NecessaryBevyPlugins)
         // Networking stack
         .add_plugins((
             EnsemblePlugin,
@@ -59,7 +59,7 @@ fn main() {
             display_name: "Player".into(),
             ..default()
         })
-        .add_plugins(TickedPlugin)
+        .add_plugins(TickedPlugin::default())
         .add_plugins(
             PhysicsPlugins::new(TickedSimulation)
                 .set(PhysicsInterpolationPlugin::interpolate_all()),
@@ -113,8 +113,13 @@ fn main() {
         .add_systems(OnEnter(LobbyState::InLobby), spawn_lobby)
         .add_systems(OnEnter(AppState::Game), spawn_track)
         .add_systems(OnExit(AppState::Game), spawn_lobby)
-        .insert_resource(ClearColor(AppColors::Grass.color()))
-        .run();
+        .insert_resource(ClearColor(AppColors::Grass.color()));
+
+    // Dev-only network debug overlay + condition simulator (F3 toggles the panel).
+    #[cfg(feature = "netdebug")]
+    app.add_plugins(NetDebugPlugin::default());
+
+    app.run();
 }
 
 fn setup(mut commands: Commands) {

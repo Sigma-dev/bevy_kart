@@ -1,24 +1,27 @@
 use crate::kart::{KART_SIZE, KartControlType, spawn_kart};
-use crate::menu::{AnimatedButton, animated_button_bundle};
+use crate::menu::animated_button;
+use crate::scene_util::insert;
 use crate::{
     AppColors, AppPlayerData, AppState, AssetHandles, ChatMessage, FinishTimes, LobbyState,
     RESOLUTION, SpriteLayers,
 };
 use bevy::prelude::*;
-use bevy_bundled_observers::observers;
+use bevy::text::EditableText;
 use bevy_ensemble::prelude::*;
 use bevy_ensemble_webrtc::LobbyWebrtcCode;
 use bevy_ticked_networking::prelude::*;
-use bevy_ui_text_input::{SubmitText, TextInputMode, TextInputNode};
 
-/// Handle chat text submissions as a system (SubmitText is a Message, not EntityEvent).
+use super::TextSubmit;
+
+/// Handle chat text submissions as a system (`TextSubmit` is a Message, not EntityEvent).
 fn on_chat_submit(
-    mut submit_reader: MessageReader<SubmitText>,
+    mut submit_reader: MessageReader<TextSubmit>,
     mut commands: Commands,
     lobbies: Query<Entity, With<Lobby>>,
     local_player: Option<Res<LocalMultiplayerPlayerId>>,
     local_server: Option<Res<LocalServerPlayer>>,
     mut history: ResMut<LobbyChatInputHistory>,
+    mut inputs: Query<&mut EditableText>,
 ) {
     for submit in submit_reader.read() {
         let uuid = local_player
@@ -35,6 +38,10 @@ fn on_chat_submit(
                 .trigger(move |entity| BroadcastLobbyMessage::new(entity, msg));
         }
         history.add(format!("You: {}", submit.text));
+        // Clear the chat box after sending.
+        if let Ok(mut input) = inputs.get_mut(submit.entity) {
+            input.clear();
+        }
     }
 }
 use rand::distr::Distribution;
@@ -70,10 +77,10 @@ impl Plugin for LobbyPlugin {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct LobbyCodeText;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 #[require(Text)]
 struct PingText;
 
@@ -89,16 +96,16 @@ impl LobbyChatInputHistory {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct LobbyChatInputHistoryText;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct LobbyPlayersButtons;
 
 #[derive(Component)]
 pub struct LobbyCar(pub u128);
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 pub struct LobbyCarName(pub u128);
 
 #[derive(Component, Clone, Copy)]
@@ -233,7 +240,7 @@ fn on_client_message_received(
 
 fn on_lobby_exit(
     mut removed_lobbies: RemovedComponents<Lobby>,
-    mut inputs: Query<&mut Text, With<TextInputNode>>,
+    mut inputs: Query<&mut EditableText>,
     mut history: ResMut<LobbyChatInputHistory>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
@@ -241,7 +248,7 @@ fn on_lobby_exit(
         return;
     }
     for mut input in inputs.iter_mut() {
-        input.0.clear();
+        input.clear();
     }
     history.0.clear();
     next_state.set(AppState::OutOfGame);
@@ -354,147 +361,133 @@ pub fn spawn_lobby(
     mut commands: Commands,
     server_player: Option<Res<LocalServerPlayer>>,
     handles: Res<AssetHandles>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     let is_host = server_player.is_some();
     let lobby = commands
-        .spawn((
-            DespawnOnExit(LobbyState::InLobby),
-            DespawnOnExit(AppState::OutOfGame),
+        .spawn_scene(bsn! {
+            {insert((DespawnOnExit(LobbyState::InLobby), DespawnOnExit(AppState::OutOfGame)))}
+            Pickable::IGNORE
             Node {
                 width: percent(100),
                 height: percent(100),
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
-                ..default()
-            },
-            Pickable::IGNORE,
-        ))
+            }
+        })
         .id();
 
-    commands.spawn((
-        Mesh2d(meshes.add(Rectangle::new(RESOLUTION.x, 10.))),
-        MeshMaterial2d(materials.add(AppColors::Road.color())),
-        Transform::from_xyz(0., 0., SpriteLayers::Background.to_z()),
-        DespawnOnExit(LobbyState::InLobby),
-        DespawnOnExit(AppState::OutOfGame),
-    ));
+    // Road stripe behind the lobby cars. `asset_value` creates the mesh/material
+    // inline at scene-resolve time, so no `Assets` params are needed here.
+    commands.spawn_scene(bsn! {
+        Mesh2d(asset_value(Rectangle::new(RESOLUTION.x, 10.)))
+        MeshMaterial2d::<ColorMaterial>(asset_value(ColorMaterial::from(AppColors::Road.color())))
+        Transform::from_xyz(0., 0., SpriteLayers::Background.to_z())
+        {insert((DespawnOnExit(LobbyState::InLobby), DespawnOnExit(AppState::OutOfGame)))}
+    });
+
+    // Bottom button column: leave-lobby always, start-game only for the host.
     let buttons = commands
-        .spawn((
+        .spawn_scene(bsn! {
             Node {
                 position_type: PositionType::Absolute,
                 bottom: vh(10),
                 flex_direction: FlexDirection::ColumnReverse,
                 row_gap: px(30),
-                ..default()
-            },
-            children![(
-                animated_button_bundle(AnimatedButton(6), &handles, handles.buttons_atlas.clone()),
-                observers!(|_: On<Pointer<Press>>,
-                            mut commands: Commands,
-                            lobbies: Query<Entity, With<Lobby>>| {
-                    for lobby in lobbies.iter() {
-                        commands.entity(lobby).despawn();
-                    }
-                }),
-            )],
-        ))
+            }
+            Children [
+                (
+                    animated_button(6, handles.buttons_texture.clone(), handles.buttons_atlas.clone())
+                    on(|_: On<Pointer<Press>>,
+                        mut commands: Commands,
+                        lobbies: Query<Entity, With<Lobby>>| {
+                        for lobby in lobbies.iter() {
+                            commands.entity(lobby).despawn();
+                        }
+                    })
+                )
+            ]
+        })
         .id();
+    if is_host {
+        commands
+            .spawn_scene(bsn! {
+                animated_button(4, handles.buttons_texture.clone(), handles.buttons_atlas.clone())
+                on(|_: On<Pointer<Press>>,
+                    mut next_state: ResMut<NextState<AppState>>,
+                    mut commands: Commands,
+                    lobbies: Query<Entity, With<Lobby>>| {
+                    next_state.set(AppState::Game);
+                    if let Some(lobby) = lobbies.iter().next() {
+                        let msg = crate::GameStateChanged(AppState::Game);
+                        commands
+                            .entity(lobby)
+                            .trigger(move |e| BroadcastLobbyMessage::new(e, msg));
+                    }
+                })
+            })
+            .insert(ChildOf(buttons));
+    }
 
     let lobby_code_text = commands
-        .spawn((
-            Text::new(""),
-            TextFont {
-                font_size: 80.0,
-                ..default()
-            },
+        .spawn_scene(bsn! {
+            Text::new("")
+            TextFont { font_size: {FontSize::Px(80.0)} }
             Node {
                 position_type: PositionType::Absolute,
                 top: vh(20),
-                ..default()
-            },
-            LobbyCodeText,
-        ))
+            }
+            LobbyCodeText
+        })
         .id();
 
     let lobby_chat = commands
-        .spawn((
+        .spawn_scene(bsn! {
             Node {
                 position_type: PositionType::Absolute,
                 top: px(50),
                 left: px(5),
                 flex_direction: FlexDirection::Column,
                 row_gap: px(5),
-                ..default()
-            },
-            children![
+            }
+            Children [
                 (
-                    Text::new(""),
-                    LobbyChatInputHistoryText,
-                    Node {
-                        height: px(300),
-                        width: px(300),
-                        ..default()
-                    },
+                    Text::new("")
+                    LobbyChatInputHistoryText
+                    Node { height: px(300), width: px(300) }
                 ),
                 (
-                    TextInputNode {
-                        mode: TextInputMode::SingleLine,
-                        ..default()
-                    },
-                    Node {
-                        height: px(25),
-                        ..default()
-                    },
-                    BackgroundColor(AppColors::Dark.color()),
-                )
-            ],
-        ))
+                    EditableText { allow_newlines: false }
+                    Node { height: px(25), width: px(300) }
+                    BackgroundColor({AppColors::Dark.color()})
+                ),
+            ]
+        })
         .id();
 
     let players_buttons = commands
-        .spawn((
-            LobbyPlayersButtons,
+        .spawn_scene(bsn! {
+            LobbyPlayersButtons
             Node {
                 position_type: PositionType::Absolute,
                 top: px(5),
                 right: px(5),
-                ..default()
-            },
-        ))
+            }
+        })
         .id();
 
-    if is_host {
-        commands.entity(buttons).with_child((
-            animated_button_bundle(AnimatedButton(4), &handles, handles.buttons_atlas.clone()),
-            observers!(|_: On<Pointer<Press>>,
-                        mut next_state: ResMut<NextState<AppState>>,
-                        mut commands: Commands,
-                        lobbies: Query<Entity, With<Lobby>>| {
-                next_state.set(AppState::Game);
-                if let Some(lobby) = lobbies.iter().next() {
-                    let msg = crate::GameStateChanged(AppState::Game);
-                    commands
-                        .entity(lobby)
-                        .trigger(move |e| BroadcastLobbyMessage::new(e, msg));
-                }
-            }),
-        ));
-    }
     commands
         .entity(lobby)
         .add_children(&[lobby_code_text, lobby_chat, players_buttons, buttons]);
 
-    commands.spawn((
-        DespawnOnExit(LobbyState::InLobby),
+    // Ping display.
+    commands.spawn_scene(bsn! {
+        {insert(DespawnOnExit(LobbyState::InLobby))}
         Node {
             position_type: PositionType::Absolute,
             bottom: px(5),
-            ..default()
-        },
-        PingText,
-    ));
+        }
+        PingText
+    });
 }
 
 fn receive_ping(

@@ -11,7 +11,7 @@ use crate::{
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
-use bevy_bundled_observers::observers;
+use crate::scene_util::insert;
 use bevy_ensemble::prelude::*;
 use bevy_ensemble::LobbyClientPlayerUuid;
 use bevy_ticked::prelude::*;
@@ -269,77 +269,90 @@ pub(crate) fn spawn_kart(
                 ))
                 .remove::<Collider>();
 
-            let mut ui = commands.spawn((
-                Visibility::Inherited,
-                FollowTransform(id),
-                children![(
-                    Text2d::new(name),
-                    LobbyCarName(player_uuid),
-                    TextLayout::new_with_justify(Justify::Center),
-                    Transform::from_xyz(0., 5., SpriteLayers::AboveCar.to_z())
-                        .with_scale(Vec3::splat(0.1)),
-                ),],
-            ));
+            let ui = commands
+                .spawn_scene(bsn! {
+                    {insert(FollowTransform(id))}
+                    Visibility::Inherited
+                    Children [
+                        (
+                            {insert((
+                                Text2d::new(name),
+                                Transform::from_xyz(0., 5., SpriteLayers::AboveCar.to_z())
+                                    .with_scale(Vec3::splat(0.1)),
+                            ))}
+                            LobbyCarName({player_uuid})
+                            TextLayout::justify(Justify::Center)
+                        )
+                    ]
+                })
+                .id();
             if is_local {
-                ui.with_children(|parent| {
-                    parent.spawn((
-                        Transform::from_xyz(-6., 0., SpriteLayers::Car.to_z()),
-                        Button,
-                        Sprite {
-                            image: asset_handles.arrow_texture.clone(),
-                            flip_x: true,
-                            ..default()
-                        },
-                        Pickable::default(),
-                        observers!(|_: On<Pointer<Press>>,
-                                    mut local_data: ResMut<LocalPlayerData>,
-                                    mut commands: Commands,
-                                    lobbies: Query<Entity, With<Lobby>>| {
+                let arrow = asset_handles.arrow_texture.clone();
+                commands
+                    .spawn_scene(bsn! {
+                        {insert((
+                            Transform::from_xyz(-6., 0., SpriteLayers::Car.to_z()),
+                            Sprite { image: {arrow}, flip_x: true, ..default() },
+                        ))}
+                        Button
+                        Pickable
+                        on(|_: On<Pointer<Press>>,
+                            mut local_data: ResMut<LocalPlayerData>,
+                            mut commands: Commands,
+                            lobbies: Query<Entity, With<Lobby>>| {
                             local_data.0.kart_color = local_data.0.kart_color.left();
                             if let Some(lobby) = lobbies.iter().next() {
                                 let data = local_data.0.clone();
                                 commands.entity(lobby).trigger(move |entity| SetPlayerData::new(entity, data));
                             }
-                        }),
-                    ));
-                    parent.spawn((
-                        Transform::from_xyz(6., 0., SpriteLayers::Car.to_z()),
-                        Button,
-                        Sprite::from_image(asset_handles.arrow_texture.clone()),
-                        Pickable::default(),
-                        observers![|_: On<Pointer<Press>>,
-                                    mut local_data: ResMut<LocalPlayerData>,
-                                    mut commands: Commands,
-                                    lobbies: Query<Entity, With<Lobby>>| {
+                        })
+                    })
+                    .insert(ChildOf(ui));
+                commands
+                    .spawn_scene(bsn! {
+                        {insert((
+                            Transform::from_xyz(6., 0., SpriteLayers::Car.to_z()),
+                            Sprite::from_image(asset_handles.arrow_texture.clone()),
+                        ))}
+                        Button
+                        Pickable
+                        on(|_: On<Pointer<Press>>,
+                            mut local_data: ResMut<LocalPlayerData>,
+                            mut commands: Commands,
+                            lobbies: Query<Entity, With<Lobby>>| {
                             local_data.0.kart_color = local_data.0.kart_color.right();
                             if let Some(lobby) = lobbies.iter().next() {
                                 let data = local_data.0.clone();
                                 commands.entity(lobby).trigger(move |entity| SetPlayerData::new(entity, data));
                             }
-                        },],
-                    ));
-                });
+                        })
+                    })
+                    .insert(ChildOf(ui));
             } else if is_host {
                 let kick_uuid = player_uuid;
-                ui.with_child((
-                    Transform::from_xyz(0., -6., SpriteLayers::Car.to_z()),
-                    Button,
-                    Sprite::from_image(asset_handles.kick_texture.clone()),
-                    Pickable::default(),
-                    observers![move |_: On<Pointer<Press>>,
-                                mut commands: Commands,
-                                lobby_clients: Query<(Entity, &LobbyClientPlayerUuid)>| {
-                        if let Some((entity, _)) = lobby_clients.iter().find(|(_, uuid)| uuid.0 == kick_uuid) {
-                            commands.entity(entity).try_despawn();
-                        }
-                    }],
-                ));
+                commands
+                    .spawn_scene(bsn! {
+                        {insert((
+                            Transform::from_xyz(0., -6., SpriteLayers::Car.to_z()),
+                            Sprite::from_image(asset_handles.kick_texture.clone()),
+                        ))}
+                        Button
+                        Pickable
+                        on(move |_: On<Pointer<Press>>,
+                            mut commands: Commands,
+                            lobby_clients: Query<(Entity, &LobbyClientPlayerUuid)>| {
+                            if let Some((entity, _)) = lobby_clients.iter().find(|(_, uuid)| uuid.0 == kick_uuid) {
+                                commands.entity(entity).try_despawn();
+                            }
+                        })
+                    })
+                    .insert(ChildOf(ui));
             }
         }
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Clone)]
 #[require(Transform)]
 pub struct FollowTransform(pub Entity);
 

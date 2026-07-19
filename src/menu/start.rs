@@ -1,20 +1,17 @@
+use crate::scene_util::insert;
 use crate::{
     AppColors, AppState, AssetHandles, LobbyState, LocalPlayerData,
     RESOLUTION, SpriteLayers,
     kart::{AutoCar, KartControlType, spawn_kart},
-    menu::animated_button_bundle,
+    menu::animated_button,
 };
 use bevy::prelude::*;
-use bevy_bundled_observers::observers;
+use bevy::text::{EditableText, EditableTextFilter};
 use bevy_ensemble::prelude::*;
 use bevy_ensemble_webrtc::JoinWebrtcLobbyByCode;
-use bevy_ui_text_input::{
-    SubmitText, TextInputBuffer, TextInputContents, TextInputFilter, TextInputMode,
-    TextInputModifier, TextInputNode,
-};
 use rand::Rng;
 
-use super::AnimatedButton;
+use super::{AnimatedButton, TextSubmit};
 
 pub struct StartPlugin;
 
@@ -33,25 +30,30 @@ impl Plugin for StartPlugin {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct MenuCarSpawner {
     next_spawn: Option<f32>,
 }
 
-impl MenuCarSpawner {
-    fn new() -> Self {
-        Self { next_spawn: None }
-    }
-}
-
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct MenuControls;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct CodeInput;
 
-#[derive(Component)]
+#[derive(Component, Default, Clone)]
 struct NameInput;
+
+/// One repeating menu-car spawn point (position + facing), as a [`Scene`].
+fn menu_car_spawner(x: f32, y: f32, angle_deg: f32) -> impl Scene {
+    bsn! {
+        {insert(
+            Transform::from_translation(Vec3::new(x, y, SpriteLayers::Car.to_z()))
+                .with_rotation(Quat::from_rotation_z(angle_deg.to_radians()))
+        )}
+        MenuCarSpawner
+    }
+}
 
 pub(crate) fn spawn_menu(
     mut commands: Commands,
@@ -73,229 +75,143 @@ pub(crate) fn spawn_menu(
         None,
         None,
     ));
-    let menu = commands
-        .spawn((
-            DespawnOnExit(LobbyState::OutOfLobby),
-            DespawnOnExit(AppState::OutOfGame),
-            Node {
-                width: percent(100),
-                height: percent(100),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                ..default()
-            },
-        ))
-        .id();
-    let car_spawners = commands
-        .spawn(children![
+    let player_name = local_data.0.name.clone();
+    commands.spawn_scene(bsn! {
+        {insert((DespawnOnExit(LobbyState::OutOfLobby), DespawnOnExit(AppState::OutOfGame)))}
+        Node {
+            width: percent(100),
+            height: percent(100),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+        }
+        Children [
+            // Full-screen background.
             (
-                MenuCarSpawner::new(),
-                Transform::from_translation(Vec3::new(-134., -6., SpriteLayers::Car.to_z()))
-                    .with_rotation(Quat::from_rotation_z(-53_f32.to_radians())),
+                {insert((
+                    Sprite::from_image(handles.menu_background_texture.clone()),
+                    Transform::from_translation(Vec3::Z * SpriteLayers::Background.to_z()),
+                ))}
             ),
+            // Host button + join-by-code row.
             (
-                MenuCarSpawner::new(),
-                Transform::from_translation(Vec3::new(-142., 0., SpriteLayers::Car.to_z()))
-                    .with_rotation(Quat::from_rotation_z(-53_f32.to_radians())),
-            ),
-            (
-                MenuCarSpawner::new(),
-                Transform::from_translation(Vec3::new(10., -80., SpriteLayers::Car.to_z()))
-                    .with_rotation(Quat::from_rotation_z(72_f32.to_radians())),
-            ),
-            (
-                MenuCarSpawner::new(),
-                Transform::from_translation(Vec3::new(20., -80., SpriteLayers::Car.to_z()))
-                    .with_rotation(Quat::from_rotation_z(73_f32.to_radians())),
-            ),
-            (
-                MenuCarSpawner::new(),
-                Transform::from_translation(Vec3::new(30., 80., SpriteLayers::Car.to_z()))
-                    .with_rotation(Quat::from_rotation_z(-147_f32.to_radians())),
-            ),
-            (
-                MenuCarSpawner::new(),
-                Transform::from_translation(Vec3::new(40., 80., SpriteLayers::Car.to_z()))
-                    .with_rotation(Quat::from_rotation_z(-147_f32.to_radians())),
-            ),
-        ])
-        .id();
-    let menu_background = commands
-        .spawn((
-            Sprite::from_image(handles.menu_background_texture.clone()),
-            Transform::from_translation(Vec3::Z * SpriteLayers::Background.to_z()),
-        ))
-        .id();
-    let buttons = commands
-        .spawn((
-            MenuControls,
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: vh(20),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(30),
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            children![
-                (
-                    animated_button_bundle(
-                        AnimatedButton(0),
-                        &handles,
-                        handles.buttons_atlas.clone()
+                MenuControls
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: vh(20),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(30),
+                    align_items: AlignItems::Center,
+                }
+                Children [
+                    (
+                        animated_button(0, handles.buttons_texture.clone(), handles.buttons_atlas.clone())
+                        on(|_: On<Pointer<Press>>, mut start_hosting: MessageWriter<StartHosting>| {
+                            start_hosting.write(StartHosting);
+                        })
                     ),
-                    observers!(|_trigger: On<Pointer<Press>>,
-                                mut start_hosting: MessageWriter<StartHosting>| {
-                        start_hosting.write(StartHosting);
-                    }),
-                ),
-                (
-                    Node {
-                        row_gap: px(10),
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    children![
-                        (
-                            TextInputNode {
-                                mode: TextInputMode::SingleLine,
-                                max_chars: Some(4),
-                                clear_on_submit: false,
-                                ..default()
-                            },
-                            TextFont {
-                                font_size: 50.,
-                                ..default()
-                            },
-                            TextInputContents::default(),
-                            TextInputModifier::AllCaps,
-                            TextInputFilter::Custom(Box::new(|c: &str| c
-                                .chars()
-                                .all(|c| c.is_ascii_uppercase()))),
-                            Node {
-                                height: px(64),
-                                width: px(128),
-                                ..default()
-                            },
-                            BackgroundColor(AppColors::Dark.color()),
-                            CodeInput,
-                        ),
-                        (
-                            animated_button_bundle(
-                                AnimatedButton(2),
-                                &handles,
-                                handles.buttons_atlas.clone()
+                    (
+                        Node { row_gap: px(10), align_items: AlignItems::Center }
+                        Children [
+                            (
+                                EditableText { max_characters: {Some(4)}, allow_newlines: false }
+                                // Codes are A-Z; the server uppercases on join, so accept any letter.
+                                EditableTextFilter::new(|c: char| c.is_ascii_alphabetic())
+                                TextFont { font_size: {FontSize::Px(50.)} }
+                                Node { height: px(64), width: px(128) }
+                                BackgroundColor({AppColors::Dark.color()})
+                                CodeInput
                             ),
-                            observers!(
-                            |_: On<Pointer<Press>>,
-                             mut join_writer: MessageWriter<JoinWebrtcLobbyByCode>,
-                             code: Single<&TextInputContents, With<CodeInput>>| {
-                                join_writer.write(JoinWebrtcLobbyByCode(code.get().to_string()));
-                            }
-                        ),
-                        ),
-                    ]
-                ),
-            ],
-        ))
-        .id();
-    let logo = commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                top: vh(10),
-                height: px(68. * 4.),
-                width: px(128. * 4.),
-                ..default()
-            },
-            ImageNode::from_atlas_image(
-                handles.logo_texture.clone(),
-                TextureAtlas::from(logo_atlas.clone()),
-            ),
-            AnimatedButton(0),
-        ))
-        .id();
-    let name_parent = commands
-        .spawn((
-            MenuControls,
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: px(15),
-                column_gap: px(10),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            children![
-                (
-                    Button,
-                    ImageNode::from_atlas_image(
-                        handles.name_texture.clone(),
-                        TextureAtlas::from(name_atlas.clone()),
+                            (
+                                animated_button(2, handles.buttons_texture.clone(), handles.buttons_atlas.clone())
+                                on(|_: On<Pointer<Press>>,
+                                    mut join_writer: MessageWriter<JoinWebrtcLobbyByCode>,
+                                    code: Single<&EditableText, With<CodeInput>>| {
+                                    join_writer.write(JoinWebrtcLobbyByCode(code.value().to_string()));
+                                })
+                            ),
+                        ]
                     ),
-                    AnimatedButton(0),
-                    Node {
-                        height: px(8. * 4.),
-                        width: px(32. * 4.),
-                        ..default()
-                    },
-                ),
-                (
-                    TextInputNode {
-                        mode: TextInputMode::SingleLine,
-                        max_chars: Some(11),
-                        clear_on_submit: false,
-                        ..default()
-                    },
-                    TextInputBuffer::new(local_data.0.name.clone()),
-                    TextInputContents::default(),
-                    TextFont {
-                        font_size: 28.,
-                        ..default()
-                    },
-                    BackgroundColor(AppColors::Dark.color()),
-                    Node {
-                        height: px(34),
-                        width: px(200),
-                        ..default()
-                    },
-                    NameInput,
-                )
-            ],
-        ))
-        .id();
-    commands.entity(menu).add_children(&[
-        menu_background,
-        buttons,
-        name_parent,
-        logo,
-        car_spawners,
-    ]);
+                ]
+            ),
+            // Name label + editable name field.
+            (
+                MenuControls
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: px(15),
+                    column_gap: px(10),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                }
+                Children [
+                    (
+                        {insert(ImageNode::from_atlas_image(handles.name_texture.clone(), TextureAtlas::from(name_atlas)))}
+                        Button
+                        AnimatedButton(0)
+                        Node { height: px(8. * 4.), width: px(32. * 4.) }
+                    ),
+                    (
+                        EditableText::new(player_name)
+                        EditableText { max_characters: {Some(11)}, allow_newlines: false }
+                        TextFont { font_size: {FontSize::Px(28.)} }
+                        BackgroundColor({AppColors::Dark.color()})
+                        Node { height: px(34), width: px(200) }
+                        NameInput
+                    ),
+                ]
+            ),
+            // Logo.
+            (
+                {insert(ImageNode::from_atlas_image(handles.logo_texture.clone(), TextureAtlas::from(logo_atlas)))}
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: vh(10),
+                    height: px(68. * 4.),
+                    width: px(128. * 4.),
+                }
+                AnimatedButton(0)
+            ),
+            // Off-screen car spawn points that periodically launch drifting cars.
+            (
+                // Transform/Visibility so the transform-bearing children propagate
+                // cleanly (avoids the B0004 hierarchy warning).
+                {insert((Transform::default(), Visibility::default()))}
+                Children [
+                    menu_car_spawner(-134., -6., -53.),
+                    menu_car_spawner(-142., 0., -53.),
+                    menu_car_spawner(10., -80., 72.),
+                    menu_car_spawner(20., -80., 73.),
+                    menu_car_spawner(30., 80., -147.),
+                    menu_car_spawner(40., 80., -147.),
+                ]
+            ),
+        ]
+    });
 }
 
 /// Handle code input submission (join lobby by code).
 fn handle_code_submit(
-    mut submit_reader: MessageReader<SubmitText>,
+    mut submit_reader: MessageReader<TextSubmit>,
     code_inputs: Query<Entity, With<CodeInput>>,
     mut join_writer: MessageWriter<JoinWebrtcLobbyByCode>,
 ) {
     for submit in submit_reader.read() {
         // Only act on submits from a CodeInput entity
         if code_inputs.get(submit.entity).is_ok() {
-            join_writer.write(JoinWebrtcLobbyByCode(submit.text.to_string()));
+            join_writer.write(JoinWebrtcLobbyByCode(submit.text.clone()));
         }
     }
 }
 
 /// Sync name input text to local player data.
 fn handle_name_change(
-    name_inputs: Query<&TextInputContents, (With<NameInput>, Changed<TextInputContents>)>,
+    name_inputs: Query<&EditableText, (With<NameInput>, Changed<EditableText>)>,
     mut local_data: ResMut<LocalPlayerData>,
     mut commands: Commands,
     lobbies: Query<Entity, With<Lobby>>,
 ) {
     for contents in name_inputs.iter() {
-        local_data.0.name = contents.get().to_string();
+        local_data.0.name = contents.value().to_string();
         if let Some(lobby) = lobbies.iter().next() {
             let data = local_data.0.clone();
             commands

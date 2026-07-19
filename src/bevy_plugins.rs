@@ -7,6 +7,7 @@ use bevy::core_pipeline::CorePipelinePlugin;
 use bevy::diagnostic::{DiagnosticsPlugin, FrameCountPlugin};
 use bevy::gizmos::GizmoPlugin;
 use bevy::input::InputPlugin;
+use bevy::input_focus::{InputDispatchPlugin, InputFocusPlugin};
 use bevy::log::LogPlugin;
 use bevy::mesh::MeshPlugin;
 use bevy::picking::{InteractionPlugin, PickingPlugin, input::PointerInputPlugin};
@@ -21,6 +22,7 @@ use bevy::time::TimePlugin;
 use bevy::transform::TransformPlugin;
 use bevy::ui::UiPlugin;
 use bevy::ui_render::UiRenderPlugin;
+use bevy::ui_widgets::EditableTextInputPlugin;
 use bevy::winit::WinitPlugin;
 
 /// Replaces DefaultPlugins with only the Bevy plugins this game actually needs.
@@ -64,5 +66,12 @@ impl Plugin for NecessaryBevyPlugins {
             StatesPlugin,
         ));
         app.add_plugins((PointerInputPlugin, PickingPlugin, InteractionPlugin));
+        // Focus tracking + keyboard dispatch + the built-in editable text widget
+        // (these come from DefaultPlugins normally; add them explicitly here).
+        app.add_plugins((
+            InputFocusPlugin,
+            InputDispatchPlugin,
+            EditableTextInputPlugin,
+        ));
     }
 }

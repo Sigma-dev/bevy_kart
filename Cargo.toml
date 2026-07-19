@@ -3,6 +3,11 @@ name = "bevy_kart"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Dev-only network debug overlay + condition simulator. Off by default so it is
+# never in a shipped build. Run with: cargo run --features netdebug
+netdebug = ["bevy_ensemble/netdebug"]
+
 [dependencies]
 # Networking stack
 bevy_ticked = { path = "../bevy_ticked" }
@@ -14,10 +19,8 @@ postcard = { version = "1", features = ["alloc"] }
 
 audio_manager = { path = "audio_manager" }
 bevy_timer = { path = "bevy_timer" }
-bevy_bundled_observers = { git = "https://github.com/fallible-algebra/bevy_observers.git" }
-bevy_ui_text_input = { git = "https://github.com/Sigma-dev/bevy_ui_text_input.git" }
-bevy = { version = "0.18", features = ["wav"] }
-avian2d = { version = "0.6", features = ["serialize"] }
+bevy = { version = "0.19", features = ["wav"] }
+avian2d = { version = "0.7", features = ["serialize"] }
 serde = { version = "1", features = ["derive"] }
 # For compact codes: deflate compression + base62 encoding
 miniz_oxide = "0.7"

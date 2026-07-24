@@ -93,6 +93,27 @@ fn apply_networked_inputs(
     }
 }
 
+/// World-space pose of a wheel, derived from the kart's authoritative tick state
+/// (`Position`/`Rotation`/`SteeringState`) instead of the render-interpolated
+/// `GlobalTransform`. `GlobalTransform` is only propagated in `PostUpdate` and is
+/// overwritten every frame by the sub-tick visual interpolation, so reading it
+/// inside the tick makes forces frame-rate dependent and non-reproducible across
+/// rollback. Returns `(up, right, world_position)`.
+fn wheel_world_pose(
+    kart_pos: Vec2,
+    kart_angle: f32,
+    steer_rad: f32,
+    wheel_local: &Transform,
+    steerable: bool,
+) -> (Vec2, Vec2, Vec2) {
+    let angle = if steerable { kart_angle + steer_rad } else { kart_angle };
+    let (sin, cos) = angle.sin_cos();
+    let up = Vec2::new(-sin, cos);
+    let right = Vec2::new(cos, sin);
+    let world_pos = kart_pos + Vec2::from_angle(kart_angle).rotate(wheel_local.translation.xy());
+    (up, right, world_pos)
+}
+
 fn car_controller_power(
     mut cars: Query<
         (
@@ -101,15 +122,20 @@ fn car_controller_power(
             &CarController2d,
             &CarControllerInputs,
             Option<&BoostEffect>,
+            &Position,
+            &Rotation,
+            &SteeringState,
         ),
         (
             Without<CarController2dWheel>,
             Without<CarControllerDisabled>,
         ),
     >,
-    wheels: Query<(&GlobalTransform, &CarController2dWheel)>,
+    wheels: Query<(&Transform, &CarController2dWheel)>,
 ) {
-    for (mut force, children, car, inputs, maybe_boost_effect) in cars.iter_mut() {
+    for (mut force, children, car, inputs, maybe_boost_effect, pos, rot, steering) in
+        cars.iter_mut()
+    {
         let mut dir = None;
         if inputs.forward {
             dir = Some(1.);
@@ -121,19 +147,20 @@ fn car_controller_power(
         };
 
         let base_mult = 16.;
+        let boost = maybe_boost_effect.map_or(1., |boost_effect| boost_effect.multiplier);
+        let kart_angle = rot.as_radians();
+        let steer_rad = (steering.angle * 45.).to_radians();
         for child in children.iter() {
-            let Ok((global_transform, wheel)) = wheels.get(child) else {
+            let Ok((wheel_local, wheel)) = wheels.get(child) else {
                 continue;
             };
             if !wheel.powered {
                 continue;
             }
-            let power = global_transform.up().xy()
-                * car.engine_force
-                * base_mult
-                * maybe_boost_effect.map_or(1., |boost_effect| boost_effect.multiplier)
-                * dir;
-            force.apply_force_at_point(power, global_transform.translation().xy());
+            let (up, _right, world_pos) =
+                wheel_world_pose(pos.0, kart_angle, steer_rad, wheel_local, wheel.steerable);
+            let power = up * car.engine_force * base_mult * boost * dir;
+            force.apply_force_at_point(power, world_pos);
         }
     }
 }
@@ -163,20 +190,23 @@ fn car_controller_steering(
 }
 
 fn car_controller_traction(
-    wheels: Query<(&GlobalTransform, &CarController2dWheel, &ChildOf)>,
-    mut cars: Query<Forces>,
+    wheels: Query<(&Transform, &CarController2dWheel, &ChildOf)>,
+    mut cars: Query<(Forces, &Position, &Rotation, &SteeringState)>,
 ) {
-    for (global_transform, _wheel, child_of) in wheels.iter() {
-        let Ok(mut forces) = cars.get_mut(child_of.0) else {
+    for (wheel_local, wheel, child_of) in wheels.iter() {
+        let Ok((mut forces, pos, rot, steering)) = cars.get_mut(child_of.0) else {
             continue;
         };
-        let steering_dir = global_transform.right().as_vec3().xy();
-        let velocity = forces.velocity_at_point(global_transform.translation().xy());
+        let kart_angle = rot.as_radians();
+        let steer_rad = (steering.angle * 45.).to_radians();
+        let (_up, steering_dir, world_pos) =
+            wheel_world_pose(pos.0, kart_angle, steer_rad, wheel_local, wheel.steerable);
+        let velocity = forces.velocity_at_point(world_pos);
         let steering_vel = steering_dir.dot(velocity);
         let desired_vel_change = -steering_vel * 1. * 0.0002;
         let desired_accel = desired_vel_change / SECONDS_PER_TICK;
         let force = steering_dir * desired_accel;
-        forces.apply_linear_impulse_at_point(force, global_transform.translation().xy());
+        forces.apply_linear_impulse_at_point(force, world_pos);
     }
 }
 

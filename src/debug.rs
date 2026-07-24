@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use bevy_ensemble::prelude::{Lobby, PeerRtt};
+use bevy_ticked_networking::prelude::{ClientTickBuffer, LocalClientPlayer};
 
 pub struct DebugPlugin;
 
@@ -27,7 +29,13 @@ fn spawn_fps_text(mut commands: Commands) {
     ));
 }
 
-fn update_fps(time: Res<Time>, mut texts: Query<(&mut Text, &mut FpsText)>) {
+fn update_fps(
+    time: Res<Time>,
+    mut texts: Query<(&mut Text, &mut FpsText)>,
+    buffer: Option<Res<ClientTickBuffer>>,
+    local_client: Option<Res<LocalClientPlayer>>,
+    rtt: Query<&PeerRtt, With<Lobby>>,
+) {
     let delta = time.delta_secs_f64();
     if delta <= 0.0 || delta.is_nan() {
         return;
@@ -36,9 +44,17 @@ fn update_fps(time: Res<Time>, mut texts: Query<(&mut Text, &mut FpsText)>) {
     if current.is_infinite() || current.is_nan() {
         return;
     }
+    // Networked clients: show measured ping + the adaptive prediction lead.
+    let net = match (local_client.is_some(), buffer) {
+        (true, Some(buffer)) => {
+            let ping = rtt.iter().next().map(|r| r.0 * 1000.0).unwrap_or(0.0);
+            format!("\nping: {:.0}ms  buffer: {} ticks", ping, buffer.target_ticks)
+        }
+        _ => String::new(),
+    };
     for (mut text, mut fps) in texts.iter_mut() {
         fps.current = fps.current * 0.9 + current * 0.1;
-        *text = Text::new(format!("FPS: {:.0}", fps.current));
+        *text = Text::new(format!("FPS: {:.0}{}", fps.current, net));
     }
 }
 

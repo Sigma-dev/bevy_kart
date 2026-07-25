@@ -10,11 +10,11 @@ netdebug = ["bevy_ensemble/netdebug"]
 
 [dependencies]
 # Networking stack
-bevy_ticked = { path = "../bevy_ticked" }
-bevy_ticked_networking = { path = "../bevy_ticked/crates/bevy_ticked_networking" }
-bevy_ticked_networking_ensemble = { path = "../bevy_ticked/crates/bevy_ticked_networking_ensemble" }
-bevy_ensemble = { path = "../bevy_ensemble" }
-bevy_ensemble_webrtc = { path = "../bevy_ensemble/crates/bevy_ensemble_webrtc" }
+bevy_ticked = { git = "https://github.com/Sigma-studios/bevy_ticked", branch = "feature/decouple-fixedupdate" }
+bevy_ticked_networking = { git = "https://github.com/Sigma-studios/bevy_ticked", branch = "feature/decouple-fixedupdate" }
+bevy_ticked_networking_ensemble = { git = "https://github.com/Sigma-studios/bevy_ticked", branch = "feature/decouple-fixedupdate" }
+bevy_ensemble = { git = "https://github.com/Sigma-studios/bevy_ensemble", branch = "feature/netdebug-extras" }
+bevy_ensemble_webrtc = { git = "https://github.com/Sigma-studios/bevy_ensemble", branch = "feature/netdebug-extras" }
 postcard = { version = "1", features = ["alloc"] }
 
 audio_manager = { path = "audio_manager" }

@@ -980,6 +980,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble"
 version = "0.1.0"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=feature%2Fnetdebug-extras#990331835cb80b39103ab6e5966c8c28e0ce5474"
 dependencies = [
  "bevy",
  "postcard",
@@ -989,6 +990,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble_sockets"
 version = "0.1.0"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=feature%2Fnetdebug-extras#990331835cb80b39103ab6e5966c8c28e0ce5474"
 dependencies = [
  "bytes",
  "js-sys",
@@ -1005,6 +1007,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble_webrtc"
 version = "0.1.0"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=feature%2Fnetdebug-extras#990331835cb80b39103ab6e5966c8c28e0ce5474"
 dependencies = [
  "async-tungstenite",
  "bevy",
@@ -1893,6 +1896,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked"
 version = "0.1.0"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=feature%2Fdecouple-fixedupdate#7079592c2407f88303319dcdaa371b0a242c4892"
 dependencies = [
  "bevy",
  "log",
@@ -1903,6 +1907,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked_networking"
 version = "0.1.0"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=feature%2Fdecouple-fixedupdate#7079592c2407f88303319dcdaa371b0a242c4892"
 dependencies = [
  "bevy",
  "bevy_ticked",
@@ -1913,6 +1918,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked_networking_ensemble"
 version = "0.1.0"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=feature%2Fdecouple-fixedupdate#7079592c2407f88303319dcdaa371b0a242c4892"
 dependencies = [
  "bevy",
  "bevy_ensemble",

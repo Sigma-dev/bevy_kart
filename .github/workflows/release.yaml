@@ -172,7 +172,7 @@ jobs:
         if: ${{ env.is_platform_enabled == 'true' }}
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-11-18
+          toolchain: nightly-2026-03-02
           targets: ${{ matrix.targets }}
 
       - name: Restore Rust cache

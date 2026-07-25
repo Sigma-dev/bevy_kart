@@ -146,6 +146,21 @@ pub enum KartControlType {
 #[derive(Component)]
 pub struct LocalKart;
 
+/// Physics + control components for karts that actually drive around (race karts
+/// and the animated menu `AutoCar`s). Lobby cars deliberately omit these: they are
+/// pure visual puppets positioned directly via their `Transform` (see
+/// [`update_lobby_cars`](crate::menu::lobby)), so giving them a `RigidBody` would
+/// pull in avian's transform interpolation and fight the puppet positioning.
+fn kart_physics() -> impl Bundle {
+    (
+        Mass(1.),
+        RigidBody::Dynamic,
+        Collider::rectangle(4., 8.),
+        CarController2d::new(1.),
+        SteeringState::default(),
+    )
+}
+
 pub(crate) fn spawn_kart(
     In((control_type, transform)): In<(KartControlType, Transform)>,
     mut commands: Commands,
@@ -158,12 +173,7 @@ pub(crate) fn spawn_kart(
     let id = commands
         .spawn((
             DespawnOnExit(AppState::Game),
-            Mass(1.),
-            RigidBody::Dynamic,
-            Collider::rectangle(4., 8.),
             transform,
-            CarController2d::new(1.),
-            SteeringState::default(),
             Visibility::Inherited,
         ))
         .with_children(|parent| spawn_kart_wheels(parent, wheel_tex))
@@ -184,6 +194,7 @@ pub(crate) fn spawn_kart(
                 .or_else(|| server_player.as_ref().map(|p| p.0));
             let is_local = local_uuid.is_some_and(|uuid| uuid == owner.0);
             commands.entity(id).insert((
+                kart_physics(),
                 owner,
                 CarControllerDisabled,
                 LapsCounter::new(),
@@ -214,6 +225,7 @@ pub(crate) fn spawn_kart(
         }
         KartControlType::AutoCar => {
             commands.entity(id).insert((
+                kart_physics(),
                 Sprite::from_atlas_image(
                     asset_handles.karts_texture.clone(),
                     TextureAtlas {
@@ -266,8 +278,7 @@ pub(crate) fn spawn_kart(
                     LobbyCar(player_uuid),
                     DespawnOnExit(LobbyState::InLobby),
                     DespawnOnExit(AppState::OutOfGame),
-                ))
-                .remove::<Collider>();
+                ));
 
             let ui = commands
                 .spawn_scene(bsn! {

@@ -12,12 +12,19 @@ pub struct RollbackSmoothingPlugin;
 impl Plugin for RollbackSmoothingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PreRollbackState>()
-            .add_systems(FixedPreUpdate, save_pre_rollback_positions)
+            // Both of these must bracket the tick itself, so they live in
+            // TickedLoop rather than in Bevy's fixed schedules: with the tick
+            // rate decoupled from FixedUpdate, FixedPreUpdate no longer runs
+            // once per tick and the saved baseline would go stale.
             .add_systems(
-                FixedUpdate,
+                TickedLoop,
+                save_pre_rollback_positions.before(TickedSystems::PreTick),
+            )
+            .add_systems(
+                TickedLoop,
                 detect_corrections
-                    .after(TickedSet::PreTick)
-                    .before(TickedSet::Tick),
+                    .after(TickedSystems::PreTick)
+                    .before(TickedSystems::Tick),
             )
             .add_systems(
                 PostUpdate,
@@ -106,11 +113,11 @@ fn detect_corrections(
 /// Sub-tick interpolation + correction offset decay and application.
 /// Replaces avian's easing for karts (they have NoTransformEasing).
 fn apply_correction_offset(
-    fixed_time: Res<Time<Fixed>>,
+    interpolation: TickInterpolation,
     time: Res<Time>,
     mut query: Query<(&Position, &Rotation, &mut Transform, &mut CorrectionSmoothing)>,
 ) {
-    let alpha = fixed_time.overstep_fraction();
+    let alpha = interpolation.fraction();
     let dt = time.delta_secs();
     let decay = if dt > 0.0 { (-CORRECTION_DECAY_RATE * dt).exp() } else { 1.0 };
 

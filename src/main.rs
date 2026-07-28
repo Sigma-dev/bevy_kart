@@ -59,7 +59,13 @@ fn main() {
             display_name: "Player".into(),
             ..default()
         })
-        .add_plugins(TickedPlugin::default())
+        // Ticks come from the crate's own accumulator rather than FixedUpdate,
+        // so the client can steer its prediction lead by dilating the tick rate
+        // instead of adding or dropping whole ticks.
+        .add_plugins(TickedPlugin {
+            source: TickSource::Hz(64.0),
+            ..default()
+        })
         .add_plugins(
             PhysicsPlugins::new(TickedSimulation)
                 .set(PhysicsInterpolationPlugin::interpolate_all()),

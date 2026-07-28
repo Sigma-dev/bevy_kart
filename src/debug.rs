@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_ensemble::prelude::{Lobby, NetDebugExtras, PeerRtt};
 use bevy_ticked_networking::prelude::{ClientTickBuffer, LocalClientPlayer};
+use bevy_ticked::prelude::TickRateDilation;
 
 pub struct DebugPlugin;
 
@@ -47,6 +48,7 @@ fn update_fps(time: Res<Time>, mut texts: Query<(&mut Text, &mut FpsText)>) {
 /// Show the adaptive prediction lead in the F3 net-debug overlay (clients only).
 fn report_tick_buffer(
     buffer: Option<Res<ClientTickBuffer>>,
+    dilation: Option<Res<TickRateDilation>>,
     local_client: Option<Res<LocalClientPlayer>>,
     rtt: Query<&PeerRtt, With<Lobby>>,
     extras: Option<ResMut<NetDebugExtras>>,
@@ -57,9 +59,16 @@ fn report_tick_buffer(
     match (local_client.is_some(), buffer) {
         (true, Some(buffer)) => {
             let ping = rtt.iter().next().map(|r| r.0 * 1000.0).unwrap_or(0.0);
+            // The dilation is how hard the client is currently steering toward
+            // that lead; sustained non-zero drift is the signal that the
+            // controller is hunting rather than settling.
+            let drift = dilation.map(|d| (d.0 - 1.0) * 100.0).unwrap_or(0.0);
             extras.set(
                 "prediction",
-                format!("prediction lead: {} ticks ({ping:.0}ms ping)", buffer.target_ticks),
+                format!(
+                    "prediction lead: {} ticks ({ping:.0}ms ping, {drift:+.1}% rate)",
+                    buffer.target_ticks
+                ),
             );
         }
         _ => extras.remove("prediction"),

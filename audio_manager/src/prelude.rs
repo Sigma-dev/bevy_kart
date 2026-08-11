@@ -1,5 +1,5 @@
 pub use crate::{
     AudioManager, AudioManagerPlugin,
     audio_2d::{PlayAudio2D, SpatialSettings2D},
-    audio_3d::PlayAudio3D,
+    audio_3d::{PlayAudio3D, SpatialSettings3D},
 };

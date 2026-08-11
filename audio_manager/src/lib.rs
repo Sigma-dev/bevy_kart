@@ -2,10 +2,11 @@ use bevy::audio::{PlaybackMode, Volume};
 use bevy::platform::collections::HashMap;
 use bevy::{ecs::system::*, prelude::*};
 
-mod audio_2d;
-mod audio_3d;
+pub mod audio_2d;
+pub mod audio_3d;
 pub mod prelude;
 
+#[derive(Clone, Copy, Debug)]
 pub enum SpatialSettings {
     Position(Transform),
     Entity(Entity),

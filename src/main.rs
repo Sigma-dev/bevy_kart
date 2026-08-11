@@ -25,11 +25,13 @@ pub mod rollback_smoothing;
 pub mod scene_util;
 pub mod theme;
 pub mod track;
+pub mod wire_format;
 
 pub use assets::AssetHandles;
 pub use networking::*;
 pub use rollback_smoothing::{ApplyCorrectionSet, CorrectionSmoothing};
 pub use theme::*;
+pub use wire_format::{WireFormat, WireFormatPlugin};
 pub use track::FinishTimes;
 
 use bevy_plugins::NecessaryBevyPlugins;
@@ -44,6 +46,34 @@ use menu::lobby::spawn_lobby;
 use menu::start::spawn_menu;
 use rollback_smoothing::RollbackSmoothingPlugin;
 use track::{TrackPlugin, spawn_track};
+
+
+/// Register every networked component. **This order is a wire format.**
+///
+/// Indices are assigned by position as `u16` and travel in every snapshot, so
+/// reordering two lines makes a peer read one component's bytes as another's,
+/// silently. Append only, never reorder, never delete.
+///
+/// The string is what `TickedComponentRegistry::wire_hash()` hashes, and
+/// `wire_format::compare_wire_format` checks it against the host's. Renaming the
+/// Rust type is free; changing one of these strings is a wire break.
+///
+/// A free function rather than an inline chain so the golden test in
+/// `wire_format` can build a registry without building an app.
+pub fn register_networked_components(app: &mut App) {
+    app
+        .register_networked_ticked_component_as::<Position>("Position")
+        .register_networked_ticked_component_as::<Rotation>("Rotation")
+        .register_networked_ticked_component_as::<LinearVelocity>("LinearVelocity")
+        .register_networked_ticked_component_as::<AngularVelocity>("AngularVelocity")
+        .register_networked_ticked_component_as::<OwnerPlayer>("OwnerPlayer")
+        .register_networked_ticked_component_as::<EntityKind>("EntityKind")
+        .register_networked_ticked_component_as::<NetworkedPosition>("NetworkedPosition")
+        .register_networked_ticked_component_as::<NetworkedRotation>("NetworkedRotation")
+        .register_networked_ticked_component_as::<car_controller_2d::CarControllerInputs>("CarControllerInputs")
+        .register_networked_ticked_component_as::<car_controller_2d::SteeringState>("SteeringState")
+        .register_networked_ticked_component_as::<items::HeldItem>("HeldItem");
+}
 
 fn main() {
     let mut app = App::new();
@@ -74,18 +104,7 @@ fn main() {
         .add_plugins(TickedServerPlugin::<PlayerInput>::new())
         .add_plugins(TickedClientPlugin::<PlayerInput>::new())
         .add_plugins(TickedNetworkingEnsemblePlugin::<PlayerInput>::new())
-        // Register networked components (ORDER MUST MATCH ON ALL PEERS)
-        .register_networked_ticked_component::<Position>()
-        .register_networked_ticked_component::<Rotation>()
-        .register_networked_ticked_component::<LinearVelocity>()
-        .register_networked_ticked_component::<AngularVelocity>()
-        .register_networked_ticked_component::<OwnerPlayer>()
-        .register_networked_ticked_component::<EntityKind>()
-        .register_networked_ticked_component::<NetworkedPosition>()
-        .register_networked_ticked_component::<NetworkedRotation>()
-        .register_networked_ticked_component::<car_controller_2d::CarControllerInputs>()
-        .register_networked_ticked_component::<car_controller_2d::SteeringState>()
-        .register_networked_ticked_component::<items::HeldItem>()
+        .add_plugins(WireFormatPlugin)
         // Register ensemble messages
         .register_broadcast_message::<ChatMessage>()
         .register_broadcast_message::<track::OnFinishTimeUpdate>()
@@ -120,6 +139,10 @@ fn main() {
         .add_systems(OnEnter(AppState::Game), spawn_track)
         .add_systems(OnExit(AppState::Game), spawn_lobby)
         .insert_resource(ClearColor(AppColors::Grass.color()));
+
+    // The wire format. Kept in a function of its own, and guarded by a golden test,
+    // because the order of those calls is a protocol rather than a style choice.
+    register_networked_components(&mut app);
 
     // Dev-only network debug overlay + condition simulator (F3 toggles the panel).
     #[cfg(feature = "netdebug")]

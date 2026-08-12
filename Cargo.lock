@@ -980,7 +980,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#2caf6987bc45a138da156f148cc040f950857e7b"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#4697198224bba636a7d440dbe2ce66988b74e311"
 dependencies = [
  "bevy",
  "postcard",
@@ -990,10 +990,11 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble_sockets"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#2caf6987bc45a138da156f148cc040f950857e7b"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#4697198224bba636a7d440dbe2ce66988b74e311"
 dependencies = [
  "bytes",
  "js-sys",
+ "log",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
@@ -1007,7 +1008,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble_webrtc"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#2caf6987bc45a138da156f148cc040f950857e7b"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#4697198224bba636a7d440dbe2ce66988b74e311"
 dependencies = [
  "async-tungstenite",
  "bevy",
@@ -1896,7 +1897,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#b812f48ba3eb1a6233983b9d74faaf942163a86c"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#410038f75040f5a34fb431be5c27a2017fa00dc9"
 dependencies = [
  "bevy",
  "log",
@@ -1907,7 +1908,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked_networking"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#b812f48ba3eb1a6233983b9d74faaf942163a86c"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#410038f75040f5a34fb431be5c27a2017fa00dc9"
 dependencies = [
  "bevy",
  "bevy_ticked",
@@ -1918,7 +1919,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked_networking_ensemble"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#b812f48ba3eb1a6233983b9d74faaf942163a86c"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#410038f75040f5a34fb431be5c27a2017fa00dc9"
 dependencies = [
  "bevy",
  "bevy_ensemble",

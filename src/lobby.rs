@@ -3,11 +3,20 @@ use bevy_ensemble::prelude::*;
 use bevy_ensemble_webrtc::{
     JoinWebrtcLobby, JoinWebrtcLobbyByCode, LobbyWebrtcCode, RefreshLobbyList,
 };
-use bevy_ticked::prelude::*;
 use bevy_ticked_networking::prelude::*;
+use bevy_ticked_networking_ensemble::RegistryMismatch;
 
 use crate::{AppState, GameStateChanged, LobbyState, LocalPlayerData};
 
+/// The game's side of a session's lifecycle.
+///
+/// Who is host and who is client is not decided here. `TickedEnsembleSessionPlugin`
+/// adopts the role the moment the local uuid exists, releases it when the lobby
+/// goes, and upstream's `reset_on_leave` despawns the tracked world, zeroes the
+/// tick and clears the input queue on the way out. What is left is what only the
+/// game knows: its menu state, its player data, how a copy started with nobody
+/// at the keyboard behaves, and what to do when the handshake finds the other
+/// peer was built from a different commit.
 pub struct LobbyLifecyclePlugin;
 
 impl Plugin for LobbyLifecyclePlugin {
@@ -16,8 +25,9 @@ impl Plugin for LobbyLifecyclePlugin {
             .add_systems(
                 Update,
                 (
-                    on_lobby_ready,
-                    cleanup_on_lobby_gone,
+                    enter_lobby,
+                    leave_on_registry_mismatch,
+                    exit_lobby_when_session_ends,
                     receive_game_state_changed,
                     autostart_join,
                     autostart_race,
@@ -213,70 +223,108 @@ fn autostart_race(
         .trigger(move |e| BroadcastLobbyMessage::new(e, msg));
 }
 
-fn on_lobby_ready(
+/// A lobby this game has already switched its screen to and announced itself
+/// in, so a promotion is acted on once. A host's lobby entity lives for as long
+/// as it hosts, through every client that comes and goes.
+#[derive(Component)]
+struct EnteredLobby;
+
+/// Once a lobby is promoted: show the lobby screen and push this player's data
+/// into it.
+///
+/// Keyed on `Lobby` and not on the role, deliberately. The role arrives earlier,
+/// on `PendingLobby`, before any data channel exists, and that is right for the
+/// simulation, which must not build a solo world in that window. The menu and
+/// the player data want the promoted lobby: its participant entities are what
+/// `SetPlayerData` attaches to, and the lobby screen reads the code and the
+/// roster off it.
+fn enter_lobby(
     mut commands: Commands,
     local_player: Option<Res<LocalMultiplayerPlayerId>>,
-    server_player: Option<Res<LocalServerPlayer>>,
-    client_player: Option<Res<LocalClientPlayer>>,
-    host_lobbies: Query<(Entity, &LobbyWebrtcCode), (With<Lobby>, With<Host>)>,
-    client_lobbies: Query<Entity, (With<Lobby>, Without<Host>)>,
+    lobbies: Query<
+        (Entity, Has<Host>, Option<&LobbyWebrtcCode>),
+        (With<Lobby>, Without<EnteredLobby>),
+    >,
     mut lobby_state: ResMut<NextState<LobbyState>>,
     local_data: Res<LocalPlayerData>,
     params: Option<Res<SessionParams>>,
 ) {
-    let Some(local_player) = local_player else {
+    if local_player.is_none() {
         return;
-    };
-    if let Ok((lobby_entity, code)) = host_lobbies.single() {
-        if server_player.is_none() {
+    }
+    for (lobby, is_host, code) in &lobbies {
+        if let (true, Some(code)) = (is_host, code) {
             info!("Hosting room: {}", code.0);
-            if params.is_some_and(|p| p.perf) {
+            if params.as_ref().is_some_and(|p| p.perf) {
                 warn!("PERF-ROOM {}", code.0);
             }
             if let Some(base) = current_base_url() {
                 info!("Share link: {}?room={}", base, code.0);
             }
-            commands.insert_resource(LocalServerPlayer(local_player.0));
-            commands.remove_resource::<TicksPaused>();
-            lobby_state.set(LobbyState::InLobby);
-            let data = local_data.0.clone();
-            commands
-                .entity(lobby_entity)
-                .trigger(move |entity| SetPlayerData::new(entity, data));
         }
-    }
-    if let Ok(lobby_entity) = client_lobbies.single() {
-        if client_player.is_none() {
-            commands.insert_resource(LocalClientPlayer(local_player.0));
-            lobby_state.set(LobbyState::InLobby);
-            let data = local_data.0.clone();
-            commands
-                .entity(lobby_entity)
-                .trigger(move |entity| SetPlayerData::new(entity, data));
-        }
+        lobby_state.set(LobbyState::InLobby);
+        let data = local_data.0.clone();
+        commands
+            .entity(lobby)
+            .insert(EnteredLobby)
+            .trigger(move |entity| SetPlayerData::new(entity, data));
     }
 }
 
-fn cleanup_on_lobby_gone(
-    mut commands: Commands,
-    mut removed_lobbies: RemovedComponents<Lobby>,
-    game_entities: Query<Entity, With<TickTrackedEntity>>,
+/// When the role goes, so does the lobby screen.
+///
+/// The role rather than the lobby entity, because the role is released in every
+/// way a session can end. `TickedEnsembleSessionPlugin` drops it when no lobby
+/// is left, promoted or not, which covers a refused join, where
+/// `RemovedComponents<Lobby>` never fires because the entity never carried
+/// `Lobby`. The handshake drops it on a registry mismatch while the lobby is
+/// still standing. To the menu both are the same event.
+///
+/// Nothing here touches the simulation. Upstream's `reset_on_leave` runs on the
+/// same removal: it despawns every tracked entity, zeroes the tick, clears the
+/// input queue and un-pauses. The un-pause is why ticks run in the menu after a
+/// session, as they do before the first one.
+fn exit_lobby_when_session_ends(
+    mut had_role: Local<bool>,
+    server_player: Option<Res<LocalServerPlayer>>,
+    client_player: Option<Res<LocalClientPlayer>>,
     mut lobby_state: ResMut<NextState<LobbyState>>,
     mut app_state: ResMut<NextState<AppState>>,
 ) {
-    if removed_lobbies.read().next().is_none() {
+    let has_role = server_player.is_some() || client_player.is_some();
+    let ended = *had_role && !has_role;
+    *had_role = has_role;
+    if !ended {
         return;
     }
-    for entity in game_entities.iter() {
-        commands.entity(entity).try_despawn();
-    }
-    commands.remove_resource::<LocalMultiplayerPlayerId>();
-    commands.remove_resource::<LocalServerPlayer>();
-    commands.remove_resource::<LocalClientPlayer>();
-    commands.insert_resource(CurrentTick(0));
-    commands.insert_resource(TicksPaused);
     lobby_state.set(LobbyState::OutOfLobby);
     app_state.set(AppState::OutOfGame);
+}
+
+/// A peer built from a different commit cannot be played with, so leave.
+///
+/// The handshake has already said why, at `error`, and dropped the role. It
+/// leaves the lobby standing for the game to decide, and this game has no screen
+/// for "in a lobby with nobody to play with", so it does what the leave button
+/// does. Going through the lobby entity rather than the state is what makes the
+/// signalling server, the peer connections and the mismatch itself all clean up
+/// behind it.
+fn leave_on_registry_mismatch(
+    mut commands: Commands,
+    mismatch: Option<Res<RegistryMismatch>>,
+    lobbies: Query<Entity, Or<(With<Lobby>, With<PendingLobby>)>>,
+) {
+    let Some(mismatch) = mismatch else { return };
+    if !mismatch.is_added() {
+        return;
+    }
+    warn!(
+        "leaving the lobby: peer {:#x} is not running this build",
+        mismatch.peer
+    );
+    for lobby in &lobbies {
+        commands.entity(lobby).despawn();
+    }
 }
 
 fn receive_game_state_changed(

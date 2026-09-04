@@ -2,7 +2,7 @@ use avian2d::prelude::{LinearVelocity, Position};
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_ensemble::prelude::{Lobby, NetDebugExtras, PeerRtt};
+use bevy_ensemble::prelude::{Lobby, NetDebugExtras, PeerRtt, PeerRttJitter};
 use bevy_ticked::prelude::{CurrentTick, TickRateDilation, TickedLoop, TickedSystems};
 use bevy_ticked_networking::client::SnapshotApplied;
 use bevy_ticked_networking::prelude::{ClientTickBuffer, LocalClientPlayer, LocalServerPlayer};
@@ -195,7 +195,7 @@ fn report_tick_buffer(
     buffer: Option<Res<ClientTickBuffer>>,
     dilation: Option<Res<TickRateDilation>>,
     local_client: Option<Res<LocalClientPlayer>>,
-    rtt: Query<&PeerRtt, With<Lobby>>,
+    rtt: Query<(&PeerRtt, Option<&PeerRttJitter>), With<Lobby>>,
     extras: Option<ResMut<NetDebugExtras>>,
 ) {
     let Some(mut extras) = extras else {
@@ -203,7 +203,14 @@ fn report_tick_buffer(
     };
     match (local_client.is_some(), buffer) {
         (true, Some(buffer)) => {
-            let ping = rtt.iter().next().map(|r| r.0 * 1000.0).unwrap_or(0.0);
+            // The transport measures the spread as well as the mean; the mean
+            // says where packets land on average and the spread says how late
+            // the unlucky ones are, which is what the lead has to cover.
+            let (ping, jitter) = rtt
+                .iter()
+                .next()
+                .map(|(rtt, jitter)| (rtt.0 * 1000.0, jitter.map_or(0.0, |j| j.0 * 1000.0)))
+                .unwrap_or((0.0, 0.0));
             // The dilation is how hard the client is currently steering toward
             // that lead; sustained non-zero drift is the signal that the
             // controller is hunting rather than settling.
@@ -211,7 +218,7 @@ fn report_tick_buffer(
             extras.set(
                 "prediction",
                 format!(
-                    "prediction lead: {} ticks ({ping:.0}ms ping, {drift:+.1}% rate)",
+                    "prediction lead: {} ticks ({ping:.0}ms ping, \u{b1}{jitter:.0}ms jitter, {drift:+.1}% rate)",
                     buffer.target_ticks
                 ),
             );

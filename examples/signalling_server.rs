@@ -25,6 +25,9 @@
 
 use std::sync::Arc;
 
+// The crate's own `axum`, so `handle_socket` and this example agree on one `WebSocket`.
+use bevy_ensemble_webrtc::axum;
+
 use axum::Router;
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;

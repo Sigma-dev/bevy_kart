@@ -28,6 +28,14 @@ base-x = "0.2"
 serde_json = "1"
 rand = "0.9.2"
 
+[dev-dependencies]
+# The server half of the transport, so `examples/signalling_server.rs` can run a real one for
+# `scripts/local-session.sh`. Same `axum` version as the crate asks for, so both resolve to one
+# copy and `handle_socket` takes the example's `WebSocket`.
+bevy_ensemble_webrtc = { git = "https://github.com/Sigma-studios/bevy_ensemble", branch = "master", default-features = false, features = ["server"] }
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = [
     "Window",

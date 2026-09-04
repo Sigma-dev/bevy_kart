@@ -1958,7 +1958,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#cbdedcdcd2f5b552ac68f1bfe8020781383129d4"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#2beb2bbadf437c25b5602f8129c984076f08eb41"
 dependencies = [
  "bevy",
  "log",
@@ -1969,7 +1969,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked_networking"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#cbdedcdcd2f5b552ac68f1bfe8020781383129d4"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#2beb2bbadf437c25b5602f8129c984076f08eb41"
 dependencies = [
  "bevy",
  "bevy_ticked",
@@ -1980,7 +1980,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked_networking_ensemble"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#cbdedcdcd2f5b552ac68f1bfe8020781383129d4"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#2beb2bbadf437c25b5602f8129c984076f08eb41"
 dependencies = [
  "bevy",
  "bevy_ensemble",

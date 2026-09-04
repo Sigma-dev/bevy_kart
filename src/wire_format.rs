@@ -110,6 +110,9 @@ mod tests {
         "CarControllerInputs",
         "SteeringState",
         "HeldItem",
+        "BoostEffect",
+        "CarControllerDisabled",
+        "RocketHit",
     ];
 
     #[test]

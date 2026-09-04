@@ -1,3 +1,5 @@
+use std::f32::consts::{PI, TAU};
+
 use audio_manager::prelude::*;
 use avian2d::prelude::*;
 use bevy::prelude::*;
@@ -7,8 +9,8 @@ use bevy_ticked_networking::prelude::*;
 use bevy_timer::{Timer as GameTimer, TimerFinished};
 
 use crate::{
-    AssetHandles, AppPlayerData, AppState, CorrectionSmoothing, EntityKind, NetworkedPosition,
-    NetworkedRotation, OwnerPlayer, PlayerInput, SpriteLayers,
+    AssetHandles, AppPlayerData, AppState, CorrectionSmoothing, EntityKind, OwnerPlayer,
+    PlayerInput, SpriteLayers,
     car_controller_2d,
     items,
     kart::{self, FollowTransform, LapsCounter, LocalKart},
@@ -20,9 +22,26 @@ pub struct EntitySpawnPlugin;
 impl Plugin for EntitySpawnPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_tracked_entity_spawned)
+            // In `PreUpdate`, once Bevy has read this frame's keyboard state and
+            // before `RunTickedLoop` runs the tick that consumes it. In `Update`
+            // the input landed a tick late: ticks run before `Update`, so a key
+            // pressed this frame only reached the simulation on the next one.
             .add_systems(
-                Update,
-                (capture_local_input, sync_visuals),
+                PreUpdate,
+                capture_local_input.after(bevy::input::InputSystems),
+            )
+            // Inside the tick loop, after any rollback and before the tick
+            // advances, so the "previous" pose is the corrected state at the tick
+            // the interpolation starts from.
+            .add_systems(
+                TickedLoop,
+                save_networked_visual_state
+                    .after(TickedSystems::PreTick)
+                    .before(TickedSystems::Tick),
+            )
+            .add_systems(
+                PostUpdate,
+                sync_visuals.before(TransformSystems::Propagate),
             );
     }
 }
@@ -33,6 +52,7 @@ fn capture_local_input(
     tick: Res<CurrentTick>,
     local_client: Option<Res<LocalClientPlayer>>,
     local_server: Option<Res<LocalServerPlayer>>,
+    params: Option<Res<crate::lobby::SessionParams>>,
     mut input_queue: ResMut<InputQueue<PlayerInput>>,
 ) {
     let uuid = local_client
@@ -47,25 +67,72 @@ fn capture_local_input(
         right: keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight),
         using_item: keys.pressed(KeyCode::Space),
     };
+    // `autodrive`: throttle held, steering flipped every 1.5 s, item on the
+    // fifth second. Enough to keep every kart moving and colliding in a run
+    // nobody is driving.
+    let input = if params.is_some_and(|p| p.autodrive) {
+        let phase = (tick.0 / 96) % 2 == 0;
+        PlayerInput {
+            forward: true,
+            backward: false,
+            left: phase,
+            right: !phase,
+            using_item: tick.0 % 320 < 4,
+        }
+    } else {
+        input
+    };
     input_queue.insert(tick.0 + 1, uuid, input);
 }
 
-/// Sync networked Position/Rotation to Transform every frame for non-physics entities.
+/// Sub-tick interpolation state for the non-physics networked entities
+/// (rockets, items, explosions): the pose at the previous tick.
+///
+/// Without it these were drawn straight from the latest tick, which at 64 ticks
+/// on a 60 Hz display is a visible beat, and on a client that has just applied a
+/// snapshot, a step of however many ticks arrived since the last frame.
+#[derive(Component, Default)]
+pub struct NetworkedVisual {
+    prev: Option<(Vec2, f32)>,
+}
+
+fn save_networked_visual_state(
+    mut visuals: Query<(&Position, Option<&Rotation>, &mut NetworkedVisual)>,
+) {
+    for (pos, rot, mut visual) in visuals.iter_mut() {
+        visual.prev = Some((pos.0, rot.map_or(0.0, |r| r.as_radians())));
+    }
+}
+
+/// Draw the bodies avian does not write a `Transform` for (it only does so for
+/// rigid bodies) between their previous and current tick.
 fn sync_visuals(
+    interpolation: TickInterpolation,
     mut non_physics: Query<
         (
-            &NetworkedPosition,
-            Option<&NetworkedRotation>,
+            &Position,
+            Option<&Rotation>,
+            Option<&NetworkedVisual>,
             &mut Transform,
         ),
         (With<TickTrackedEntity>, Without<RigidBody>),
     >,
 ) {
-    for (pos, rot, mut transform) in non_physics.iter_mut() {
-        transform.translation.x = pos.0.x;
-        transform.translation.y = pos.0.y;
-        if let Some(rot) = rot {
-            transform.rotation = Quat::from_rotation_z(rot.0);
+    let alpha = interpolation.fraction();
+    for (pos, rot, visual, mut transform) in non_physics.iter_mut() {
+        let curr_pos = pos.0;
+        let curr_rot = rot.map_or(0.0, |r| r.as_radians());
+        let (draw_pos, draw_rot) = match visual.and_then(|v| v.prev) {
+            Some((prev_pos, prev_rot)) => {
+                let rot_diff = (curr_rot - prev_rot + PI).rem_euclid(TAU) - PI;
+                (prev_pos.lerp(curr_pos, alpha), prev_rot + rot_diff * alpha)
+            }
+            None => (curr_pos, curr_rot),
+        };
+        transform.translation.x = draw_pos.x;
+        transform.translation.y = draw_pos.y;
+        if rot.is_some() {
+            transform.rotation = Quat::from_rotation_z(draw_rot);
         }
     }
 }
@@ -80,8 +147,6 @@ fn on_tracked_entity_spawned(
         Option<&OwnerPlayer>,
         Option<&Position>,
         Option<&Rotation>,
-        Option<&NetworkedPosition>,
-        Option<&NetworkedRotation>,
     )>,
     asset_handles: Res<AssetHandles>,
     participants_with_data: Query<(&LobbyParticipant, Option<&PlayerData<AppPlayerData>>)>,
@@ -93,11 +158,11 @@ fn on_tracked_entity_spawned(
     mut audio_manager: AudioManager,
 ) {
     let entity = trigger.entity;
-    let Ok((kind, maybe_owner, maybe_pos, maybe_rot, maybe_net_pos, maybe_net_rot)) =
-        query.get(entity)
-    else {
+    let Ok((kind, maybe_owner, maybe_pos, maybe_rot)) = query.get(entity) else {
         return;
     };
+    let pos = maybe_pos.map(|p| p.0).unwrap_or_default();
+    let rot = maybe_rot.map(|r| r.as_radians()).unwrap_or(0.0);
 
     match kind {
         EntityKind::Kart => {
@@ -168,11 +233,11 @@ fn on_tracked_entity_spawned(
             ));
         }
         EntityKind::ItemPickup(_) => {
-            let pos = maybe_net_pos.map(|p| p.0).unwrap_or_default();
             commands.entity(entity).insert((
                 DespawnOnExit(AppState::Game),
                 Transform::from_xyz(pos.x, pos.y, SpriteLayers::Car.to_z()),
                 Sprite::from_image(asset_handles.crate_texture.clone()),
+                NetworkedVisual::default(),
             ));
             commands.entity(entity).observe(
                 |_trigger: On<Despawn>, mut audio_manager: AudioManager| {
@@ -181,8 +246,6 @@ fn on_tracked_entity_spawned(
             );
         }
         EntityKind::Rocket => {
-            let pos = maybe_net_pos.map(|p| p.0).unwrap_or_default();
-            let rot = maybe_net_rot.map(|r| r.0).unwrap_or(0.0);
             let layout = TextureAtlasLayout::from_grid(UVec2::new(3, 8), 2, 1, None, None);
             let atlas_layout = texture_atlas_layouts.add(layout);
             commands.entity(entity).insert((
@@ -196,6 +259,12 @@ fn on_tracked_entity_spawned(
                         index: 0,
                     },
                 ),
+                // The marker `move_rocket` and `animate_rocket` key on. The host
+                // spawns it with the rocket; a client only ever sees `EntityKind`,
+                // so without this its rockets neither flew between snapshots nor
+                // animated.
+                items::Rocket,
+                NetworkedVisual::default(),
             ));
             audio_manager.play_sound(
                 PlayAudio2D::new_once("sounds/rocket.wav")
@@ -203,13 +272,13 @@ fn on_tracked_entity_spawned(
             );
         }
         EntityKind::Explosion => {
-            let pos = maybe_net_pos.map(|p| p.0).unwrap_or_default();
             audio_manager
                 .play_sound(PlayAudio2D::new_once("sounds/explosion.wav").with_volume(0.3));
             commands
                 .entity(entity)
                 .insert((
                     Transform::from_xyz(pos.x, pos.y, SpriteLayers::AboveCar.to_z()),
+                    NetworkedVisual::default(),
                     Mesh2d(meshes.add(Circle::new(items::ROCKET_EXPLOSION_RADIUS))),
                     MeshMaterial2d(materials.add(Color::WHITE)),
                     GameTimer::new_running().with_target_duration(0.1),

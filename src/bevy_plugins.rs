@@ -32,7 +32,17 @@ impl Plugin for NecessaryBevyPlugins {
     fn build(&self, app: &mut App) {
         app.add_plugins((
             PanicHandlerPlugin,
-            LogPlugin::default(),
+            LogPlugin {
+                // `webrtc_ice` warns a dozen times per connection about link-local
+                // IPv6 addresses it cannot bind and STUN hosts it cannot resolve;
+                // none of it means anything, and it buries the lines that do.
+                filter: format!(
+                    "{},webrtc_ice::agent::agent_gather=error,\
+                     webrtc_ice::agent::agent_internal=error,webrtc_ice::mdns=error",
+                    bevy::log::DEFAULT_FILTER
+                ),
+                ..default()
+            },
             TaskPoolPlugin::default(),
             FrameCountPlugin,
             TimePlugin,

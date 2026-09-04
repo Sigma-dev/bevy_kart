@@ -25,7 +25,9 @@ impl Plugin for CarController2dPlugin {
     }
 }
 
-#[derive(Component)]
+/// Replicated, so a client predicts a kart that cannot move yet as not moving,
+/// instead of enabling it on its own clock, which runs ahead of the host's.
+#[derive(Component, Clone, Debug, Serialize, Deserialize)]
 pub struct CarControllerDisabled;
 
 #[derive(Component)]
@@ -65,7 +67,9 @@ pub struct SteeringState {
     pub angle: f32,
 }
 
-#[derive(Component)]
+/// Replicated: the host decides when a boost starts, and a client that does not
+/// know about it predicts the wrong acceleration for the whole boost.
+#[derive(Component, Clone, Debug, Serialize, Deserialize)]
 pub struct BoostEffect {
     pub multiplier: f32,
     pub remaining_ticks: u64,

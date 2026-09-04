@@ -20,11 +20,14 @@ pub struct PlayerInput {
 #[derive(Component, Clone, Debug, Serialize, Deserialize)]
 pub struct OwnerPlayer(pub u128);
 
-/// Networked position proxy for non-physics tracked entities (items, rockets).
+/// Retired. Items, rockets and explosions carry avian's `Position` directly,
+/// which is already replicated. Still registered because registration order is
+/// the wire format and entries are append-only; an unused entry costs an empty
+/// map per snapshot. Drop both in a deliberate wire break.
 #[derive(Component, Clone, Debug, Serialize, Deserialize, Default)]
 pub struct NetworkedPosition(pub Vec2);
 
-/// Networked rotation proxy for non-physics tracked entities (rockets).
+/// Retired, see [`NetworkedPosition`].
 #[derive(Component, Clone, Debug, Serialize, Deserialize, Default)]
 pub struct NetworkedRotation(pub f32);
 

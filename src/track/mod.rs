@@ -101,6 +101,9 @@ fn spawn_barriers(
             Mesh2d(meshes.add(Rectangle::new(length, 2.))),
             MeshMaterial2d(material.clone()),
             Collider::rectangle(length, 2.),
+            // The pose goes to physics explicitly; `Transform` is only the view.
+            Position(middle),
+            Rotation::radians(angle),
             Transform::from_translation(middle.extend(SpriteLayers::Car.to_z()))
                 .with_rotation(Quat::from_rotation_z(angle)),
         ));
@@ -332,6 +335,8 @@ pub(crate) fn spawn_track(
             Mass(1.),
             RigidBody::Dynamic,
             Collider::rectangle(4., 8.),
+            Position(position.xy()),
+            Rotation::degrees(-90.),
             Transform::from_translation(position)
                 .with_rotation(Quat::from_rotation_z(-90_f32.to_radians())),
             CarControllerDisabled,
@@ -480,11 +485,20 @@ fn update_position_ui(
     asset_handles: Res<AssetHandles>,
     counter: Query<Entity, With<PositionUI>>,
     local_kart: Query<&RacePosition, With<LocalKart>>,
+    mut shown: Local<Option<(Entity, u32)>>,
 ) {
     let (Ok(counter), Ok(local_kart)) = (counter.single(), local_kart.single()) else {
+        *shown = None;
         return;
     };
     let position = local_kart.position + 1;
+    // Despawning and respawning the digits every frame relaid out the whole UI
+    // tree every frame. Keyed on the entity as well as the value, so a fresh
+    // race (new UI entity, same position) still gets its digits.
+    if *shown == Some((counter, position)) {
+        return;
+    }
+    *shown = Some((counter, position));
     commands
         .entity(counter)
         .insert(Node {

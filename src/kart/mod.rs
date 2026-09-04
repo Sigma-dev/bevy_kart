@@ -151,13 +151,19 @@ pub struct LocalKart;
 /// pure visual puppets positioned directly via their `Transform` (see
 /// [`update_lobby_cars`](crate::menu::lobby)), so giving them a `RigidBody` would
 /// pull in avian's transform interpolation and fight the puppet positioning.
-fn kart_physics() -> impl Bundle {
+///
+/// Takes the pose explicitly: with `transform_to_position` off (see `main.rs`),
+/// avian no longer reads a spawn's `Transform`, and a body given only a
+/// `Transform` starts at the origin.
+fn kart_physics(transform: &Transform) -> impl Bundle {
     (
         Mass(1.),
         RigidBody::Dynamic,
         Collider::rectangle(4., 8.),
         CarController2d::new(1.),
         SteeringState::default(),
+        Position(transform.translation.xy()),
+        Rotation::from(transform.rotation),
     )
 }
 
@@ -194,7 +200,7 @@ pub(crate) fn spawn_kart(
                 .or_else(|| server_player.as_ref().map(|p| p.0));
             let is_local = local_uuid.is_some_and(|uuid| uuid == owner.0);
             commands.entity(id).insert((
-                kart_physics(),
+                kart_physics(&transform),
                 owner,
                 CarControllerDisabled,
                 LapsCounter::new(),
@@ -225,7 +231,7 @@ pub(crate) fn spawn_kart(
         }
         KartControlType::AutoCar => {
             commands.entity(id).insert((
-                kart_physics(),
+                kart_physics(&transform),
                 Sprite::from_atlas_image(
                     asset_handles.karts_texture.clone(),
                     TextureAtlas {

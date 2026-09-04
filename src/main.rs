@@ -68,11 +68,17 @@ pub fn register_networked_components(app: &mut App) {
         .register_networked_ticked_component_as::<AngularVelocity>("AngularVelocity")
         .register_networked_ticked_component_as::<OwnerPlayer>("OwnerPlayer")
         .register_networked_ticked_component_as::<EntityKind>("EntityKind")
+        // Retired (see `networking.rs`), kept so the indices after them hold.
         .register_networked_ticked_component_as::<NetworkedPosition>("NetworkedPosition")
         .register_networked_ticked_component_as::<NetworkedRotation>("NetworkedRotation")
         .register_networked_ticked_component_as::<car_controller_2d::CarControllerInputs>("CarControllerInputs")
         .register_networked_ticked_component_as::<car_controller_2d::SteeringState>("SteeringState")
-        .register_networked_ticked_component_as::<items::HeldItem>("HeldItem");
+        .register_networked_ticked_component_as::<items::HeldItem>("HeldItem")
+        .register_networked_ticked_component_as::<car_controller_2d::BoostEffect>("BoostEffect")
+        .register_networked_ticked_component_as::<car_controller_2d::CarControllerDisabled>("CarControllerDisabled")
+        // Rollback-only: a peer's own view of a rocket hit, never sent. Still an
+        // entry in the registry, so it is part of the hash and of this order.
+        .register_ticked_component_as::<items::RocketHit>("RocketHit");
 }
 
 fn main() {
@@ -85,7 +91,7 @@ fn main() {
             PlayerDataPlugin::<AppPlayerData>::default(),
         ))
         .add_plugins(BevyEnsembleWebrtcPlugin {
-            server_url: "wss://signal.sigma-dev.eu/ws".into(),
+            server_url: signalling_server_url(),
             display_name: "Player".into(),
             ..default()
         })
@@ -101,6 +107,16 @@ fn main() {
                 .set(PhysicsInterpolationPlugin::interpolate_all()),
         )
         .insert_resource(Gravity::ZERO)
+        // `Position` and `Rotation` are the simulation's truth and `Transform` is
+        // a view of them. The kart smoothing writes an interpolated `Transform`
+        // every frame, and with this sync on avian copied it back into
+        // `Position` at the start of every tick, dragging every body back by the
+        // interpolation lag: 30% speed loss in a 16-tick sawtooth. Everything
+        // that moves a body writes `Position` directly.
+        .insert_resource(avian2d::physics_transform::PhysicsTransformConfig {
+            transform_to_position: false,
+            ..default()
+        })
         .add_plugins(TickedServerPlugin::<PlayerInput>::new())
         .add_plugins(TickedClientPlugin::<PlayerInput>::new())
         .add_plugins(TickedNetworkingEnsemblePlugin::<PlayerInput>::new())
@@ -149,6 +165,19 @@ fn main() {
     app.add_plugins(NetDebugPlugin::default());
 
     app.run();
+}
+
+/// Where the signalling server is.
+///
+/// The public one unless `SIGNALLING_SERVER_URL` says otherwise, at build time
+/// or, on native, at launch. The launch-time read is what lets
+/// `scripts/local-session.sh` point a whole session at a server on this
+/// machine without a rebuild.
+fn signalling_server_url() -> String {
+    std::env::var("SIGNALLING_SERVER_URL")
+        .ok()
+        .or_else(|| option_env!("SIGNALLING_SERVER_URL").map(String::from))
+        .unwrap_or_else(|| "wss://signal.sigma-dev.eu/ws".into())
 }
 
 fn setup(mut commands: Commands) {

@@ -36,10 +36,12 @@ impl Plugin for NecessaryBevyPlugins {
                 // `webrtc_ice` warns a dozen times per connection about link-local
                 // IPv6 addresses it cannot bind and STUN hosts it cannot resolve;
                 // none of it means anything, and it buries the lines that do.
+                // The directives are the transport crate's own, so they follow its
+                // dependencies rather than a copy of their module paths kept here.
                 filter: format!(
-                    "{},webrtc_ice::agent::agent_gather=error,\
-                     webrtc_ice::agent::agent_internal=error,webrtc_ice::mdns=error",
-                    bevy::log::DEFAULT_FILTER
+                    "{},{}",
+                    bevy::log::DEFAULT_FILTER,
+                    bevy_ensemble_webrtc::QUIET_ICE_LOG_FILTER
                 ),
                 ..default()
             },

@@ -1373,7 +1373,6 @@ version = "0.1.0"
 dependencies = [
  "audio_manager",
  "avian2d",
- "axum",
  "base-x",
  "bevy",
  "bevy_ensemble",

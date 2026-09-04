@@ -8,7 +8,7 @@ use bevy_ensemble::prelude::*;
 use bevy_ensemble_webrtc::BevyEnsembleWebrtcPlugin;
 use bevy_ticked::prelude::*;
 use bevy_ticked_networking::prelude::*;
-use bevy_ticked_networking_ensemble::TickedNetworkingEnsemblePlugin;
+use bevy_ticked_networking_ensemble::{TickedEnsembleSessionPlugin, TickedNetworkingEnsemblePlugin};
 use bevy_timer::TimerPlugin;
 
 pub mod assets;
@@ -31,7 +31,6 @@ pub use assets::AssetHandles;
 pub use networking::*;
 pub use rollback_smoothing::{ApplyCorrectionSet, CorrectionSmoothing};
 pub use theme::*;
-pub use wire_format::{WireFormat, WireFormatPlugin};
 pub use track::FinishTimes;
 
 use bevy_plugins::NecessaryBevyPlugins;
@@ -54,9 +53,10 @@ use track::{TrackPlugin, spawn_track};
 /// reordering two lines makes a peer read one component's bytes as another's,
 /// silently. Append only, never reorder, never delete.
 ///
-/// The string is what `TickedComponentRegistry::wire_hash()` hashes, and
-/// `wire_format::compare_wire_format` checks it against the host's. Renaming the
-/// Rust type is free; changing one of these strings is a wire break.
+/// The string is what `TickedComponentRegistry::wire_hash()` hashes, and the
+/// handshake in `TickedEnsembleSessionPlugin` compares it between every pair of
+/// peers at the join. Renaming the Rust type is free; changing one of these
+/// strings is a wire break.
 ///
 /// A free function rather than an inline chain so the golden test in
 /// `wire_format` can build a registry without building an app.
@@ -120,7 +120,12 @@ fn main() {
         .add_plugins(TickedServerPlugin::<PlayerInput>::new())
         .add_plugins(TickedClientPlugin::<PlayerInput>::new())
         .add_plugins(TickedNetworkingEnsemblePlugin::<PlayerInput>::new())
-        .add_plugins(WireFormatPlugin)
+        // Adopts the host or client role from the ensemble lobby, releases it
+        // when the lobby goes, stops a lone host serialising snapshots for
+        // nobody, and exchanges the registry hashes at the join so two builds
+        // that disagree about the wire format end the session instead of
+        // playing it out. `lobby.rs` keeps only the menu's side of all that.
+        .add_plugins(TickedEnsembleSessionPlugin)
         // Register ensemble messages
         .register_broadcast_message::<ChatMessage>()
         .register_broadcast_message::<track::OnFinishTimeUpdate>()

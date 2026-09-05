@@ -85,15 +85,18 @@ fn extract_query_param(target: &str) -> Option<String> {
 /// | `?autostart=N` | `KART_AUTOSTART_PLAYERS=N` | as host, start the race once `N` players are in |
 /// | `?name=NAME` | `KART_NAME=NAME` | the name this peer plays under |
 /// | `?autodrive=1` | `KART_AUTODRIVE=1` | hold the throttle and weave |
-/// | `?perf=1` | `KART_PERF=1` | log the frame-cost readout at `warn` |
+/// | `?perf=1` | `KART_PERF=1` | log the frame-cost readout |
 ///
 /// `KART_AUTOSTART=host` on its own starts the race at two players, which is
 /// what a script wants; `?host=1` on its own does not, because a person hosting
 /// from a link wants to press start themselves.
 ///
-/// `perf` logs at `warn` because that is the only level a release build keeps:
-/// bevy_ticked turns on `release_max_level_warn` for `log` and `tracing`,
-/// which strips `info!` from every crate in the binary.
+/// `perf` is what turns the readout on at all, and it logs at `warn` because that
+/// is the only level a release build keeps: bevy_ticked turns on
+/// `release_max_level_warn` for `log` and `tracing`, which strips `info!` from
+/// every crate in the binary. Without the flag the numbers still reach the F3
+/// overlay, they just do not go to the log -- a line every two seconds buries the
+/// ones that are trying to explain a failure.
 #[derive(Resource, Default, Debug)]
 pub struct SessionParams {
     pub room: Option<String>,

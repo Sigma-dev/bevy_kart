@@ -142,11 +142,13 @@ fn perf_frame_end(
         stats.replay_ticks as f64 / stats.snapshots.max(1) as f64,
         stats.snapshots as f64 / elapsed,
     );
-    // Release builds keep nothing below `warn` (see `SessionParams::perf`).
+    // Only when asked. The readout is one line every two seconds, for ever, and an
+    // unasked-for line every two seconds is what a browser console looks like when
+    // something else is trying to tell you why a join failed. `warn` because that is
+    // the only level a release build keeps (see `SessionParams::perf`); the overlay
+    // below gets the same numbers either way, which is the better way to read them.
     if params.is_some_and(|p| p.perf) {
         warn!("{line}");
-    } else {
-        info!("{line}");
     }
     if let Some(mut extras) = extras {
         extras.set("perf", line);

@@ -1035,7 +1035,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#6e83745061a9e10259f2f5a661356223602a4b86"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#9f5a08417fe77f2c18009ec07e3a1ef2641bea32"
 dependencies = [
  "bevy",
  "postcard",
@@ -1045,7 +1045,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble_sockets"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#6e83745061a9e10259f2f5a661356223602a4b86"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#9f5a08417fe77f2c18009ec07e3a1ef2641bea32"
 dependencies = [
  "bytes",
  "js-sys",
@@ -1063,7 +1063,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble_webrtc"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#6e83745061a9e10259f2f5a661356223602a4b86"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#9f5a08417fe77f2c18009ec07e3a1ef2641bea32"
 dependencies = [
  "async-tungstenite",
  "axum",

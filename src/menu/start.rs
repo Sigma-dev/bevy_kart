@@ -17,14 +17,15 @@ pub struct StartPlugin;
 
 impl Plugin for StartPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.init_resource::<LastJoinFailure>().add_systems(
             Update,
             (
                 handle_spawning_menu_cars,
                 handle_despawning_menu_cars,
                 handle_code_submit,
                 handle_name_change,
-                hide_controls_while_joining,
+                show_joining_controls,
+                report_join_failure,
             ),
         );
     }
@@ -37,6 +38,26 @@ struct MenuCarSpawner {
 
 #[derive(Component, Default, Clone)]
 struct MenuControls;
+
+/// The controls that replace [`MenuControls`] while a session is being opened.
+///
+/// Hiding the menu's buttons during a join was right; hiding them and offering nothing was not.
+/// A join that cannot complete used to leave the player looking at a menu with no controls at
+/// all, and the only way out of it was to restart the game.
+#[derive(Component, Default, Clone)]
+struct JoiningPanel;
+
+/// Where the reason a session ended is shown.
+#[derive(Component, Default, Clone)]
+struct JoinErrorText;
+
+/// The last reason a session failed to open, held so the text survives the panel.
+///
+/// A resource rather than only the text node, because the panel above disappears with the lobby
+/// that caused it, and the menu is rebuilt on some of the paths that get here. A message that
+/// vanishes along with the thing that caused it is not a message.
+#[derive(Resource, Default)]
+struct LastJoinFailure(Option<String>);
 
 #[derive(Component, Default, Clone)]
 struct CodeInput;
@@ -160,6 +181,47 @@ pub(crate) fn spawn_menu(
                     ),
                 ]
             ),
+            // Shown only while a join or a host request is in flight.
+            (
+                JoiningPanel
+                Visibility::Hidden
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: vh(20),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(20),
+                    align_items: AlignItems::Center,
+                }
+                Children [
+                    (
+                        Text::new("Connecting...")
+                        TextFont { font_size: {FontSize::Px(30.)} }
+                    ),
+                    (
+                        animated_button(6, handles.buttons_texture.clone(), handles.buttons_atlas.clone())
+                        // Despawning the lobby is the whole cancel: its removal tells the
+                        // signalling server, rebuilds the socket and releases the role, which is
+                        // the same path the leave button takes out of a lobby that did open.
+                        on(|_: On<Pointer<Press>>,
+                            mut commands: Commands,
+                            lobbies: Query<Entity, Or<(With<Lobby>, With<PendingLobby>)>>| {
+                            for lobby in lobbies.iter() {
+                                commands.entity(lobby).despawn();
+                            }
+                        })
+                    ),
+                ]
+            ),
+            // Why the last attempt ended. Empty until one does.
+            (
+                JoinErrorText
+                Text::new("")
+                TextFont { font_size: {FontSize::Px(22.)} }
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: vh(12),
+                }
+            ),
             // Logo.
             (
                 {insert(ImageNode::from_atlas_image(handles.logo_texture.clone(), TextureAtlas::from(logo_atlas)))}
@@ -253,17 +315,52 @@ fn handle_despawning_menu_cars(
     }
 }
 
-fn hide_controls_while_joining(
+/// Swap the menu's controls for the joining panel while a session is being opened.
+fn show_joining_controls(
     pending: Query<(), With<PendingLobby>>,
-    mut controls: Query<&mut Visibility, With<MenuControls>>,
+    mut controls: Query<&mut Visibility, (With<MenuControls>, Without<JoiningPanel>)>,
+    mut joining: Query<&mut Visibility, (With<JoiningPanel>, Without<MenuControls>)>,
 ) {
-    let hidden = !pending.is_empty();
+    let opening = !pending.is_empty();
     for mut vis in controls.iter_mut() {
-        *vis = if hidden {
+        *vis = if opening {
             Visibility::Hidden
         } else {
             Visibility::Inherited
         };
+    }
+    for mut vis in joining.iter_mut() {
+        *vis = if opening {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
+/// Say why the last attempt to open a session ended, until another one is made.
+///
+/// The backend has already torn the lobby down by the time [`LobbyJoinFailed`] arrives — it is
+/// telling us why, not asking what to do — so there is nothing to undo here, only something to
+/// put on the screen. Cleared when a new attempt starts, because the old reason is then wrong.
+fn report_join_failure(
+    mut failures: MessageReader<LobbyJoinFailed>,
+    started: Query<(), Added<PendingLobby>>,
+    mut last: ResMut<LastJoinFailure>,
+    mut texts: Query<&mut Text, With<JoinErrorText>>,
+) {
+    if !started.is_empty() {
+        last.0 = None;
+    }
+    if let Some(failure) = failures.read().last() {
+        warn!("session could not be opened: {}", failure.reason);
+        last.0 = Some(failure.reason.clone());
+    }
+    let wanted = last.0.as_deref().unwrap_or("");
+    for mut text in texts.iter_mut() {
+        if text.0 != wanted {
+            *text = Text::new(wanted);
+        }
     }
 }
 

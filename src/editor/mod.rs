@@ -118,28 +118,33 @@ impl EditorMap {
 }
 
 /// What the pointer does on the canvas.
+///
+/// Two, not three. There used to be a `StartLine` mode as well, and it changed
+/// nothing at all: the start line has always been draggable in every mode, so
+/// selecting it did precisely nothing and made the other two look inert by
+/// association.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
+    /// Nodes, handles, road width, the start line.
     #[default]
-    Nodes,
-    StartLine,
-    ItemBoxes,
+    Edit,
+    /// Item boxes only, with the track itself left alone so a click cannot move
+    /// a node when it meant to drop a box.
+    Items,
 }
 
 impl Tool {
     pub fn next(self) -> Self {
         match self {
-            Tool::Nodes => Tool::StartLine,
-            Tool::StartLine => Tool::ItemBoxes,
-            Tool::ItemBoxes => Tool::Nodes,
+            Tool::Edit => Tool::Items,
+            Tool::Items => Tool::Edit,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Tool::Nodes => "NODES",
-            Tool::StartLine => "START",
-            Tool::ItemBoxes => "ITEMS",
+            Tool::Edit => "EDIT",
+            Tool::Items => "ITEMS",
         }
     }
 }

@@ -12,7 +12,7 @@ use crate::track::map::data::to_world;
 use crate::RESOLUTION;
 
 use super::cursor::EditorCursor;
-use super::tools::{Hovered, Selection};
+use super::tools::{Hovered, Selection, width_handles};
 use super::{EditorMap, Tool};
 
 const NODE_PX: f32 = 4.5;
@@ -95,17 +95,38 @@ pub fn draw_overlay(
         );
     }
 
-    for position in &built.item_boxes {
+    let items_live = *tool == Tool::Items;
+    for (index, position) in built.item_boxes.iter().enumerate() {
+        let hovered = selection.hovered == Some(Hovered::ItemBox(index));
+        let colour = match (items_live, hovered) {
+            (_, true) => Color::srgb(1., 0.95, 0.5),
+            (true, false) => Color::srgb(1., 0.7, 0.2),
+            // Dimmed in Edit, so the mode is visible on the canvas rather than
+            // only as a word in the panel.
+            (false, false) => Color::srgba(1., 0.7, 0.2, 0.4),
+        };
+        let size = if hovered { 6.0 } else { 4.0 };
         gizmos.rect_2d(
             Isometry2d::from_translation(*position),
-            Vec2::splat(4.),
-            Color::srgb(1., 0.7, 0.2),
+            Vec2::splat(size),
+            colour,
         );
     }
 
     // Nodes and their handles. Only the selected node shows handles: three
     // grabbable dots per node across a whole track is unreadable.
+    let edit_live = *tool == Tool::Edit;
     for (index, node) in editor.data.nodes.iter().enumerate() {
+        if !edit_live {
+            // In Items mode the track is not editable, so it stops advertising
+            // grips that would do nothing.
+            gizmos.circle_2d(
+                Isometry2d::from_translation(to_world(node.position)),
+                NODE_PX * scale * 0.6,
+                Color::srgba(1., 1., 1., 0.25),
+            );
+            continue;
+        }
         let position = to_world(node.position);
         let selected = selection.node == Some(index);
         // Handles are shown for whichever node the pointer is nearest -- the
@@ -140,6 +161,24 @@ pub fn draw_overlay(
         }
 
         if show_handles {
+            // Road-edge grips. Square, so they read as a different kind of thing
+            // from the round bezier handles -- one changes the shape of the
+            // corner, the other how wide the road is through it.
+            for (edge, side) in width_handles(editor.as_ref(), index) {
+                let hovered_here = selection.hovered == Some(Hovered::Width(index, side));
+                let colour = if hovered_here {
+                    Color::srgb(1.0, 0.95, 0.4)
+                } else {
+                    Color::srgb(1.0, 0.75, 0.25)
+                };
+                let size = HANDLE_PX * scale * if hovered_here { 2.6 } else { 2.0 };
+                gizmos.line_2d(position, edge, Color::srgba(1.0, 0.75, 0.25, 0.5));
+                gizmos.rect_2d(
+                    Isometry2d::from_translation(edge),
+                    Vec2::splat(size),
+                    colour,
+                );
+            }
             for (offset, mirrored) in [
                 (to_world(node.in_handle), node.mirrored),
                 (to_world(node.out_handle), node.mirrored),
@@ -169,9 +208,8 @@ pub fn draw_overlay(
     // What the pointer would do, so a mode is visible without reading the panel.
     if let (Some(at), false) = (cursor.world, cursor.over_ui) {
         let hint = match *tool {
-            Tool::Nodes => Color::srgba(1., 1., 1., 0.35),
-            Tool::StartLine => Color::srgba(1., 1., 0.2, 0.5),
-            Tool::ItemBoxes => Color::srgba(1., 0.7, 0.2, 0.6),
+            Tool::Edit => Color::srgba(1., 1., 1., 0.35),
+            Tool::Items => Color::srgba(1., 0.7, 0.2, 0.7),
         };
         gizmos.circle_2d(Isometry2d::from_translation(at), 2.0 * scale, hint);
     }

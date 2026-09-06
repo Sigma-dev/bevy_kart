@@ -37,6 +37,15 @@ pub(crate) struct ValidationText;
 pub(crate) struct ToolText;
 
 #[derive(Component, Default, Clone)]
+pub(crate) struct ControlsText;
+
+#[derive(Component, Default, Clone)]
+pub(crate) struct EditToolButton;
+
+#[derive(Component, Default, Clone)]
+pub(crate) struct ItemToolButton;
+
+#[derive(Component, Default, Clone)]
 pub(crate) struct MapList;
 
 /// The saved-map list as it was last drawn, so the rows are only rebuilt when
@@ -210,23 +219,35 @@ pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
                 }
             ),
             (
+                Node { column_gap: px(4), flex_wrap: FlexWrap::Wrap, row_gap: px(4) }
+                Children [
+                    (
+                        small_button("EDIT")
+                        EditToolButton
+                        on(|_: On<Pointer<Press>>, mut tool: ResMut<Tool>, mut status: ResMut<Status>| {
+                            *tool = Tool::Edit;
+                            status.say("Editing the track.");
+                        })
+                    ),
+                    (
+                        small_button("ITEMS")
+                        ItemToolButton
+                        on(|_: On<Pointer<Press>>, mut tool: ResMut<Tool>, mut status: ResMut<Status>| {
+                            *tool = Tool::Items;
+                            status.say("Click the road to place an item box.");
+                        })
+                    ),
+                ]
+            ),
+            (
                 ToolText
                 Text::new("")
                 TextFont { font_size: {FontSize::Px(15.)} }
             ),
             (
                 {insert((
-                    Text::new(concat!(
-                        "drag node or handle\n",
-                        "right-click road: add node\n",
-                        "drag empty space: pan\n",
-                        "wheel: zoom   F: fit\n",
-                        "Del: remove node\n",
-                        "[ ]: width   Backspace: clear\n",
-                        "Alt-drag handle: break\n",
-                        "Shift-drag: snap to grid\n",
-                        "Tab: tool   Ctrl+Z: undo",
-                    )),
+                    Text::new(""),
+                    ControlsText,
                     TextFont { font_size: FontSize::Px(12.), ..default() },
                     TextColor(AppColors::Grass.color().lighter(0.3)),
                 ))}
@@ -305,13 +326,23 @@ pub(crate) fn run_panel(
     lists: Query<Entity, With<MapList>>,
     mut status_texts: Query<
         &mut Text,
-        (With<StatusText>, Without<ValidationText>, Without<ToolText>),
+        (
+            With<StatusText>,
+            Without<ValidationText>,
+            Without<ToolText>,
+            Without<ControlsText>,
+        ),
+    >,
+    mut controls_texts: Query<
+        &mut Text,
+        (With<ControlsText>, Without<ValidationText>, Without<ToolText>),
     >,
     mut validation_texts: Query<
         (&mut Text, &mut TextColor),
-        (With<ValidationText>, Without<ToolText>),
+        (With<ValidationText>, Without<ToolText>, Without<ControlsText>),
     >,
-    mut tool_texts: Query<&mut Text, With<ToolText>>,
+    mut tool_texts: Query<&mut Text, (With<ToolText>, Without<ControlsText>)>,
+    mut tool_buttons: Query<(&mut BackgroundColor, Has<EditToolButton>), Or<(With<EditToolButton>, With<ItemToolButton>)>>,
 ) {
     // Typing in the name field *is* renaming; there is no separate button.
     for field in names.iter() {
@@ -340,6 +371,13 @@ pub(crate) fn run_panel(
         }
     }
 
+    let lit = AppColors::Grass.color().lighter(0.1);
+    let unlit = AppColors::Grass.color().darker(0.28);
+    for (mut colour, is_edit) in tool_buttons.iter_mut() {
+        let active = (*tool == Tool::Edit) == is_edit;
+        colour.0 = if active { lit } else { unlit };
+    }
+
     for mut text in tool_texts.iter_mut() {
         // Say *which* width `[` and `]` would change: the selected node's, or the
         // map's default when nothing is selected. Showing only the default while
@@ -358,6 +396,27 @@ pub(crate) fn run_panel(
             ),
         };
         let wanted = format!("Tool: {}   (Tab)\n{width}", tool.label());
+        if text.0 != wanted {
+            *text = Text::new(wanted);
+        }
+    }
+
+    for mut text in controls_texts.iter_mut() {
+        let wanted = match *tool {
+            Tool::Edit => concat!(
+                "drag node / handle / width grip\n",
+                "right-click road: add node\n",
+                "Del: remove node\n",
+                "[ ]: width   Backspace: clear\n",
+                "Alt-drag handle: break mirror\n",
+                "Shift-drag node: snap to grid",
+            ),
+            Tool::Items => concat!(
+                "click road: place item box\n",
+                "drag a box to move it\n",
+                "right-click a box: remove it",
+            ),
+        };
         if text.0 != wanted {
             *text = Text::new(wanted);
         }

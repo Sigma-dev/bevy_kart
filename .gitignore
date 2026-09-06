@@ -2,3 +2,6 @@
 **/target
 # This file contains environment-specific configuration like linker settings
 .cargo/config.toml
+
+# Player-authored maps, saved next to the game.
+/maps

@@ -3,8 +3,8 @@ use crate::menu::lobby::{LobbyCar, LobbyCarName};
 use crate::track::LAPS_TO_WIN;
 use crate::track::position::TrackPosition;
 use crate::{
-    AppPlayerData, AppState, ApplyCorrectionSet, AssetHandles, LobbyState, LocalPlayerData,
-    OwnerPlayer, SpriteLayers,
+    AppPlayerData, AppState, ApplyCorrectionSet, AssetHandles, LocalPlayerData, OwnerPlayer,
+    Screen, SpriteLayers,
     car_controller_2d::CarController2dWheel,
     track::FinishTimes,
 };
@@ -244,7 +244,7 @@ pub(crate) fn spawn_kart(
                     forward: true,
                     ..default()
                 },
-                DespawnOnExit(LobbyState::OutOfLobby),
+                DespawnOnExit(Screen::StartMenu),
             ));
         }
         KartControlType::LobbyCar(player_uuid, rank) => {
@@ -282,8 +282,7 @@ pub(crate) fn spawn_kart(
                         },
                     ),
                     LobbyCar(player_uuid),
-                    DespawnOnExit(LobbyState::InLobby),
-                    DespawnOnExit(AppState::OutOfGame),
+                    DespawnOnExit(Screen::Lobby),
                 ));
 
             let ui = commands

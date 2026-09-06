@@ -13,6 +13,7 @@ use bevy_timer::TimerPlugin;
 
 pub mod assets;
 pub mod bevy_plugins;
+pub mod camera;
 pub mod car_controller_2d;
 pub mod debug;
 pub mod entity_spawn;
@@ -22,6 +23,7 @@ pub mod lobby;
 pub mod menu;
 pub mod networking;
 pub mod rollback_smoothing;
+pub mod screen;
 pub mod scene_util;
 pub mod theme;
 pub mod track;
@@ -30,10 +32,12 @@ pub mod wire_format;
 pub use assets::AssetHandles;
 pub use networking::*;
 pub use rollback_smoothing::{ApplyCorrectionSet, CorrectionSmoothing};
+pub use screen::{EditorState, Screen};
 pub use theme::*;
 pub use track::FinishTimes;
 
 use bevy_plugins::NecessaryBevyPlugins;
+use camera::CameraPlugin;
 use car_controller_2d::CarController2dPlugin;
 use debug::DebugPlugin;
 use entity_spawn::EntitySpawnPlugin;
@@ -143,10 +147,14 @@ fn main() {
             },
             TimerPlugin,
         ))
-        .add_plugins((MenuPlugin, TrackPlugin, ItemsPlugin, KartPlugin))
+        .add_plugins((MenuPlugin, TrackPlugin, ItemsPlugin, KartPlugin, CameraPlugin))
         // States & resources
         .init_state::<AppState>()
         .init_state::<LobbyState>()
+        .init_state::<EditorState>()
+        // `Screen` is the cross-product of the three above, named. Everything that
+        // used to test two states at once tests this instead.
+        .add_computed_state::<Screen>()
         .init_resource::<LocalPlayerData>()
         .insert_resource(FinishTimes {
             times: HashMap::new(),
@@ -154,11 +162,18 @@ fn main() {
         // Assets
         .add_plugins(assets::load_assets)
         // Startup & state transitions
-        .add_systems(Startup, setup)
-        .add_systems(OnEnter(LobbyState::OutOfLobby), spawn_menu)
-        .add_systems(OnEnter(LobbyState::InLobby), spawn_lobby)
-        .add_systems(OnEnter(AppState::Game), spawn_track)
-        .add_systems(OnExit(AppState::Game), spawn_lobby)
+        // One transition per screen. `spawn_lobby` used to be registered on both
+        // `OnEnter(LobbyState::InLobby)` and `OnExit(AppState::Game)`, because
+        // neither alone meant "the lobby screen"; `Screen::Lobby` means it once.
+        .add_systems(OnEnter(Screen::StartMenu), spawn_menu)
+        .add_systems(OnEnter(Screen::Lobby), spawn_lobby)
+        .add_systems(OnEnter(Screen::Race), spawn_track)
+        // Self-clearing, so leaving the editor by any route -- the back button, or
+        // a lobby appearing underneath it -- cannot bounce straight back in.
+        .add_systems(
+            OnExit(Screen::Editor),
+            |mut next: ResMut<NextState<EditorState>>| next.set(EditorState::Closed),
+        )
         .insert_resource(ClearColor(AppColors::Grass.color()));
 
     // The wire format. Kept in a function of its own, and guarded by a golden test,
@@ -185,11 +200,3 @@ fn signalling_server_url() -> String {
         .unwrap_or_else(|| "wss://signal.sigma-dev.eu/ws".into())
 }
 
-fn setup(mut commands: Commands) {
-    let mut projection = OrthographicProjection::default_2d();
-    projection.scaling_mode = bevy::camera::ScalingMode::Fixed {
-        width: RESOLUTION.x,
-        height: RESOLUTION.y,
-    };
-    commands.spawn((Camera2d, Projection::Orthographic(projection)));
-}

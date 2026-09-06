@@ -6,6 +6,7 @@ use bevy::camera::CameraPlugin;
 use bevy::core_pipeline::CorePipelinePlugin;
 use bevy::diagnostic::{DiagnosticsPlugin, FrameCountPlugin};
 use bevy::gizmos::GizmoPlugin;
+use bevy::gizmos_render::GizmoRenderPlugin;
 use bevy::input::InputPlugin;
 use bevy::input_focus::{InputDispatchPlugin, InputFocusPlugin};
 use bevy::log::LogPlugin;
@@ -22,7 +23,7 @@ use bevy::time::TimePlugin;
 use bevy::transform::TransformPlugin;
 use bevy::ui::UiPlugin;
 use bevy::ui_render::UiRenderPlugin;
-use bevy::ui_widgets::EditableTextInputPlugin;
+use bevy::ui_widgets::{EditableTextInputPlugin, ScrollAreaPlugin, SliderPlugin};
 use bevy::winit::WinitPlugin;
 
 /// Replaces DefaultPlugins with only the Bevy plugins this game actually needs.
@@ -75,6 +76,18 @@ impl Plugin for NecessaryBevyPlugins {
             UiRenderPlugin,
             AudioPlugin::default(),
             GizmoPlugin,
+            // `GizmoPlugin` only registers the asset, the config store and the config
+            // groups; the draw pass lives here. Without it every `Gizmos` call is
+            // accepted and silently draws nothing, which is what the unreachable
+            // `draw_progress_line` has been doing. Must come after `SpriteRenderPlugin`,
+            // as its own doc comment requires -- that ordering is what makes it pick up
+            // `LineGizmo2dPlugin`, which is the only pipeline this game wants.
+            //
+            // It also warns once at startup that it could not find `PbrPlugin`. That is
+            // only about the 3D pipeline: bevy's `bevy_pbr` feature arrives with the
+            // default `3d` feature and this game is 2D, so there is no `PbrPlugin` to
+            // find and nothing here needs one.
+            GizmoRenderPlugin,
             StatesPlugin,
         ));
         app.add_plugins((PointerInputPlugin, PickingPlugin, InteractionPlugin));
@@ -84,6 +97,10 @@ impl Plugin for NecessaryBevyPlugins {
             InputFocusPlugin,
             InputDispatchPlugin,
             EditableTextInputPlugin,
+            // The editor's width control and its map list. Both come from the same
+            // crate as `EditableTextInputPlugin` and cost no new dependency.
+            SliderPlugin,
+            ScrollAreaPlugin,
         ));
     }
 }

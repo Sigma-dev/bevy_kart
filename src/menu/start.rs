@@ -1,7 +1,6 @@
 use crate::scene_util::insert;
 use crate::{
-    AppColors, AppState, AssetHandles, LobbyState, LocalPlayerData,
-    RESOLUTION, SpriteLayers,
+    AppColors, AssetHandles, LocalPlayerData, RESOLUTION, Screen, SpriteLayers,
     kart::{AutoCar, KartControlType, spawn_kart},
     menu::animated_button,
 };
@@ -98,7 +97,7 @@ pub(crate) fn spawn_menu(
     ));
     let player_name = local_data.0.name.clone();
     commands.spawn_scene(bsn! {
-        {insert((DespawnOnExit(LobbyState::OutOfLobby), DespawnOnExit(AppState::OutOfGame)))}
+        {insert(DespawnOnExit(Screen::StartMenu))}
         Node {
             width: percent(100),
             height: percent(100),

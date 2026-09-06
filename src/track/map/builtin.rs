@@ -23,10 +23,16 @@ pub struct Builtin {
 }
 
 /// In menu order. The first is the default, and the one a session falls back to.
-pub const BUILTINS: &[Builtin] = &[Builtin {
-    slug: "classic",
-    json: include_str!("../../../assets/maps/classic.json"),
-}];
+pub const BUILTINS: &[Builtin] = &[
+    Builtin {
+        slug: "classic",
+        json: include_str!("../../../assets/maps/classic.json"),
+    },
+    Builtin {
+        slug: "sweeping",
+        json: include_str!("../../../assets/maps/sweeping.json"),
+    },
+];
 
 impl Builtin {
     /// Parse this map.
@@ -60,6 +66,7 @@ mod tests {
     use super::*;
     use crate::track::map::build::{BuildLevel, MAX_GRID, build};
     use crate::track::map::data::MAP_FORMAT_VERSION;
+    use bevy::prelude::Vec2;
 
     /// Every shipped map parses, validates, and builds into something raceable.
     /// This is what stops a broken built-in reaching a player as a crash.
@@ -86,6 +93,21 @@ mod tests {
                 assert!(point.is_finite(), "{} has a non-finite wall", builtin.slug);
             }
         }
+    }
+
+    /// One map bigger than the screen, because the follow camera and the minimap
+    /// only do anything on one -- a game whose every map fits in the viewport
+    /// would never exercise either.
+    #[test]
+    fn at_least_one_built_in_needs_the_camera_to_move() {
+        let biggest = BUILTINS
+            .iter()
+            .map(|b| build(&b.load(), BuildLevel::Preview).bounds.size())
+            .fold(Vec2::ZERO, |a, b| a.max(b));
+        assert!(
+            biggest.x > crate::RESOLUTION.x * 1.5 && biggest.y > crate::RESOLUTION.y * 1.5,
+            "the largest map is only {biggest:?}"
+        );
     }
 
     /// The conversion is meant to land in the same place as the track it

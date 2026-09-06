@@ -176,6 +176,7 @@ fn main() {
             OnEnter(Screen::Race),
             (
                 build_current_map,
+                camera::set_camera_bounds,
                 spawn_map,
                 spawn_starting_grid,
                 hud::spawn_race_hud,

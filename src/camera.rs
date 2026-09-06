@@ -25,6 +25,7 @@ impl Plugin for CameraPlugin {
                 reset_camera,
             )
             .add_systems(OnEnter(Screen::Lobby), reset_camera)
+            .add_systems(OnExit(Screen::Race), clear_camera_bounds)
             .add_systems(
                 PostUpdate,
                 follow_local_kart
@@ -75,6 +76,18 @@ fn setup_camera(mut commands: Commands) {
         SpatialListener::default(),
         Projection::Orthographic(projection),
     ));
+}
+
+/// Let the camera into the track that is about to be raced.
+///
+/// Runs in the race's startup chain, after the track is built and before
+/// anything reads it, so the first frame of a race is already framed correctly.
+pub(crate) fn set_camera_bounds(mut commands: Commands, built: Res<crate::track::map::BuiltTrack>) {
+    commands.insert_resource(CameraBounds(built.bounds));
+}
+
+fn clear_camera_bounds(mut commands: Commands) {
+    commands.remove_resource::<CameraBounds>();
 }
 
 /// Put the camera back where every screen outside the race expects it.

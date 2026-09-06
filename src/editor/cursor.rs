@@ -30,10 +30,15 @@ pub fn track_cursor(
     hover: Res<HoverMap>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    ui_nodes: Query<(), With<Node>>,
 ) {
-    cursor.over_ui = hover
-        .get(&PointerId::Mouse)
-        .is_some_and(|hits| !hits.is_empty());
+    // Whether any *UI node* is under the pointer -- not whether anything at all
+    // is. `HoverMap` also lists the window entity, which is under the pointer by
+    // definition, so testing it for emptiness reports "over the interface"
+    // everywhere and quietly makes the whole canvas dead to input.
+    cursor.over_ui = hover.get(&PointerId::Mouse).is_some_and(|hits| {
+        hits.keys().any(|entity| ui_nodes.contains(*entity))
+    });
 
     let (Ok(window), Ok((camera, transform))) = (windows.single(), cameras.single()) else {
         cursor.world = None;

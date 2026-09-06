@@ -19,16 +19,25 @@ use crate::scene_util::insert;
 /// bsn! { text_button("NEXT MAP") on(|_: On<Pointer<Press>>, ...| { ... }) }
 /// ```
 pub(crate) fn text_button(label: &str) -> impl Scene {
+    button_of_size(label, 20.0)
+}
+
+/// A smaller one, for a panel with a lot of them.
+pub(crate) fn small_button(label: &str) -> impl Scene {
+    button_of_size(label, 16.0)
+}
+
+fn button_of_size(label: &str, font_size: f32) -> impl Scene {
     let label = label.to_string();
     bsn! {
         {insert((
             Text::new(label),
-            TextFont { font_size: FontSize::Px(24.), ..default() },
-            BackgroundColor(AppColors::Dark.color()),
+            TextFont { font_size: FontSize::Px(font_size), ..default() },
+            BackgroundColor(AppColors::Grass.color().darker(0.28)),
         ))}
         Button
         Node {
-            padding: {UiRect::axes(px(12), px(6))},
+            padding: {UiRect::axes(px(8), px(4))},
             justify_content: JustifyContent::Center,
         }
     }

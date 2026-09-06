@@ -17,6 +17,7 @@ pub mod camera;
 pub mod car_controller_2d;
 pub mod debug;
 pub mod decor;
+pub mod editor;
 pub mod entity_spawn;
 pub mod hud;
 pub mod items;
@@ -187,6 +188,7 @@ fn main() {
             KartPlugin,
             CameraPlugin,
             map_sync::MapSyncPlugin,
+            editor::EditorPlugin,
         ))
         // States & resources
         .init_state::<AppState>()

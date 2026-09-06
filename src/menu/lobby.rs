@@ -2,8 +2,8 @@ use crate::kart::{KART_SIZE, KartControlType, spawn_kart};
 use crate::menu::animated_button;
 use crate::scene_util::insert;
 use crate::{
-    AppColors, AppPlayerData, AppState, AssetHandles, ChatMessage, FinishTimes, LobbyState,
-    RESOLUTION, SpriteLayers,
+    AppColors, AppPlayerData, AppState, AssetHandles, ChatMessage, FinishTimes, RESOLUTION,
+    Screen, SpriteLayers,
 };
 use bevy::prelude::*;
 use bevy::text::EditableText;
@@ -67,8 +67,7 @@ impl Plugin for LobbyPlugin {
                         update_lobby_cars,
                         receive_ping,
                     )
-                        .run_if(in_state(AppState::OutOfGame))
-                        .run_if(in_state(LobbyState::InLobby)),
+                        .run_if(in_state(Screen::Lobby)),
                     on_lobby_exit,
                     spawn_background_elements,
                     handle_background_elements,
@@ -365,7 +364,7 @@ pub fn spawn_lobby(
     let is_host = server_player.is_some();
     let lobby = commands
         .spawn_scene(bsn! {
-            {insert((DespawnOnExit(LobbyState::InLobby), DespawnOnExit(AppState::OutOfGame)))}
+            {insert(DespawnOnExit(Screen::Lobby))}
             Pickable::IGNORE
             Node {
                 width: percent(100),
@@ -382,7 +381,7 @@ pub fn spawn_lobby(
         Mesh2d(asset_value(Rectangle::new(RESOLUTION.x, 10.)))
         MeshMaterial2d::<ColorMaterial>(asset_value(ColorMaterial::from(AppColors::Road.color())))
         Transform::from_xyz(0., 0., SpriteLayers::Background.to_z())
-        {insert((DespawnOnExit(LobbyState::InLobby), DespawnOnExit(AppState::OutOfGame)))}
+        {insert(DespawnOnExit(Screen::Lobby))}
     });
 
     // Bottom button column: leave-lobby always, start-game only for the host.
@@ -481,7 +480,7 @@ pub fn spawn_lobby(
 
     // Ping display.
     commands.spawn_scene(bsn! {
-        {insert(DespawnOnExit(LobbyState::InLobby))}
+        {insert(DespawnOnExit(Screen::Lobby))}
         Node {
             position_type: PositionType::Absolute,
             bottom: px(5),
@@ -528,7 +527,7 @@ fn spawn_background_elements(
         element,
         Transform::from_translation(Vec3::new(random_x, random_y, element.layer().to_z())),
         element.as_sprite(&handles),
-        DespawnOnExit(LobbyState::InLobby),
+        DespawnOnExit(Screen::Lobby),
     ));
 }
 
@@ -536,8 +535,7 @@ fn handle_background_elements(
     time: Res<Time>,
     mut commands: Commands,
     mut background_elements: Query<(Entity, &mut Visibility, &mut Transform, &BackgroundElement)>,
-    app_state: Res<State<AppState>>,
-    lobby_state: Res<State<LobbyState>>,
+    screen: Res<State<Screen>>,
 ) {
     for (entity, mut visibility, mut transform, element) in background_elements.iter_mut() {
         let speed = if time.elapsed_secs() < 0.5 {
@@ -550,9 +548,7 @@ fn handle_background_elements(
         if transform.translation.x < -RESOLUTION.x {
             commands.entity(entity).despawn();
         }
-        *visibility = if *app_state.get() == AppState::OutOfGame
-            && *lobby_state.get() == LobbyState::InLobby
-        {
+        *visibility = if *screen.get() == Screen::Lobby {
             Visibility::Visible
         } else {
             Visibility::Hidden

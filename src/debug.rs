@@ -2,6 +2,9 @@ use avian2d::prelude::{LinearVelocity, Position};
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+
+use crate::Screen;
+use crate::camera::MainCamera;
 use bevy_ensemble::prelude::{Lobby, NetDebugExtras, PeerRtt, PeerRttJitter};
 use bevy_ticked::prelude::{CurrentTick, TickRateDilation, TickedLoop, TickedSystems};
 use bevy_ticked_networking::client::SnapshotApplied;
@@ -12,7 +15,17 @@ pub struct DebugPlugin;
 impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_fps_text)
-            .add_systems(Update, (update_fps, cursor_position_log, report_tick_buffer))
+            .add_systems(
+                Update,
+                (
+                    update_fps,
+                    // This logs a line on every left click. In the editor every
+                    // click is a drag on a node or a handle, which would bury
+                    // every line that is trying to explain something.
+                    cursor_position_log.run_if(not(in_state(Screen::Editor))),
+                    report_tick_buffer,
+                ),
+            )
             .init_resource::<PerfStats>()
             .add_systems(First, perf_frame_begin)
             .add_systems(
@@ -237,11 +250,15 @@ fn report_tick_buffer(
 
 fn cursor_position_log(
     q_window: Query<&Window, With<PrimaryWindow>>,
-    q_camera: Query<(&Camera, &GlobalTransform)>,
+    // Filtered to the player's camera: the minimap is a second one, and an
+    // unfiltered `single()` panics the moment it exists.
+    q_camera: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     button_input: Res<ButtonInput<MouseButton>>,
 ) {
-    let (camera, camera_transform) = q_camera.single().unwrap();
-    let window = q_window.single().unwrap();
+    let (Ok((camera, camera_transform)), Ok(window)) = (q_camera.single(), q_window.single())
+    else {
+        return;
+    };
     if let Some(world_position) = window
         .cursor_position()
         .and_then(|cursor| Some(camera.viewport_to_world(camera_transform, cursor)))

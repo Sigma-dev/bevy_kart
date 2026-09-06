@@ -38,8 +38,9 @@ pub enum AppColors {
     Dark,
     Road,
     Grass,
-    /// The red half of the red-and-white kerb. Shared by the road mesh's edge
-    /// band and the barriers that stand on it, so the two cannot drift apart.
+    /// The red half of the red-and-white wall band the road mesh draws down each
+    /// edge. The barriers are colliders only and have no colour of their own, so
+    /// this is the only place the wall is painted.
     Kerb,
 }
 
@@ -49,7 +50,10 @@ impl AppColors {
             AppColors::Dark => Srgba::hex("2e222f").unwrap().into(),
             AppColors::Road => Srgba::hex("323353").unwrap().into(),
             AppColors::Grass => Srgba::hex("239063").unwrap().into(),
-            AppColors::Kerb => Color::srgb(0.68, 0.13, 0.20),
+            // The palette's red, the one the karts, the items and the start
+            // light are already drawn in -- not a near miss hand-mixed in linear
+            // floats, which is what this was.
+            AppColors::Kerb => Srgba::hex("ae2334").unwrap().into(),
         }
     }
 }

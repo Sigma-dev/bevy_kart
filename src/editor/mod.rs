@@ -104,6 +104,17 @@ impl EditorMap {
         change(&mut self.data);
         self.dirty = true;
     }
+
+    /// Edit without recording anything, for a change still under the cursor.
+    ///
+    /// A drag writes the map on every frame it moves. Recording each of those
+    /// would fill a sixty-four deep history in about a second and make undo mean
+    /// "a moment ago" instead of "before that drag" -- so the drag records once,
+    /// when it starts, and then uses this.
+    pub fn edit_in_progress(&mut self, change: impl FnOnce(&mut MapData)) {
+        change(&mut self.data);
+        self.dirty = true;
+    }
 }
 
 /// What the pointer does on the canvas.
@@ -195,6 +206,7 @@ fn enter_editor(
     mut materials: ResMut<Assets<ColorMaterial>>,
     existing: Option<Res<EditorMap>>,
     selected: Option<Res<crate::track::SelectedMap>>,
+    mut camera: Query<(&mut Transform, &mut Projection), With<crate::camera::MainCamera>>,
 ) {
     // Whatever was being edited, if the editor is being re-entered; otherwise the
     // map that was about to be raced, so opening the editor from the menu starts
@@ -216,6 +228,12 @@ fn enter_editor(
         Transform::from_xyz(0., 0., crate::SpriteLayers::Background.to_z()),
     ));
     commands.insert_resource(PreviewMesh(mesh));
+    // Frame it on the way in. The camera is shared with the race and the menus,
+    // so without this the editor opens wherever the last thing left it -- which
+    // for a map larger than a screen is often looking at empty grass.
+    if let Ok((mut transform, mut projection)) = camera.single_mut() {
+        tools::frame_map(&editor, &mut transform, &mut projection);
+    }
     commands.insert_resource(editor);
     commands.init_resource::<History>();
     commands.init_resource::<Tool>();
@@ -243,6 +261,7 @@ fn leave_editor(mut commands: Commands, mut camera: Query<&mut Projection>) {
 /// hertz would have avian rebuilding its broadphase sixty times a second.
 fn rebuild_preview(
     mut editor: ResMut<EditorMap>,
+    drag: Option<Res<tools::Drag>>,
     preview: Option<Res<PreviewMesh>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
@@ -250,7 +269,15 @@ fn rebuild_preview(
         return;
     }
     let Some(preview) = preview else { return };
-    editor.built = build(&editor.data, BuildLevel::Full);
+    // `Full` runs the shape checks, one of which compares every centreline sample
+    // against every other -- about eighty thousand pairs on a track this size.
+    // Fine once when a drag settles; not fine sixty times a second while one is
+    // still moving.
+    let level = match drag.as_deref() {
+        Some(tools::Drag::None) | None => BuildLevel::Full,
+        Some(_) => BuildLevel::Preview,
+    };
+    editor.built = build(&editor.data, level);
     if let Some(mut mesh) = meshes.get_mut(&preview.0) {
         *mesh = crate::track::map::mesh::road_mesh(&editor.built);
     }

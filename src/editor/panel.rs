@@ -10,7 +10,7 @@ use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter};
 
-use crate::menu::widgets::text_button;
+use crate::menu::widgets::{small_button, text_button};
 use crate::scene_util::insert;
 use crate::track::map::build::TrackWarning;
 use crate::track::map::builtin::BUILTINS;
@@ -57,7 +57,9 @@ pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
             width: px(240),
             flex_direction: FlexDirection::Column,
             row_gap: px(6),
-            padding: {UiRect::all(px(8))},
+            // Extra at the top so the title clears the FPS readout, which the
+            // debug overlay pins to the same corner.
+            padding: {UiRect::new(px(8), px(8), px(26), px(8))},
         }
         BackgroundColor({AppColors::Dark.color()})
         // So the pointer knows it is over the panel and the canvas leaves it alone.
@@ -80,7 +82,7 @@ pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
                 Node { column_gap: px(4), flex_wrap: FlexWrap::Wrap, row_gap: px(4) }
                 Children [
                     (
-                        text_button("NEW")
+                        small_button("NEW")
                         on(|_: On<Pointer<Press>>,
                            mut editor: ResMut<EditorMap>,
                            mut history: ResMut<History>,
@@ -91,7 +93,7 @@ pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
                         })
                     ),
                     (
-                        text_button("SAVE")
+                        small_button("SAVE")
                         on(|_: On<Pointer<Press>>,
                            mut editor: ResMut<EditorMap>,
                            mut status: ResMut<Status>| {
@@ -99,7 +101,7 @@ pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
                         })
                     ),
                     (
-                        text_button("DELETE")
+                        small_button("DELETE")
                         on(|_: On<Pointer<Press>>,
                            mut editor: ResMut<EditorMap>,
                            mut status: ResMut<Status>| {
@@ -122,7 +124,7 @@ pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
                 Node { column_gap: px(4), flex_wrap: FlexWrap::Wrap, row_gap: px(4) }
                 Children [
                     (
-                        text_button("EXPORT")
+                        small_button("EXPORT")
                         on(|_: On<Pointer<Press>>,
                            editor: Res<EditorMap>,
                            mut status: ResMut<Status>| {
@@ -136,7 +138,7 @@ pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
                         })
                     ),
                     (
-                        text_button("IMPORT")
+                        small_button("IMPORT")
                         on(|_: On<Pointer<Press>>,
                            pending: Res<PendingImport>,
                            mut status: ResMut<Status>| {
@@ -147,7 +149,7 @@ pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
                         })
                     ),
                     (
-                        text_button("COPY")
+                        small_button("COPY")
                         on(|_: On<Pointer<Press>>,
                            editor: Res<EditorMap>,
                            mut status: ResMut<Status>,
@@ -210,7 +212,24 @@ pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
             (
                 ToolText
                 Text::new("")
-                TextFont { font_size: {FontSize::Px(16.)} }
+                TextFont { font_size: {FontSize::Px(15.)} }
+            ),
+            (
+                {insert((
+                    Text::new(concat!(
+                        "drag node or handle\n",
+                        "right-click road: add node\n",
+                        "drag empty space: pan\n",
+                        "wheel: zoom   F: fit\n",
+                        "Del: remove node\n",
+                        "[ ]: width   Backspace: clear\n",
+                        "Alt-drag handle: break\n",
+                        "Shift-drag: snap to grid\n",
+                        "Tab: tool   Ctrl+Z: undo",
+                    )),
+                    TextFont { font_size: FontSize::Px(12.), ..default() },
+                    TextColor(AppColors::Grass.color().lighter(0.3)),
+                ))}
             ),
             (
                 ValidationText
@@ -280,6 +299,7 @@ pub(crate) fn run_panel(
     mut listed: ResMut<ListedMaps>,
     pending: Res<PendingImport>,
     tool: Res<Tool>,
+    selection: Res<crate::editor::tools::Selection>,
     focus: Res<InputFocus>,
     names: Query<&EditableText, (With<NameField>, Changed<EditableText>)>,
     lists: Query<Entity, With<MapList>>,
@@ -321,11 +341,23 @@ pub(crate) fn run_panel(
     }
 
     for mut text in tool_texts.iter_mut() {
-        let wanted = format!(
-            "Tool: {}   (Tab)   width {:.1}",
-            tool.label(),
-            scalar_to_world(editor.data.road.half_width)
-        );
+        // Say *which* width `[` and `]` would change: the selected node's, or the
+        // map's default when nothing is selected. Showing only the default while
+        // editing a node's own width is how you conclude the keys do nothing.
+        let width = match selection.node.and_then(|index| editor.data.nodes.get(index)) {
+            Some(node) => match node.half_width {
+                Some(own) => format!("node width {:.1}", scalar_to_world(own)),
+                None => format!(
+                    "node width {:.1} (from map)",
+                    scalar_to_world(editor.data.road.half_width)
+                ),
+            },
+            None => format!(
+                "map width {:.1}",
+                scalar_to_world(editor.data.road.half_width)
+            ),
+        };
+        let wanted = format!("Tool: {}   (Tab)\n{width}", tool.label());
         if text.0 != wanted {
             *text = Text::new(wanted);
         }
@@ -360,7 +392,7 @@ pub(crate) fn run_panel(
                 let entry = entry.clone();
                 let row = commands
                     .spawn_scene(bsn! {
-                        text_button(entry.as_str())
+                        small_button(entry.as_str())
                         on(move |_: On<Pointer<Press>>,
                             mut editor: ResMut<EditorMap>,
                             mut history: ResMut<History>,

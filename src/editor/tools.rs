@@ -24,7 +24,14 @@ use super::{EditorMap, History, Status, Tool};
 use super::HISTORY_DEPTH;
 
 /// Grab radius, in screen pixels.
-const GRAB_PX: f32 = 9.0;
+const GRAB_PX: f32 = 12.0;
+
+/// How near a node has to be, in screen pixels, for it to be the one whose
+/// handles are shown and grabbable.
+///
+/// Generous, because it is what makes the handles reachable at all: they stick
+/// out from the node, so the pointer is never *on* the node when it goes for one.
+const FOCUS_PX: f32 = 60.0;
 
 const MIN_ZOOM: f32 = 0.25;
 const MAX_ZOOM: f32 = 4.0;
@@ -48,9 +55,25 @@ pub enum Drag {
 pub struct Selection {
     pub node: Option<usize>,
     pub item_box: Option<usize>,
+    /// What is under the pointer right now. Drawn highlighted, so what a click
+    /// would do is visible before the click.
+    pub hovered: Option<Hovered>,
+    /// The node whose handles are on show. See [`focus_node`].
+    pub focus: Option<usize>,
+}
+
+/// The kinds of thing the overlay highlights on hover.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hovered {
+    Node(usize),
+    HandleIn(usize),
+    HandleOut(usize),
+    StartLine,
+    ItemBox(usize),
 }
 
 /// What is under the cursor, in priority order.
+#[derive(Clone, Copy)]
 enum Grab {
     Node(usize),
     HandleIn(usize),
@@ -59,7 +82,30 @@ enum Grab {
     ItemBox(usize),
 }
 
-fn find_grab(editor: &EditorMap, selection: &Selection, at: Vec2, radius: f32) -> Option<Grab> {
+/// The node whose handles are shown, and therefore the only ones grabbable.
+///
+/// One function so that what is drawn and what can be picked up cannot disagree.
+/// They did: handles appeared on hover but only the *selected* node's could be
+/// grabbed, so the editor drew controls it then refused to move.
+///
+/// Whichever node is nearest, counting its handle tips as part of it, so
+/// reaching for a handle keeps the focus on the node it belongs to.
+pub fn focus_node(editor: &EditorMap, at: Vec2, reach: f32) -> Option<usize> {
+    let mut best: Option<(f32, usize)> = None;
+    for (index, node) in editor.data.nodes.iter().enumerate() {
+        let position = to_world(node.position);
+        let distance = at
+            .distance(position)
+            .min(at.distance(position + to_world(node.in_handle)))
+            .min(at.distance(position + to_world(node.out_handle)));
+        if distance <= reach && best.is_none_or(|(d, _)| distance < d) {
+            best = Some((distance, index));
+        }
+    }
+    best.map(|(_, index)| index)
+}
+
+fn find_grab(editor: &EditorMap, at: Vec2, radius: f32, focus: Option<usize>) -> Option<Grab> {
     let map = &editor.data;
     let mut best: Option<(f32, Grab)> = None;
     let mut consider = |distance: f32, grab: Grab| {
@@ -68,9 +114,9 @@ fn find_grab(editor: &EditorMap, selection: &Selection, at: Vec2, radius: f32) -
         }
     };
 
-    // The selected node's handles win over everything, which is what makes a
-    // cluster of nodes editable at all.
-    if let Some(index) = selection.node.filter(|i| *i < map.nodes.len()) {
+    // The focused node's handles, and only that node's: any more and a cluster of
+    // nodes becomes a cloud of indistinguishable dots.
+    if let Some(index) = focus.filter(|i| *i < map.nodes.len()) {
         let node = map.nodes[index];
         let position = to_world(node.position);
         consider(
@@ -161,16 +207,54 @@ pub fn handle_pointer(
     cursor: Res<EditorCursor>,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    mut input_focus: ResMut<bevy::input_focus::InputFocus>,
 ) {
     let Some(at) = cursor.world else { return };
     let radius = GRAB_PX * cursor.world_per_px;
+
+    // The node the overlay shows handles for, recomputed every frame.
+    selection.focus = if cursor.over_ui {
+        None
+    } else {
+        focus_node(&editor, at, FOCUS_PX * cursor.world_per_px)
+    };
+    let focus = selection.focus;
+
+    // What a click would grab, every frame, so the overlay can say so.
+    selection.hovered = if cursor.over_ui {
+        None
+    } else {
+        find_grab(&editor, at, radius, focus).map(|grab| match grab {
+            Grab::Node(i) => Hovered::Node(i),
+            Grab::HandleIn(i) => Hovered::HandleIn(i),
+            Grab::HandleOut(i) => Hovered::HandleOut(i),
+            Grab::StartLine => Hovered::StartLine,
+            Grab::ItemBox(i) => Hovered::ItemBox(i),
+        })
+    };
 
     if buttons.just_released(MouseButton::Left) {
         *drag = Drag::None;
     }
 
+    if (buttons.just_pressed(MouseButton::Left) || buttons.just_pressed(MouseButton::Right))
+        && !cursor.over_ui
+    {
+        // Clicking the canvas takes the keyboard back off the name field, so the
+        // shortcuts work again without having to know why they stopped.
+        input_focus.clear();
+    }
+    if buttons.just_pressed(MouseButton::Middle) && !cursor.over_ui {
+        *drag = Drag::Pan(at);
+    }
     if buttons.just_pressed(MouseButton::Left) && !cursor.over_ui {
-        match find_grab(&editor, &selection, at, radius) {
+        let grabbed = find_grab(&editor, at, radius, focus);
+        // One undo step per drag, taken as it starts. The drag itself writes the
+        // map every frame it moves and records none of them.
+        if grabbed.is_some() {
+            history.push(editor.data.clone());
+        }
+        match grabbed {
             Some(Grab::Node(index)) => {
                 selection.node = Some(index);
                 *drag = Drag::Node(index);
@@ -196,17 +280,17 @@ pub fn handle_pointer(
                         }
                     }
                 }
-                _ => {
-                    selection.node = None;
-                    *drag = Drag::Pan(at);
-                }
+                // Deliberately keeps the selection: nudging the view should not
+                // throw away the node whose handles you were about to grab.
+                // Escape clears it, and clicking another node replaces it.
+                _ => *drag = Drag::Pan(at),
             },
         }
     }
 
     // Right-click: insert a node on the road, or remove an item box.
     if buttons.just_pressed(MouseButton::Right) && !cursor.over_ui {
-        match find_grab(&editor, &selection, at, radius) {
+        match find_grab(&editor, at, radius, focus) {
             Some(Grab::ItemBox(index)) => {
                 editor.edit(&mut history, |map| {
                     map.item_boxes.remove(index);
@@ -237,7 +321,7 @@ pub fn handle_pointer(
     match *drag {
         Drag::Node(index) => {
             let target = if snap { at.round() } else { at };
-            editor.edit(&mut history, |map| {
+            editor.edit_in_progress(|map| {
                 if let Some(node) = map.nodes.get_mut(index) {
                     node.position = to_map(target);
                 }
@@ -245,7 +329,7 @@ pub fn handle_pointer(
         }
         Drag::HandleIn(index) | Drag::HandleOut(index) => {
             let outgoing = matches!(*drag, Drag::HandleOut(index2) if index2 == index);
-            editor.edit(&mut history, |map| {
+            editor.edit_in_progress(|map| {
                 let Some(node) = map.nodes.get_mut(index) else {
                     return;
                 };
@@ -268,7 +352,7 @@ pub fn handle_pointer(
         }
         Drag::StartLine => {
             if let Some((anchor, _)) = nearest_anchor(&editor, at) {
-                editor.edit(&mut history, |map| {
+                editor.edit_in_progress(|map| {
                     // The line spans the road, so only where it sits along the
                     // lap is editable -- never how far across.
                     map.start.at = TrackAnchor::new(anchor.segment, anchor.t_fraction(), 0);
@@ -277,7 +361,7 @@ pub fn handle_pointer(
         }
         Drag::ItemBox(index) => {
             if let Some((anchor, _)) = nearest_anchor(&editor, at) {
-                editor.edit(&mut history, |map| {
+                editor.edit_in_progress(|map| {
                     if let Some(slot) = map.item_boxes.get_mut(index) {
                         *slot = anchor;
                     }
@@ -369,14 +453,18 @@ pub fn handle_keys(
     mut selection: ResMut<Selection>,
     mut tool: ResMut<Tool>,
     mut status: ResMut<Status>,
-    mut next_editor: ResMut<NextState<crate::EditorState>>,
     keys: Res<ButtonInput<KeyCode>>,
     focus: Res<bevy::input_focus::InputFocus>,
+    text_fields: Query<(), With<bevy::text::EditableText>>,
     mut camera: Query<(&mut Transform, &mut Projection), With<MainCamera>>,
 ) {
-    // A text field has the keyboard: every shortcut here would otherwise type
-    // into the map's name.
-    if focus.get().is_some() {
+    // Skip only while a *text field* has the keyboard, or every shortcut here
+    // would type into the map's name instead.
+    //
+    // Not `focus.get().is_some()`: `set_initial_focus` focuses the primary window
+    // whenever nothing else claims it, so something is always focused and that
+    // test silently disables every shortcut in the editor, permanently.
+    if focus.get().is_some_and(|entity| text_fields.contains(entity)) {
         return;
     }
     let control = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
@@ -459,17 +547,16 @@ pub fn handle_keys(
             status.say("Framed the map.");
         }
 
+    // Escape clears the selection and nothing else. It used to leave the editor
+    // once nothing was selected, which put "discard my unsaved track" one stray
+    // keypress away -- and the BACK button already asks twice for that.
     if keys.just_pressed(KeyCode::Escape) {
-        if selection.node.is_some() || selection.item_box.is_some() {
-            selection.node = None;
-            selection.item_box = None;
-        } else {
-            super::close_editor(&mut next_editor);
-        }
+        selection.node = None;
+        selection.item_box = None;
     }
 }
 
-fn frame_map(editor: &EditorMap, transform: &mut Transform, projection: &mut Projection) {
+pub fn frame_map(editor: &EditorMap, transform: &mut Transform, projection: &mut Projection) {
     let bounds = editor.built.bounds;
     if let Projection::Orthographic(orthographic) = projection {
         let needed = (bounds.width() / crate::RESOLUTION.x)

@@ -12,11 +12,11 @@ use crate::track::map::data::to_world;
 use crate::RESOLUTION;
 
 use super::cursor::EditorCursor;
-use super::tools::Selection;
+use super::tools::{Hovered, Selection};
 use super::{EditorMap, Tool};
 
-const NODE_PX: f32 = 4.0;
-const HANDLE_PX: f32 = 3.0;
+const NODE_PX: f32 = 4.5;
+const HANDLE_PX: f32 = 4.0;
 
 pub fn draw_overlay(
     mut gizmos: Gizmos,
@@ -49,7 +49,7 @@ pub fn draw_overlay(
         if wall.len() > 1 {
             gizmos.linestrip_2d(
                 wall.iter().copied().chain(wall.first().copied()),
-                Color::srgba(1., 1., 1., 0.6),
+                Color::srgba(1., 1., 1., 0.35),
             );
         }
     }
@@ -72,7 +72,7 @@ pub fn draw_overlay(
     // The racing line, which is what the lap counter measures against.
     gizmos.linestrip_2d(
         built.progress.iter().copied().chain(built.progress.first().copied()),
-        Color::srgba(1., 1., 1., 0.5),
+        Color::srgba(1., 1., 1., 0.22),
     );
 
     // The start line and the grid it feeds, so a grid clipping a wall is
@@ -108,6 +108,16 @@ pub fn draw_overlay(
     for (index, node) in editor.data.nodes.iter().enumerate() {
         let position = to_world(node.position);
         let selected = selection.node == Some(index);
+        // Handles are shown for whichever node the pointer is nearest -- the
+        // same node `focus_node` lets you grab them on, so what is drawn and
+        // what can be picked up cannot disagree. Requiring a node to be selected
+        // first made them undiscoverable: nothing on screen said they existed.
+        let focused = selection.focus == Some(index);
+        let hovered = matches!(
+            selection.hovered,
+            Some(Hovered::Node(i) | Hovered::HandleIn(i) | Hovered::HandleOut(i)) if i == index
+        );
+        let show_handles = selected || focused;
         let colour = if selected {
             Color::srgb(0.4, 0.9, 1.0)
         } else if node.half_width.is_some() {
@@ -117,7 +127,7 @@ pub fn draw_overlay(
         } else {
             Color::WHITE
         };
-        let radius = NODE_PX * scale;
+        let radius = NODE_PX * scale * if hovered { 1.5 } else { 1.0 };
         if node.half_width.is_some() || selected {
             gizmos.circle_2d(Isometry2d::from_translation(position), radius, colour);
             gizmos.circle_2d(
@@ -129,21 +139,27 @@ pub fn draw_overlay(
             gizmos.circle_2d(Isometry2d::from_translation(position), radius, colour);
         }
 
-        if selected {
+        if show_handles {
             for (offset, mirrored) in [
                 (to_world(node.in_handle), node.mirrored),
                 (to_world(node.out_handle), node.mirrored),
             ] {
                 let tip = position + offset;
                 let handle_colour = if mirrored {
-                    Color::srgba(0.8, 0.8, 0.8, 0.9)
+                    Color::srgb(0.35, 0.95, 1.0)
                 } else {
-                    Color::srgb(1.0, 0.4, 1.0)
+                    // A broken pair is a different thing and says so.
+                    Color::srgb(1.0, 0.45, 1.0)
                 };
                 gizmos.line_2d(position, tip, handle_colour);
                 gizmos.circle_2d(
                     Isometry2d::from_translation(tip),
                     HANDLE_PX * scale,
+                    handle_colour,
+                );
+                gizmos.circle_2d(
+                    Isometry2d::from_translation(tip),
+                    HANDLE_PX * scale * 0.5,
                     handle_colour,
                 );
             }

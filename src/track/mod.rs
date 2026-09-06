@@ -55,7 +55,7 @@ impl FinishTimes {
             .iter()
             .map(|(id, time)| (*id, *time))
             .collect::<Vec<_>>();
-        all_times.sort_by(|(_, time), (_, time2)| time.cmp(time2));
+        all_times.sort_by_key(|(_, time)| *time);
         all_times
             .iter()
             .position(|(id, _)| *id == player_uuid)

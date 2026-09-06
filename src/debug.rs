@@ -261,17 +261,17 @@ fn cursor_position_log(
     else {
         return;
     };
+    if !button_input.just_pressed(MouseButton::Left) {
+        return;
+    }
     if let Some(world_position) = window
         .cursor_position()
-        .and_then(|cursor| Some(camera.viewport_to_world(camera_transform, cursor)))
-        .map(|ray| ray.unwrap().origin.truncate())
+        .and_then(|cursor| camera.viewport_to_world_2d(camera_transform, cursor).ok())
     {
-        if button_input.just_pressed(MouseButton::Left) {
-            info!(
-                "World coords: Vec2::new({},{})",
-                world_position.x, world_position.y
-            );
-        }
+        info!(
+            "World coords: Vec2::new({},{})",
+            world_position.x, world_position.y
+        );
     }
 }
 

@@ -34,7 +34,7 @@ impl Plugin for KartPlugin {
 pub const KART_SIZE: UVec2 = UVec2::new(4, 8);
 pub const KART_COLORS_COUNT: u32 = 10;
 
-#[derive(Component, Debug)]
+#[derive(Component, Debug, Default)]
 pub struct LapsCounter {
     pub count: i32,
     pub last_frame_progress: f32,
@@ -42,10 +42,7 @@ pub struct LapsCounter {
 
 impl LapsCounter {
     pub fn new() -> Self {
-        Self {
-            count: 0,
-            last_frame_progress: 0.,
-        }
+        Self::default()
     }
 
     pub fn update(&mut self, progress: f32) {

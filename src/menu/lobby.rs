@@ -262,10 +262,11 @@ fn update_lobby_cars(
             continue;
         };
         // PlayerData may not have arrived yet — only update visuals if present
-        if let Some(player) = all_participants[player_index].1.map(|d| &d.0) {
-            if let Some(atlas) = sprite.texture_atlas.as_mut() {
-                atlas.index = player.kart_color.to_u32() as usize;
-            }
+        if let (Some(player), Some(atlas)) = (
+            all_participants[player_index].1.map(|d| &d.0),
+            sprite.texture_atlas.as_mut(),
+        ) {
+            atlas.index = player.kart_color.to_u32() as usize;
         }
         let desired_x = compute_desired_x(player_index, count);
         transform.translation.x = transform.translation.x.lerp(desired_x, time.delta_secs());

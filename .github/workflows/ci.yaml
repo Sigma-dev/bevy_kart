@@ -1,0 +1,90 @@
+# Runs the tests. Until this existed, `just test` ran on whichever machine the
+# author happened to be at -- despite `Cargo.toml` claiming "the CI workflow
+# treats them as errors" about the clippy lints.
+#
+# Two runners, and the second is the point. `built_track_golden_hash` and the
+# determinism tests in `src/track/map/build.rs` exist because every peer builds
+# its own wall colliders from shared map data, and a wall one ulp out of place is
+# a divergence rollback corrects and re-creates every tick, forever. A golden
+# hash that only ever runs on one x86 machine is a hash of that machine.
+# `macos-latest` is ARM, so the pair actually says something.
+#
+# wasm is typechecked rather than tested: it is the third float target, and the
+# one this game actually ships to.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keeps the two runners from disagreeing about the toolchain as well as the
+  # architecture. Matches the release workflow.
+  toolchain: nightly-2026-03-02
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.toolchain }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.runner }}
+
+      - name: Test
+        run: cargo test --all-targets
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  wasm:
+    name: Typecheck wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.toolchain }}
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+
+      - name: Check
+        run: cargo check --target wasm32-unknown-unknown

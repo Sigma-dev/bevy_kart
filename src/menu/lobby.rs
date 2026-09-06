@@ -1,5 +1,6 @@
 use crate::kart::{KART_SIZE, KartControlType, spawn_kart};
 use crate::menu::animated_button;
+use crate::decor::BackgroundElement;
 use crate::menu::widgets::text_button;
 use crate::scene_util::insert;
 use crate::{
@@ -45,8 +46,6 @@ fn on_chat_submit(
         }
     }
 }
-use rand::distr::Distribution;
-use rand::distr::weighted::WeightedIndex;
 use rand::{Rng, rng};
 
 pub const BACKGROUND_ELEMENT_TYPES_COUNT: usize = 8;
@@ -103,6 +102,15 @@ struct LobbyChatInputHistoryText;
 #[derive(Component, Default, Clone)]
 struct LobbyPlayersButtons;
 
+/// The lobby's parallax scenery, as opposed to a track's.
+///
+/// Both are [`BackgroundElement`]s and draw from the same sprite sheet, but only
+/// these drift across the screen and hide themselves outside the lobby. Without
+/// the distinction the systems below reach into a race and hide every tree on
+/// the map -- which is exactly what they did.
+#[derive(Component)]
+struct ScrollingBackground;
+
 /// Shows the name of the map the race will use.
 #[derive(Component, Default, Clone)]
 #[require(Text)]
@@ -113,90 +121,6 @@ pub struct LobbyCar(pub u128);
 
 #[derive(Component, Default, Clone)]
 pub struct LobbyCarName(pub u128);
-
-#[derive(Component, Clone, Copy)]
-enum BackgroundElement {
-    Tree,
-    Grass,
-    YellowFlower,
-    RedFlower,
-    BlueFlower,
-    PurpleFlower,
-    Fox,
-    Worm,
-    Cloud1,
-    Cloud2,
-}
-
-impl BackgroundElement {
-    fn as_sprite(&self, handles: &AssetHandles) -> Sprite {
-        let index = match self {
-            BackgroundElement::Tree => 0,
-            BackgroundElement::Grass => 1,
-            BackgroundElement::YellowFlower => 2,
-            BackgroundElement::RedFlower => 3,
-            BackgroundElement::BlueFlower => 4,
-            BackgroundElement::PurpleFlower => 5,
-            BackgroundElement::Fox => 6,
-            BackgroundElement::Worm => 7,
-            BackgroundElement::Cloud1 => 0,
-            BackgroundElement::Cloud2 => 1,
-        };
-        let texture_and_atlas = match self {
-            BackgroundElement::Cloud1 => {
-                (handles.clouds_texture.clone(), handles.clouds_atlas.clone())
-            }
-            BackgroundElement::Cloud2 => {
-                (handles.clouds_texture.clone(), handles.clouds_atlas.clone())
-            }
-            _ => (
-                handles.background_elements_texture.clone(),
-                handles.background_elements_atlas.clone(),
-            ),
-        };
-        Sprite::from_atlas_image(
-            texture_and_atlas.0,
-            TextureAtlas {
-                layout: texture_and_atlas.1,
-                index,
-            },
-        )
-    }
-
-    fn pick_random() -> Self {
-        let choices = [
-            BackgroundElement::Tree,
-            BackgroundElement::Grass,
-            BackgroundElement::YellowFlower,
-            BackgroundElement::RedFlower,
-            BackgroundElement::BlueFlower,
-            BackgroundElement::PurpleFlower,
-            BackgroundElement::Fox,
-            BackgroundElement::Worm,
-            BackgroundElement::Cloud1,
-            BackgroundElement::Cloud2,
-        ];
-        let weights = [5, 200, 10, 10, 10, 10, 2, 2, 2, 2];
-        let dist = WeightedIndex::new(weights).unwrap();
-        choices[dist.sample(&mut rng())]
-    }
-
-    fn speed(&self) -> f32 {
-        match self {
-            BackgroundElement::Cloud1 => 30.,
-            BackgroundElement::Cloud2 => 45.,
-            _ => 100.,
-        }
-    }
-
-    fn layer(&self) -> SpriteLayers {
-        match self {
-            BackgroundElement::Cloud1 => SpriteLayers::AboveCar,
-            BackgroundElement::Cloud2 => SpriteLayers::AboveCar,
-            _ => SpriteLayers::OnGround,
-        }
-    }
-}
 
 fn lobby_code(
     lobby_codes: Query<&LobbyWebrtcCode, With<Lobby>>,
@@ -570,7 +494,7 @@ fn receive_ping(
 
 fn spawn_background_elements(
     mut commands: Commands,
-    background_elements: Query<&BackgroundElement>,
+    background_elements: Query<&BackgroundElement, With<ScrollingBackground>>,
     handles: Res<AssetHandles>,
 ) {
     let max_amount = 60;
@@ -585,6 +509,7 @@ fn spawn_background_elements(
     let element = BackgroundElement::pick_random();
     commands.spawn((
         element,
+        ScrollingBackground,
         Transform::from_translation(Vec3::new(random_x, random_y, element.layer().to_z())),
         element.as_sprite(&handles),
         DespawnOnExit(Screen::Lobby),
@@ -594,7 +519,10 @@ fn spawn_background_elements(
 fn handle_background_elements(
     time: Res<Time>,
     mut commands: Commands,
-    mut background_elements: Query<(Entity, &mut Visibility, &mut Transform, &BackgroundElement)>,
+    mut background_elements: Query<
+        (Entity, &mut Visibility, &mut Transform, &BackgroundElement),
+        With<ScrollingBackground>,
+    >,
     screen: Res<State<Screen>>,
 ) {
     for (entity, mut visibility, mut transform, element) in background_elements.iter_mut() {

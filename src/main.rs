@@ -16,6 +16,7 @@ pub mod bevy_plugins;
 pub mod camera;
 pub mod car_controller_2d;
 pub mod debug;
+pub mod decor;
 pub mod entity_spawn;
 pub mod hud;
 pub mod items;
@@ -229,6 +230,8 @@ fn main() {
                 map_sync::bail_out_of_a_race_with_no_track,
                 track::minimap::track_minimap_viewport,
                 track::minimap::spawn_minimap_blips,
+                #[cfg(debug_assertions)]
+                decor::decor_never_reaches_the_simulation,
             ),
         )
         // Self-clearing, so leaving the editor by any route -- the back button, or

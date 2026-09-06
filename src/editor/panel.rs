@@ -1,4 +1,11 @@
-//! The editor's side panel.
+//! The editor's panels.
+//!
+//! Three of them, because they answer three different questions and the one
+//! column they used to share made you scroll past two of them to reach the
+//! third. The left panel is the map -- its name, what to do with it, and which
+//! one to open. The top of the screen is the mode you are in. The right is what
+//! the keys do. Only the map's panel is a wall; the other two are boxes with
+//! `Pickable::IGNORE` around them, so the canvas underneath is still the canvas.
 //!
 //! Text buttons rather than the game's pixel-art ones: `buttons.png` is a 2x4
 //! grid with the label baked into the art and all four rows spoken for, so every
@@ -55,7 +62,13 @@ pub struct ListedMaps(Vec<String>);
 
 pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
     commands.init_resource::<ListedMaps>();
-    let name = editor.data.name.clone();
+    spawn_map_panel(&mut commands, editor.data.name.clone());
+    spawn_mode_bar(&mut commands);
+    spawn_controls_panel(&mut commands);
+}
+
+/// The left wall: what this map is, what to do with it, and which one to open.
+fn spawn_map_panel(commands: &mut Commands, name: String) {
     commands.spawn_scene(bsn! {
         {insert(DespawnOnExit(Screen::Editor))}
         Node {
@@ -209,48 +222,21 @@ pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
                 Text::new("TRACKS")
                 TextFont { font_size: {FontSize::Px(18.)} }
             ),
+            // The list takes whatever the panel has left, which is the point of
+            // the keys having moved out of this column: opening a track you
+            // already made is the editor's second most common act, and it used
+            // to be a hundred and eighty pixels of it below everything else.
             (
                 MapList
                 Node {
                     flex_direction: FlexDirection::Column,
+                    flex_grow: 1.,
+                    // Without this a scrolling child insists on its full content
+                    // height and pushes the panel's floor through the screen.
+                    min_height: px(0),
                     row_gap: px(2),
-                    max_height: px(180),
                     overflow: {Overflow::scroll_y()},
                 }
-            ),
-            (
-                Node { column_gap: px(4), flex_wrap: FlexWrap::Wrap, row_gap: px(4) }
-                Children [
-                    (
-                        small_button("EDIT")
-                        EditToolButton
-                        on(|_: On<Pointer<Press>>, mut tool: ResMut<Tool>, mut status: ResMut<Status>| {
-                            *tool = Tool::Edit;
-                            status.say("Editing the track.");
-                        })
-                    ),
-                    (
-                        small_button("ITEMS")
-                        ItemToolButton
-                        on(|_: On<Pointer<Press>>, mut tool: ResMut<Tool>, mut status: ResMut<Status>| {
-                            *tool = Tool::Items;
-                            status.say("Click the road to place an item box.");
-                        })
-                    ),
-                ]
-            ),
-            (
-                ToolText
-                Text::new("")
-                TextFont { font_size: {FontSize::Px(15.)} }
-            ),
-            (
-                {insert((
-                    Text::new(""),
-                    ControlsText,
-                    TextFont { font_size: FontSize::Px(12.), ..default() },
-                    TextColor(AppColors::Grass.color().lighter(0.3)),
-                ))}
             ),
             (
                 ValidationText
@@ -262,11 +248,14 @@ pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
                 Text::new("")
                 TextFont { font_size: {FontSize::Px(14.)} }
             ),
+            // `margin-top: auto` rather than "last in the column": the way out of
+            // a screen should be in the same corner every time it is looked for,
+            // not wherever the track list happened to leave it.
             (
-                Node { margin: {UiRect::top(px(6))} }
+                Node { margin: {UiRect::top(Val::Auto)}, padding: {UiRect::top(px(6))} }
                 Children [
                     (
-                        text_button("BACK")
+                        text_button("EXIT")
                         on(|_: On<Pointer<Press>>,
                            editor: Res<EditorMap>,
                            mut status: ResMut<Status>,
@@ -277,7 +266,7 @@ pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
                             // second click instead.
                             if editor.dirty && !*confirmed {
                                 *confirmed = true;
-                                status.say("Unsaved. Press BACK again to discard.");
+                                status.say("Unsaved. Press EXIT again to discard.");
                                 return;
                             }
                             *confirmed = false;
@@ -285,6 +274,123 @@ pub(crate) fn spawn_panel(mut commands: Commands, editor: Res<EditorMap>) {
                         })
                     ),
                 ]
+            ),
+        ]
+    });
+}
+
+/// The mode, at the top of the screen where the eyes already are.
+///
+/// The full-width row is only there to centre the box; it is `Pickable::IGNORE`
+/// so that a strip of canvas across the top of the screen does not go dead. The
+/// two buttons inside it are not, because they are buttons.
+fn spawn_mode_bar(commands: &mut Commands) {
+    commands.spawn_scene(bsn! {
+        {insert(DespawnOnExit(Screen::Editor))}
+        Pickable::IGNORE
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(8),
+            left: px(0),
+            right: px(0),
+            justify_content: JustifyContent::Center,
+        }
+        Children [
+            (
+                Pickable::IGNORE
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    row_gap: px(4),
+                    padding: {UiRect::axes(px(10), px(6))},
+                }
+                BackgroundColor({AppColors::Dark.color()})
+                Children [
+                    (
+                        Pickable::IGNORE
+                        Node { column_gap: px(6) }
+                        Children [
+                            (
+                                small_button("EDIT")
+                                EditToolButton
+                                on(|_: On<Pointer<Press>>, mut tool: ResMut<Tool>, mut status: ResMut<Status>| {
+                                    *tool = Tool::Edit;
+                                    status.say("Editing the track.");
+                                })
+                            ),
+                            (
+                                small_button("ITEMS")
+                                ItemToolButton
+                                on(|_: On<Pointer<Press>>, mut tool: ResMut<Tool>, mut status: ResMut<Status>| {
+                                    *tool = Tool::Items;
+                                    status.say("Click the road to place an item box.");
+                                })
+                            ),
+                        ]
+                    ),
+                    (
+                        ToolText
+                        Pickable::IGNORE
+                        Text::new("")
+                        TextFont { font_size: {FontSize::Px(13.)} }
+                        TextColor({AppColors::Grass.color().lighter(0.3)})
+                    ),
+                ]
+            ),
+        ]
+    });
+}
+
+/// What the keys do, beside the hand that is on them.
+fn spawn_controls_panel(commands: &mut Commands) {
+    commands.spawn_scene(bsn! {
+        {insert(DespawnOnExit(Screen::Editor))}
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(8),
+            right: px(8),
+            // Wide enough that no line of the lists below wraps. A wrapped
+            // shortcut reads as two shortcuts.
+            width: px(268),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(4),
+            padding: {UiRect::axes(px(10), px(8))},
+        }
+        BackgroundColor({AppColors::Dark.color()})
+        Pickable
+        Children [
+            (
+                Text::new("CONTROLS")
+                TextFont { font_size: {FontSize::Px(16.)} }
+            ),
+            (
+                {insert((
+                    Text::new(""),
+                    ControlsText,
+                    TextFont { font_size: FontSize::Px(12.), ..default() },
+                    TextColor(AppColors::Grass.color().lighter(0.3)),
+                ))}
+            ),
+            (
+                Text::new("ANY MODE")
+                TextFont { font_size: {FontSize::Px(14.)} }
+                Node { margin: {UiRect::top(px(6))} }
+            ),
+            // Static: unlike the lines above, these do not depend on the mode,
+            // so nothing has to keep them up to date.
+            (
+                {insert((
+                    Text::new(concat!(
+                        "Tab: switch mode\n",
+                        "Ctrl-Z / Ctrl-Shift-Z: undo, redo\n",
+                        "F: frame the map\n",
+                        "Esc: clear the selection\n",
+                        "middle-drag: pan\n",
+                        "wheel: zoom",
+                    )),
+                    TextFont { font_size: FontSize::Px(12.), ..default() },
+                    TextColor(AppColors::Grass.color().lighter(0.3)),
+                ))}
             ),
         ]
     });
@@ -382,7 +488,10 @@ pub(crate) fn run_panel(
         // Say *which* width `[` and `]` would change: the selected node's, or the
         // map's default when nothing is selected. Showing only the default while
         // editing a node's own width is how you conclude the keys do nothing.
-        let width = match selection.node.and_then(|index| editor.data.nodes.get(index)) {
+        //
+        // And only that. The tool's name used to lead this line, which the two
+        // buttons directly above it now say by being lit and unlit.
+        let wanted = match selection.node.and_then(|index| editor.data.nodes.get(index)) {
             Some(node) => match node.half_width {
                 Some(own) => format!("node width {:.1}", scalar_to_world(own)),
                 None => format!(
@@ -395,7 +504,6 @@ pub(crate) fn run_panel(
                 scalar_to_world(editor.data.road.half_width)
             ),
         };
-        let wanted = format!("Tool: {}   (Tab)\n{width}", tool.label());
         if text.0 != wanted {
             *text = Text::new(wanted);
         }
@@ -405,14 +513,15 @@ pub(crate) fn run_panel(
         let wanted = match *tool {
             Tool::Edit => concat!(
                 "drag node / handle / width grip\n",
-                "right-click road: add node\n",
-                "Del: remove node\n",
-                "[ ]: width   Backspace: clear\n",
-                "Alt-drag handle: break mirror\n",
-                "Shift-drag node: snap to grid",
+                "right-click road: add a node\n",
+                "Del or X: remove the node\n",
+                "[ or ]: narrow or widen it\n",
+                "Backspace: width from the map\n",
+                "Alt-drag handle: break the mirror\n",
+                "Shift-drag node: snap to the grid",
             ),
             Tool::Items => concat!(
-                "click road: place item box\n",
+                "click road: place an item box\n",
                 "drag a box to move it\n",
                 "right-click a box: remove it",
             ),

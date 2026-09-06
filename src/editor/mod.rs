@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 
 use crate::track::map::build::{BuildLevel, BuiltTrack, build};
-use crate::track::map::builtin::default_map;
+use crate::track::map::starter::starter_map;
 use crate::track::map::data::MapData;
 use crate::track::map::file::PendingImport;
 use crate::{EditorState, Screen};
@@ -72,12 +72,11 @@ pub struct EditorMap {
 }
 
 impl EditorMap {
-    /// An empty-ish track to start from: the default map, renamed, so a new
-    /// track begins as something raceable rather than as three nodes in a line.
+    /// A track to start from: a small oval, raceable as it stands, simple enough
+    /// to read in one look and to be worth changing rather than deleting. See
+    /// [`starter_map`].
     pub fn fresh() -> Self {
-        let mut data = default_map();
-        data.name = "New Track".to_string();
-        Self::from_map(data, None)
+        Self::from_map(starter_map(), None)
     }
 
     pub fn from_loaded(data: MapData, source: Option<String>) -> Self {
@@ -210,18 +209,21 @@ fn enter_editor(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     existing: Option<Res<EditorMap>>,
-    selected: Option<Res<crate::track::SelectedMap>>,
     mut camera: Query<(&mut Transform, &mut Projection), With<crate::camera::MainCamera>>,
 ) {
-    // Whatever was being edited, if the editor is being re-entered; otherwise the
-    // map that was about to be raced, so opening the editor from the menu starts
-    // on the track the player was just looking at rather than always on the
-    // default one.
-    let map = existing
-        .map(|editor| editor.data.clone())
-        .or_else(|| selected.map(|selected| selected.0.clone()))
-        .unwrap_or_else(default_map);
-    let editor = EditorMap::from_map(map, None);
+    // Whatever was being edited, if the editor is being re-entered; otherwise a
+    // new track. It used to open on the map that was about to be raced, which
+    // meant the editor's front door was somebody else's forty-eight-node circuit
+    // and a first edit began by deleting it. The track list in the panel is how
+    // you reach an existing map -- including that one.
+    //
+    // The storage id comes back across too, so leaving the editor and returning
+    // still knows which saved map is being edited and SAVE still overwrites it
+    // rather than making a second copy.
+    let (map, source) = existing
+        .map(|editor| (editor.data.clone(), editor.source.clone()))
+        .unwrap_or_else(|| (starter_map(), None));
+    let editor = EditorMap::from_map(map, source);
 
     let mesh = meshes.add(crate::track::map::mesh::road_mesh(&editor.built));
     commands.spawn((

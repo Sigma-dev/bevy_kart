@@ -153,6 +153,26 @@ pub(crate) fn spawn_menu(
                     ),
                 ]
             ),
+            // The way into the editor. Its own corner rather than the middle
+            // column, which is sized for exactly the two buttons it has; but
+            // still tagged `MenuControls`, so `show_joining_controls` hides it
+            // while a session is opening and it cannot be pressed mid-connect.
+            (
+                MenuControls
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: px(15),
+                    left: px(15),
+                }
+                Children [
+                    (
+                        {crate::menu::widgets::text_button("TRACK EDITOR")}
+                        on(|_: On<Pointer<Press>>, mut next: ResMut<NextState<crate::EditorState>>| {
+                            next.set(crate::EditorState::Open);
+                        })
+                    ),
+                ]
+            ),
             // Name label + editable name field.
             (
                 MenuControls
@@ -288,15 +308,14 @@ fn handle_spawning_menu_cars(
     mut spawners: Query<(&Transform, &mut MenuCarSpawner)>,
 ) {
     for (transform, mut spawner) in spawners.iter_mut() {
-        if let Some(next_spawn) = spawner.next_spawn {
-            if time.elapsed_secs() > next_spawn {
+        if let Some(next_spawn) = spawner.next_spawn
+            && time.elapsed_secs() > next_spawn {
                 commands.run_system_cached_with(
                     spawn_kart,
-                    (KartControlType::AutoCar, transform.clone()),
+                    (KartControlType::AutoCar, *transform),
                 );
                 spawner.next_spawn = None;
             }
-        }
         if spawner.next_spawn.is_none() {
             spawner.next_spawn = Some(time.elapsed_secs() + rand::rng().random_range(1.0..5.0));
         }

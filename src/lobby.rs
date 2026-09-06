@@ -86,6 +86,7 @@ fn extract_query_param(target: &str) -> Option<String> {
 /// | `?name=NAME` | `KART_NAME=NAME` | the name this peer plays under |
 /// | `?autodrive=1` | `KART_AUTODRIVE=1` | hold the throttle and weave |
 /// | `?map=SLUG` | `KART_MAP=SLUG` | race that built-in map |
+/// | `?editor=1` | `KART_EDITOR=1` | open the track editor |
 /// | `?perf=1` | `KART_PERF=1` | log the frame-cost readout |
 ///
 /// `KART_AUTOSTART=host` on its own starts the race at two players, which is
@@ -110,6 +111,8 @@ pub struct SessionParams {
     /// Which built-in map to race, by slug. An unknown one warns and falls back,
     /// because a typo in a launch flag should not be the end of the session.
     pub map: Option<String>,
+    /// Open the track editor instead of the menu.
+    pub editor: bool,
 }
 
 impl SessionParams {
@@ -141,12 +144,14 @@ impl SessionParams {
             autodrive: flag("autodrive", "KART_AUTODRIVE"),
             perf: flag("perf", "KART_PERF"),
             map: get("map", "KART_MAP"),
+            editor: flag("editor", "KART_EDITOR"),
         }
     }
 }
 
 fn apply_session_params(
     mut commands: Commands,
+    mut editor_state: ResMut<NextState<crate::EditorState>>,
     mut local_data: ResMut<LocalPlayerData>,
     mut selected_map: ResMut<crate::track::SelectedMap>,
     mut join_by_code: MessageWriter<JoinWebrtcLobbyByCode>,
@@ -172,6 +177,9 @@ fn apply_session_params(
             // reason to refuse to start.
             None => warn!("no built-in map called `{slug}`; keeping the default"),
         }
+    }
+    if params.editor {
+        editor_state.set(crate::EditorState::Open);
     }
     if params.host {
         start_hosting.write(StartHosting);

@@ -195,6 +195,8 @@ fn main() {
         .init_state::<LobbyState>()
         .init_state::<EditorState>()
         .init_resource::<track::SelectedMap>()
+        .init_resource::<menu::map_picker::ListedTracks>()
+        .init_resource::<menu::map_picker::PreviewOutline>()
         // `Screen` is the cross-product of the three above, named. Everything that
         // used to test two states at once tests this instead.
         .add_computed_state::<Screen>()

@@ -7,6 +7,7 @@ use crate::scene_util::insert;
 pub struct MenuPlugin;
 
 pub mod lobby;
+pub mod map_picker;
 pub mod start;
 pub(crate) mod widgets;
 

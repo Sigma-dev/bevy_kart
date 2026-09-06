@@ -1,7 +1,6 @@
 use crate::kart::{KART_SIZE, KartControlType, spawn_kart};
 use crate::menu::animated_button;
 use crate::decor::BackgroundElement;
-use crate::menu::widgets::text_button;
 use crate::scene_util::insert;
 use crate::{
     AppColors, AppPlayerData, AppState, AssetHandles, ChatMessage, FinishTimes, RESOLUTION,
@@ -66,7 +65,10 @@ impl Plugin for LobbyPlugin {
                         on_chat_submit,
                         update_lobby_cars,
                         receive_ping,
-                        show_selected_map,
+                        crate::menu::map_picker::show_selected_name,
+                        crate::menu::map_picker::refresh_track_list,
+                        crate::menu::map_picker::refresh_preview,
+                        crate::menu::map_picker::draw_preview,
                     )
                         .run_if(in_state(Screen::Lobby)),
                     on_lobby_exit,
@@ -111,10 +113,6 @@ struct LobbyPlayersButtons;
 #[derive(Component)]
 struct ScrollingBackground;
 
-/// Shows the name of the map the race will use.
-#[derive(Component, Default, Clone)]
-#[require(Text)]
-struct SelectedMapText;
 
 #[derive(Component)]
 pub struct LobbyCar(pub u128);
@@ -398,54 +396,8 @@ pub fn spawn_lobby(
         })
         .id();
 
-    // Which map the race will use. Everyone sees the name; only the host can
-    // change it, because only the host's choice is the one that travels.
-    let map_panel = commands
-        .spawn_scene(bsn! {
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(50),
-                right: px(5),
-                width: px(280),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(6),
-                align_items: AlignItems::FlexEnd,
-            }
-            Children [
-                (
-                    Text::new("MAP")
-                    TextFont { font_size: {FontSize::Px(20.)} }
-                ),
-                (
-                    Text::new("")
-                    TextFont { font_size: {FontSize::Px(26.)} }
-                    SelectedMapText
-                ),
-            ]
-        })
-        .id();
-    if is_host {
-        commands
-            .spawn_scene(bsn! {
-                text_button("NEXT MAP")
-                on(|_: On<Pointer<Press>>, mut selected: ResMut<crate::track::SelectedMap>| {
-                    // Cycles the built-ins. A placeholder for the real picker,
-                    // but enough to prove a map the clients never chose reaches
-                    // them and is what everybody races.
-                    let names: Vec<String> = crate::track::map::BUILTINS
-                        .iter()
-                        .map(|builtin| builtin.load().name)
-                        .collect();
-                    let next = names
-                        .iter()
-                        .position(|name| *name == selected.0.name)
-                        .map(|index| (index + 1) % names.len())
-                        .unwrap_or(0);
-                    selected.0 = crate::track::map::BUILTINS[next].load();
-                })
-            })
-            .insert(ChildOf(map_panel));
-    }
+    // Which track the race will use. Host picks; everybody sees.
+    let map_panel = crate::menu::map_picker::spawn_picker(&mut commands, is_host);
 
     let players_buttons = commands
         .spawn_scene(bsn! {
@@ -540,22 +492,6 @@ fn handle_background_elements(
             Visibility::Visible
         } else {
             Visibility::Hidden
-        }
-    }
-}
-
-/// Keep the lobby's map name in step with the selection.
-///
-/// Reads the same resource on the host and on a client: the host writes it from
-/// the picker, and a client has it written by `map_sync` when the host's choice
-/// arrives. Neither knows which it is.
-fn show_selected_map(
-    selected: Res<crate::track::SelectedMap>,
-    mut texts: Query<&mut Text, With<SelectedMapText>>,
-) {
-    for mut text in texts.iter_mut() {
-        if text.0 != selected.0.name {
-            *text = Text::new(selected.0.name.clone());
         }
     }
 }

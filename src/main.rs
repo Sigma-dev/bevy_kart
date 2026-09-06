@@ -217,12 +217,20 @@ fn main() {
                 camera::set_camera_bounds,
                 spawn_map,
                 spawn_starting_grid,
+                track::minimap::spawn_minimap,
                 hud::spawn_race_hud,
                 start_countdown,
             )
                 .chain(),
         )
-        .add_systems(Update, map_sync::bail_out_of_a_race_with_no_track)
+        .add_systems(
+            Update,
+            (
+                map_sync::bail_out_of_a_race_with_no_track,
+                track::minimap::track_minimap_viewport,
+                track::minimap::spawn_minimap_blips,
+            ),
+        )
         // Self-clearing, so leaving the editor by any route -- the back button, or
         // a lobby appearing underneath it -- cannot bounce straight back in.
         .add_systems(

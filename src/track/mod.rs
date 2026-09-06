@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod grid;
 pub mod map;
+pub mod minimap;
 pub(crate) mod position;
 pub mod spawn;
 

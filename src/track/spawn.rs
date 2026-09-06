@@ -8,6 +8,7 @@
 //! the order it is given it.
 
 use avian2d::prelude::*;
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
 use crate::items::spawn_spawner;
@@ -46,6 +47,9 @@ pub(crate) fn spawn_map(
         Mesh2d(meshes.add(road_mesh(&built))),
         MeshMaterial2d(vertex_coloured.clone()),
         Transform::from_xyz(0., 0., SpriteLayers::Background.to_z()),
+        // The one entity the minimap shares with the main view, so the map in
+        // the corner is the road being raced rather than a copy of it.
+        RenderLayers::from_layers(&[0, crate::track::minimap::MINIMAP_LAYER]),
     ));
     commands.spawn((
         DespawnOnExit(AppState::Game),

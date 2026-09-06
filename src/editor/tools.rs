@@ -2,11 +2,11 @@
 //!
 //! Hit-testing is done by hand rather than through a picking backend, for four
 //! reasons that all point the same way. The editor zooms from a quarter to four
-//! times, and a hit radius has to stay constant in *screen pixels* -- a backend
+//! times and a grab radius has to stay constant in *screen pixels* -- a backend
 //! tests world-space bounds, so a fixed-size handle becomes a one-pixel target
 //! exactly when you are zoomed out and want to grab it. Handles are gizmos, and
-//! gizmos cannot be picked at all. The priority we want is handle over node over
-//! start line over item box, with nearest-within-radius as the tie-break, where a
+//! gizmos cannot be picked at all. The priority wanted is handle over node over
+//! start line over item box with nearest-within-radius as the tie-break, where a
 //! backend gives a depth-sorted list. And inserting a node is a "closest point on
 //! the curve" query anyway, which is most of a hit test already.
 
@@ -37,15 +37,22 @@ const MIN_ZOOM: f32 = 0.25;
 const MAX_ZOOM: f32 = 4.0;
 
 /// What the pointer is currently moving.
+///
+/// Every variant that moves something carries the offset between the thing and
+/// the cursor at the moment it was grabbed. Without it, picking a node up puts
+/// it exactly under the cursor -- so the first pixel of every drag teleports it,
+/// and nudging a node by two units means clicking it precisely and not moving.
 #[derive(Resource, Default, Clone, Copy, PartialEq)]
 pub enum Drag {
     #[default]
     None,
-    Node(usize),
-    HandleIn(usize),
-    HandleOut(usize),
-    StartLine,
-    ItemBox(usize),
+    Node(usize, Vec2),
+    HandleIn(usize, Vec2),
+    HandleOut(usize, Vec2),
+    /// A road-edge handle: which node, which side, and the offset.
+    Width(usize, f32, Vec2),
+    StartLine(Vec2),
+    ItemBox(usize, Vec2),
     /// Panning: the world point that was under the cursor when it was grabbed,
     /// which is the point that has to stay there.
     Pan(Vec2),
@@ -63,11 +70,12 @@ pub struct Selection {
 }
 
 /// The kinds of thing the overlay highlights on hover.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Hovered {
     Node(usize),
     HandleIn(usize),
     HandleOut(usize),
+    Width(usize, f32),
     StartLine,
     ItemBox(usize),
 }
@@ -78,8 +86,41 @@ enum Grab {
     Node(usize),
     HandleIn(usize),
     HandleOut(usize),
+    /// Which node, and which side of the road: +1 left of travel, -1 right.
+    Width(usize, f32),
     StartLine,
     ItemBox(usize),
+}
+
+/// The direction the road runs at a node, and the normal across it.
+///
+/// Taken from the node's own handles where it has them, so it matches the curve
+/// the road is actually built from, and from the neighbours otherwise.
+pub fn node_frame(editor: &EditorMap, index: usize) -> (Vec2, Vec2) {
+    let map = &editor.data;
+    let count = map.nodes.len();
+    let node = map.nodes[index];
+    let out = to_world(node.out_handle);
+    let into = -to_world(node.in_handle);
+    let mut tangent = out + into;
+    if tangent.length_squared() < 1e-6 {
+        let next = to_world(map.nodes[(index + 1) % count].position);
+        let previous = to_world(map.nodes[(index + count - 1) % count].position);
+        tangent = next - previous;
+    }
+    let tangent = tangent.normalize_or_zero();
+    (tangent, Vec2::new(-tangent.y, tangent.x))
+}
+
+/// Where the two road-edge handles for a node sit.
+pub fn width_handles(editor: &EditorMap, index: usize) -> [(Vec2, f32); 2] {
+    let position = to_world(editor.data.nodes[index].position);
+    let (_, normal) = node_frame(editor, index);
+    let half = editor.data.node_half_width(index);
+    [
+        (position + normal * half, 1.0),
+        (position - normal * half, -1.0),
+    ]
 }
 
 /// The node whose handles are shown, and therefore the only ones grabbable.
@@ -94,10 +135,13 @@ pub fn focus_node(editor: &EditorMap, at: Vec2, reach: f32) -> Option<usize> {
     let mut best: Option<(f32, usize)> = None;
     for (index, node) in editor.data.nodes.iter().enumerate() {
         let position = to_world(node.position);
-        let distance = at
+        let mut distance = at
             .distance(position)
             .min(at.distance(position + to_world(node.in_handle)))
             .min(at.distance(position + to_world(node.out_handle)));
+        for (edge, _) in width_handles(editor, index) {
+            distance = distance.min(at.distance(edge));
+        }
         if distance <= reach && best.is_none_or(|(d, _)| distance < d) {
             best = Some((distance, index));
         }
@@ -105,7 +149,13 @@ pub fn focus_node(editor: &EditorMap, at: Vec2, reach: f32) -> Option<usize> {
     best.map(|(_, index)| index)
 }
 
-fn find_grab(editor: &EditorMap, at: Vec2, radius: f32, focus: Option<usize>) -> Option<Grab> {
+fn find_grab(
+    editor: &EditorMap,
+    at: Vec2,
+    radius: f32,
+    focus: Option<usize>,
+    tool: Tool,
+) -> Option<Grab> {
     let map = &editor.data;
     let mut best: Option<(f32, Grab)> = None;
     let mut consider = |distance: f32, grab: Grab| {
@@ -113,6 +163,14 @@ fn find_grab(editor: &EditorMap, at: Vec2, radius: f32, focus: Option<usize>) ->
             best = Some((distance, grab));
         }
     };
+
+    // Item boxes are grabbable in both tools; everything else belongs to Edit.
+    for (index, position) in editor.built.item_boxes.iter().enumerate() {
+        consider(at.distance(*position), Grab::ItemBox(index));
+    }
+    if tool == Tool::Items {
+        return best.map(|(_, grab)| grab);
+    }
 
     // The focused node's handles, and only that node's: any more and a cluster of
     // nodes becomes a cloud of indistinguishable dots.
@@ -127,15 +185,15 @@ fn find_grab(editor: &EditorMap, at: Vec2, radius: f32, focus: Option<usize>) ->
             at.distance(position + to_world(node.out_handle)),
             Grab::HandleOut(index),
         );
+        for (edge, side) in width_handles(editor, index) {
+            consider(at.distance(edge), Grab::Width(index, side));
+        }
     }
     for (index, node) in map.nodes.iter().enumerate() {
         consider(at.distance(to_world(node.position)), Grab::Node(index));
     }
     if let Some(start) = editor.built.centre.first() {
         consider(at.distance(start.position), Grab::StartLine);
-    }
-    for (index, position) in editor.built.item_boxes.iter().enumerate() {
-        consider(at.distance(*position), Grab::ItemBox(index));
     }
     best.map(|(_, grab)| grab)
 }
@@ -213,7 +271,7 @@ pub fn handle_pointer(
     let radius = GRAB_PX * cursor.world_per_px;
 
     // The node the overlay shows handles for, recomputed every frame.
-    selection.focus = if cursor.over_ui {
+    selection.focus = if cursor.over_ui || *tool == Tool::Items {
         None
     } else {
         focus_node(&editor, at, FOCUS_PX * cursor.world_per_px)
@@ -224,16 +282,17 @@ pub fn handle_pointer(
     selection.hovered = if cursor.over_ui {
         None
     } else {
-        find_grab(&editor, at, radius, focus).map(|grab| match grab {
+        find_grab(&editor, at, radius, focus, *tool).map(|grab| match grab {
             Grab::Node(i) => Hovered::Node(i),
             Grab::HandleIn(i) => Hovered::HandleIn(i),
             Grab::HandleOut(i) => Hovered::HandleOut(i),
+            Grab::Width(i, side) => Hovered::Width(i, side),
             Grab::StartLine => Hovered::StartLine,
             Grab::ItemBox(i) => Hovered::ItemBox(i),
         })
     };
 
-    if buttons.just_released(MouseButton::Left) {
+    if buttons.just_released(MouseButton::Left) || buttons.just_released(MouseButton::Middle) {
         *drag = Drag::None;
     }
 
@@ -247,8 +306,9 @@ pub fn handle_pointer(
     if buttons.just_pressed(MouseButton::Middle) && !cursor.over_ui {
         *drag = Drag::Pan(at);
     }
+
     if buttons.just_pressed(MouseButton::Left) && !cursor.over_ui {
-        let grabbed = find_grab(&editor, at, radius, focus);
+        let grabbed = find_grab(&editor, at, radius, focus, *tool);
         // One undo step per drag, taken as it starts. The drag itself writes the
         // map every frame it moves and records none of them.
         if grabbed.is_some() {
@@ -257,20 +317,42 @@ pub fn handle_pointer(
         match grabbed {
             Some(Grab::Node(index)) => {
                 selection.node = Some(index);
-                *drag = Drag::Node(index);
+                let offset = to_world(editor.data.nodes[index].position) - at;
+                *drag = Drag::Node(index, offset);
             }
-            Some(Grab::HandleIn(index)) => *drag = Drag::HandleIn(index),
-            Some(Grab::HandleOut(index)) => *drag = Drag::HandleOut(index),
-            Some(Grab::StartLine) => *drag = Drag::StartLine,
+            Some(Grab::HandleIn(index)) => {
+                let node = editor.data.nodes[index];
+                let tip = to_world(node.position) + to_world(node.in_handle);
+                *drag = Drag::HandleIn(index, tip - at);
+            }
+            Some(Grab::HandleOut(index)) => {
+                let node = editor.data.nodes[index];
+                let tip = to_world(node.position) + to_world(node.out_handle);
+                *drag = Drag::HandleOut(index, tip - at);
+            }
+            Some(Grab::Width(index, side)) => {
+                selection.node = Some(index);
+                let edge = width_handles(&editor, index)
+                    .into_iter()
+                    .find(|(_, s)| *s == side)
+                    .map(|(point, _)| point)
+                    .unwrap_or(at);
+                *drag = Drag::Width(index, side, edge - at);
+            }
+            Some(Grab::StartLine) => {
+                let start = editor.built.start_pose.position;
+                *drag = Drag::StartLine(start - at);
+            }
             Some(Grab::ItemBox(index)) => {
                 selection.item_box = Some(index);
-                *drag = Drag::ItemBox(index);
+                let offset = editor.built.item_boxes[index] - at;
+                *drag = Drag::ItemBox(index, offset);
             }
             None => match *tool {
                 // In item mode a click on empty road drops a box; otherwise the
                 // most common gesture on empty space is to pan, so that is what
                 // it does.
-                Tool::ItemBoxes => {
+                Tool::Items => {
                     if let Some((anchor, distance)) = nearest_anchor(&editor, at) {
                         if distance < road_reach(&editor) {
                             editor.edit(&mut history, |map| map.item_boxes.push(anchor));
@@ -283,14 +365,14 @@ pub fn handle_pointer(
                 // Deliberately keeps the selection: nudging the view should not
                 // throw away the node whose handles you were about to grab.
                 // Escape clears it, and clicking another node replaces it.
-                _ => *drag = Drag::Pan(at),
+                Tool::Edit => *drag = Drag::Pan(at),
             },
         }
     }
 
     // Right-click: insert a node on the road, or remove an item box.
     if buttons.just_pressed(MouseButton::Right) && !cursor.over_ui {
-        match find_grab(&editor, at, radius, focus) {
+        match find_grab(&editor, at, radius, focus, *tool) {
             Some(Grab::ItemBox(index)) => {
                 editor.edit(&mut history, |map| {
                     map.item_boxes.remove(index);
@@ -298,14 +380,16 @@ pub fn handle_pointer(
                 selection.item_box = None;
                 status.say("Item box removed.");
             }
-            _ => {
+            _ if *tool == Tool::Edit => {
                 if let Some((anchor, distance)) = nearest_anchor(&editor, at)
-                    && distance < road_reach(&editor) {
-                        insert_node(&mut editor, &mut history, anchor);
-                        selection.node = Some(anchor.segment as usize + 1);
-                        status.say("Node inserted.");
-                    }
+                    && distance < road_reach(&editor)
+                {
+                    insert_node(&mut editor, &mut history, anchor);
+                    selection.node = Some(anchor.segment as usize + 1);
+                    status.say("Node inserted.");
+                }
             }
+            _ => {}
         }
     }
 
@@ -319,39 +403,52 @@ pub fn handle_pointer(
     let snap = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     let break_mirror = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
     match *drag {
-        Drag::Node(index) => {
-            let target = if snap { at.round() } else { at };
+        Drag::Node(index, offset) => {
+            let moved = at + offset;
+            let target = if snap { moved.round() } else { moved };
             editor.edit_in_progress(|map| {
                 if let Some(node) = map.nodes.get_mut(index) {
                     node.position = to_map(target);
                 }
             });
         }
-        Drag::HandleIn(index) | Drag::HandleOut(index) => {
-            let outgoing = matches!(*drag, Drag::HandleOut(index2) if index2 == index);
+        Drag::HandleIn(index, offset) | Drag::HandleOut(index, offset) => {
+            let outgoing = matches!(*drag, Drag::HandleOut(i, _) if i == index);
+            let tip = at + offset;
             editor.edit_in_progress(|map| {
                 let Some(node) = map.nodes.get_mut(index) else {
                     return;
                 };
-                let offset = at - to_world(node.position);
+                let handle = tip - to_world(node.position);
                 if break_mirror {
                     node.mirrored = false;
                 }
                 if outgoing {
-                    node.out_handle = to_map(offset);
+                    node.out_handle = to_map(handle);
                     if node.mirrored {
-                        node.in_handle = to_map(mirror(offset, to_world(node.in_handle)));
+                        node.in_handle = to_map(mirror(handle, to_world(node.in_handle)));
                     }
                 } else {
-                    node.in_handle = to_map(offset);
+                    node.in_handle = to_map(handle);
                     if node.mirrored {
-                        node.out_handle = to_map(mirror(offset, to_world(node.out_handle)));
+                        node.out_handle = to_map(mirror(handle, to_world(node.out_handle)));
                     }
                 }
             });
         }
-        Drag::StartLine => {
-            if let Some((anchor, _)) = nearest_anchor(&editor, at) {
+        Drag::Width(index, side, offset) => {
+            // How far the dragged edge now sits from the node, measured across
+            // the road rather than as a straight distance -- so sliding along the
+            // road does not change the width.
+            let (_, normal) = node_frame(&editor, index);
+            let across = ((at + offset) - to_world(editor.data.nodes[index].position)).dot(normal);
+            let half = (across * side).max(0.5);
+            editor.edit_in_progress(|map| {
+                map.nodes[index].half_width = Some(scalar_to_map(half));
+            });
+        }
+        Drag::StartLine(offset) => {
+            if let Some((anchor, _)) = nearest_anchor(&editor, at + offset) {
                 editor.edit_in_progress(|map| {
                     // The line spans the road, so only where it sits along the
                     // lap is editable -- never how far across.
@@ -359,8 +456,8 @@ pub fn handle_pointer(
                 });
             }
         }
-        Drag::ItemBox(index) => {
-            if let Some((anchor, _)) = nearest_anchor(&editor, at) {
+        Drag::ItemBox(index, offset) => {
+            if let Some((anchor, _)) = nearest_anchor(&editor, at + offset) {
                 editor.edit_in_progress(|map| {
                     if let Some(slot) = map.item_boxes.get_mut(index) {
                         *slot = anchor;
@@ -493,7 +590,9 @@ pub fn handle_keys(
     }
 
     if (keys.just_pressed(KeyCode::Delete) || keys.just_pressed(KeyCode::KeyX))
-        && let Some(index) = selection.node {
+        && let Some(index) = selection.node
+    {
+        {
             if editor.data.nodes.len() <= MIN_NODES {
                 status.say(format!("A track needs at least {MIN_NODES} nodes."));
             } else {
@@ -505,6 +604,7 @@ pub fn handle_keys(
                 status.say("Node removed.");
             }
         }
+    }
 
     // Width: the selected node's, or the map's default when nothing is selected.
     let widen = keys.just_pressed(KeyCode::BracketRight);
@@ -536,16 +636,18 @@ pub fn handle_keys(
 
     // Backspace clears a node's own width, handing it back to the map default.
     if keys.just_pressed(KeyCode::Backspace)
-        && let Some(index) = selection.node {
-            editor.edit(&mut history, |map| map.nodes[index].half_width = None);
-            status.say("Node width follows the map again.");
-        }
+        && let Some(index) = selection.node
+    {
+        editor.edit(&mut history, |map| map.nodes[index].half_width = None);
+        status.say("Node width follows the map again.");
+    }
 
     if keys.just_pressed(KeyCode::KeyF)
-        && let Ok((mut transform, mut projection)) = camera.single_mut() {
-            frame_map(&editor, &mut transform, &mut projection);
-            status.say("Framed the map.");
-        }
+        && let Ok((mut transform, mut projection)) = camera.single_mut()
+    {
+        frame_map(&editor, &mut transform, &mut projection);
+        status.say("Framed the map.");
+    }
 
     // Escape clears the selection and nothing else. It used to leave the editor
     // once nothing was selected, which put "discard my unsaved track" one stray
@@ -589,20 +691,21 @@ pub fn pan_and_zoom(
         transform.translation.y -= delta.y;
     }
 
-    if scroll.delta.y != 0.0 && !cursor.over_ui
-        && let Projection::Orthographic(orthographic) = projection.as_mut() {
-            let before = at;
-            orthographic.scale =
-                (orthographic.scale * 1.1f32.powf(-scroll.delta.y)).clamp(MIN_ZOOM, MAX_ZOOM);
-            // Correct the translation so the world point under the cursor is the
-            // one still under it after the zoom.
-            let ratio = 1.1f32.powf(-scroll.delta.y);
-            let centre = transform.translation.truncate();
-            let after = centre + (before - centre) * ratio;
-            let correction = before - after;
-            transform.translation.x += correction.x;
-            transform.translation.y += correction.y;
-        }
+    if scroll.delta.y != 0.0
+        && !cursor.over_ui
+        && let Projection::Orthographic(orthographic) = projection.as_mut()
+    {
+        let before = at;
+        let ratio = 1.1f32.powf(-scroll.delta.y);
+        orthographic.scale = (orthographic.scale * ratio).clamp(MIN_ZOOM, MAX_ZOOM);
+        // Correct the translation so the world point under the cursor is the
+        // one still under it after the zoom.
+        let centre = transform.translation.truncate();
+        let after = centre + (before - centre) * ratio;
+        let correction = before - after;
+        transform.translation.x += correction.x;
+        transform.translation.y += correction.y;
+    }
 }
 
 #[cfg(test)]
@@ -735,6 +838,93 @@ mod tests {
 
         editor.edit(&mut history, |map| map.name = "Other".into());
         assert!(history.redo(&editor.data).is_none());
+    }
+
+    /// The protocol a drag follows: record once as it starts, then write the map
+    /// on every frame it moves without recording any of those.
+    ///
+    /// Recording each frame is what it used to do, and it filled a sixty-four
+    /// deep history in about a second -- so undo meant "a moment ago" rather than
+    /// "before that drag", which is the only thing anybody wants it to mean.
+    #[test]
+    fn a_drag_is_one_undo_step_however_far_it_moves() {
+        let mut editor = editor_for(circle(80.0, 11.0));
+        let mut history = History::default();
+        let before = to_world(editor.data.nodes[1].position);
+
+        // Grab.
+        history.push(editor.data.clone());
+        // Sixty frames of movement.
+        for frame in 0..60 {
+            let moved = before + Vec2::new(frame as f32 * 0.5, 0.0);
+            editor.edit_in_progress(|map| map.nodes[1].position = to_map(moved));
+        }
+        assert_eq!(history.past.len(), 1, "a drag is one step, not sixty");
+        assert!(editor.dirty);
+
+        let current = editor.data.clone();
+        editor.data = history.undo(&current).unwrap();
+        assert_eq!(
+            to_world(editor.data.nodes[1].position),
+            before,
+            "undo goes back to before the drag, not to part-way through it"
+        );
+    }
+
+    /// Width is dragged on the road edge, and the edge has to be where the road
+    /// actually is or the grip sits in the grass.
+    #[test]
+    fn the_width_grips_sit_on_the_road_edges() {
+        let mut map = circle(80.0, 11.0);
+        map.nodes[2].half_width = Some(scalar_to_map(6.0));
+        let editor = editor_for(map);
+        for index in 0..editor.data.nodes.len() {
+            let centre = to_world(editor.data.nodes[index].position);
+            let half = editor.data.node_half_width(index);
+            let [(left, left_side), (right, right_side)] = width_handles(&editor, index);
+            assert_eq!((left_side, right_side), (1.0, -1.0));
+            assert!(
+                (centre.distance(left) - half).abs() < 1e-3,
+                "node {index}: grip is {} from the centre, half-width is {half}",
+                centre.distance(left)
+            );
+            assert!((centre.distance(right) - half).abs() < 1e-3);
+            // And on opposite sides of it.
+            assert!((left - centre).dot(right - centre) < 0.0);
+        }
+    }
+
+    /// The two tools have to differ, or the selector is decoration. They did not:
+    /// of the three there used to be, two behaved identically.
+    #[test]
+    fn the_tools_grab_different_things() {
+        let mut map = circle(80.0, 11.0);
+        // Well away from node 0, or the two are the same point and the test is
+        // asking which of two things at one place is nearest.
+        map.item_boxes = vec![TrackAnchor::new(2, 0.5, 0)];
+        let editor = editor_for(map);
+        let node = to_world(editor.data.nodes[0].position);
+
+        // A node is grabbable while editing the track, and not while placing items.
+        assert!(matches!(
+            find_grab(&editor, node, 2.0, Some(0), Tool::Edit),
+            Some(Grab::Node(0) | Grab::HandleIn(0) | Grab::HandleOut(0) | Grab::Width(0, _))
+        ));
+        assert!(
+            find_grab(&editor, node, 2.0, Some(0), Tool::Items).is_none(),
+            "the track is left alone in Items, so a click cannot move it by accident"
+        );
+
+        // An item box is grabbable in both.
+        let box_at = editor.built.item_boxes[0];
+        assert!(matches!(
+            find_grab(&editor, box_at, 2.0, None, Tool::Items),
+            Some(Grab::ItemBox(0))
+        ));
+        assert!(matches!(
+            find_grab(&editor, box_at, 2.0, None, Tool::Edit),
+            Some(Grab::ItemBox(0))
+        ));
     }
 
     #[test]

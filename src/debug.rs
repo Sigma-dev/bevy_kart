@@ -192,7 +192,13 @@ fn update_fps(time: Res<Time>, mut texts: Query<(&mut Text, &mut FpsText)>) {
     }
 }
 
-/// Show the adaptive prediction lead in the F3 net-debug overlay (clients only).
+/// Show the adaptive replay distance in the F3 net-debug overlay (clients only).
+///
+/// Not the prediction lead, which this used to claim: a snapshot is one one-way
+/// trip old when it is read, so the lead is this minus that. What actually
+/// matters is `target_margin`, the ticks of headroom the client is trying to
+/// leave for an unlucky packet, which the transport now sizes from measured
+/// jitter -- so show that next to the jitter it was sized from.
 fn report_tick_buffer(
     buffer: Option<Res<ClientTickBuffer>>,
     dilation: Option<Res<TickRateDilation>>,
@@ -220,8 +226,8 @@ fn report_tick_buffer(
             extras.set(
                 "prediction",
                 format!(
-                    "prediction lead: {} ticks ({ping:.0}ms ping, \u{b1}{jitter:.0}ms jitter, {drift:+.1}% rate)",
-                    buffer.target_ticks
+                    "replay: {} ticks, margin {} ({ping:.0}ms ping, \u{b1}{jitter:.0}ms jitter, {drift:+.1}% rate)",
+                    buffer.target_replay_distance, buffer.target_margin
                 ),
             );
         }

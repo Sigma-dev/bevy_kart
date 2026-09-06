@@ -271,6 +271,19 @@ fn on_tracked_entity_spawned(
                     .with_spatial(SpatialSettings2D::Entity(entity)),
             );
         }
+        EntityKind::Mine => {
+            commands.entity(entity).insert((
+                DespawnOnExit(AppState::Game),
+                // Above the track image, which sits at z = 0, and below the
+                // karts, so one drives over the mine rather than under it.
+                Transform::from_xyz(pos.x, pos.y, SpriteLayers::OnTrack.to_z()),
+                Sprite::from_image(asset_handles.mine_texture.clone()),
+                // The marker `trigger_mines` keys on. The host spawns it with
+                // the mine; a client only ever sees `EntityKind`.
+                items::Mine::default(),
+                NetworkedVisual::default(),
+            ));
+        }
         EntityKind::Explosion => {
             audio_manager
                 .play_sound(PlayAudio2D::new_once("sounds/explosion.wav").with_volume(0.3));
@@ -279,7 +292,7 @@ fn on_tracked_entity_spawned(
                 .insert((
                     Transform::from_xyz(pos.x, pos.y, SpriteLayers::AboveCar.to_z()),
                     NetworkedVisual::default(),
-                    Mesh2d(meshes.add(Circle::new(items::ROCKET_EXPLOSION_RADIUS))),
+                    Mesh2d(meshes.add(Circle::new(items::EXPLOSION_RADIUS))),
                     MeshMaterial2d(materials.add(Color::WHITE)),
                     GameTimer::new_running().with_target_duration(0.1),
                 ))

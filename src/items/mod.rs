@@ -10,7 +10,7 @@ use crate::{
     car_controller_2d::{BoostEffect, CarController2d},
 };
 
-pub const ROCKET_EXPLOSION_RADIUS: f32 = 12.;
+pub const EXPLOSION_RADIUS: f32 = 12.;
 const BOOST_DURATION_TICKS: u64 = TICKS_PER_SECOND as u64;
 const ITEM_RESPAWN_TICKS: u64 = TICKS_PER_SECOND as u64; // 1 second
 
@@ -27,6 +27,7 @@ impl Plugin for ItemsPlugin {
                     move_rocket,
                     detect_rocket_hits,
                     resolve_rocket_hits,
+                    trigger_mines,
                 )
                     .chain(),
             )
@@ -41,11 +42,16 @@ impl Plugin for ItemsPlugin {
 pub enum ItemType {
     Boost,
     Rocket,
+    Mine,
 }
 
 impl ItemType {
+    /// Icons across `sprites/items.png`, in [`ItemType::to_index`] order. One
+    /// per variant, so the HUD atlas is as wide as this enum.
+    pub const ICON_COUNT: u32 = 3;
+
     fn possible_items() -> Vec<ItemType> {
-        vec![ItemType::Boost, ItemType::Rocket]
+        vec![ItemType::Boost, ItemType::Rocket, ItemType::Mine]
     }
 
     fn random_possible_item() -> ItemType {
@@ -56,6 +62,7 @@ impl ItemType {
         match self {
             ItemType::Boost => 0,
             ItemType::Rocket => 1,
+            ItemType::Mine => 2,
         }
     }
 }
@@ -81,6 +88,20 @@ pub struct HeldItem(pub Option<ItemType>);
 #[derive(Component)]
 pub struct Rocket;
 
+/// A mine lying on the track, waiting for a kart to come close.
+///
+/// `armed` is the host's, and false until the mine has been clear of every kart
+/// once. A mine is dropped *under* the kart that laid it, so on the tick it
+/// appears there is already a kart inside its trigger radius; without arming it
+/// would go off under its owner immediately. A clearance rather than a timer
+/// because a timer is wrong exactly when it matters: a kart that has been spun
+/// by an explosion, or is sitting still, would blow itself up waiting for the
+/// clock. A client never runs the trigger, so its copy's `armed` is unused.
+#[derive(Component, Default)]
+pub struct Mine {
+    armed: bool,
+}
+
 /// A rocket's hit, as this peer has seen it: where it stopped.
 ///
 /// Registered for rollback but never sent, so every peer decides hits with the
@@ -98,6 +119,10 @@ pub struct RocketHit {
 
 const ROCKET_SPEED: f32 = 100.;
 const ROCKET_HALF_SIZE: f32 = 1.;
+
+/// How close a kart's centre has to get before an armed mine goes off, and how
+/// far the kart that laid one has to drive for it to arm. See [`Mine`].
+const MINE_TRIGGER_RADIUS: f32 = 5.;
 
 fn rocket_direction(rot: &Rotation) -> Vec2 {
     let angle = rot.as_radians();
@@ -239,6 +264,18 @@ fn use_item(
                     tracked_id,
                 ));
             }
+            ItemType::Mine => {
+                // Under the kart, not behind it. It cannot go off until the kart
+                // has driven out of its radius: see `Mine`.
+                let tracked_id = counter.next();
+                commands.spawn((
+                    DespawnOnExit(AppState::Game),
+                    Position(position.0),
+                    Mine::default(),
+                    EntityKind::Mine,
+                    tracked_id,
+                ));
+            }
         }
     }
 }
@@ -314,26 +351,73 @@ fn resolve_rocket_hits(
         return;
     }
     for (rocket_entity, hit) in rockets.iter() {
-        let rocket_xy = hit.at;
-        // Apply torque to nearby cars
-        for (car_pos, car_rot, mut force) in cars.iter_mut() {
-            if car_pos.0.distance(rocket_xy) >= ROCKET_EXPLOSION_RADIUS {
-                continue;
-            }
-            let right = Vec2::from_angle(car_rot.as_radians()).rotate(Vec2::X);
-            let on_right = right.dot(rocket_xy - car_pos.0) > 0.;
-            force.apply_torque(if on_right { 1. } else { -1. } * 10000.);
-        }
-        // Spawn tracked explosion entity so all peers render VFX
-        let tracked_id = counter.next();
-        commands.spawn((
-            DespawnOnExit(AppState::Game),
-            Position(rocket_xy),
-            EntityKind::Explosion,
-            tracked_id,
-        ));
+        explode(&mut commands, &mut counter, &mut cars, hit.at);
         commands.entity(rocket_entity).despawn();
     }
+}
+
+/// Host-only: a mine arms on the first tick no kart is within
+/// [`MINE_TRIGGER_RADIUS`] of it, and after that goes off, with the rocket's
+/// explosion, on the first tick one is.
+///
+/// Host-only, unlike [`detect_rocket_hits`], and with no rollback marker of its
+/// own. The marker exists for the rocket because a rocket that has hit has to
+/// *stop*, and a client that waited for the host's word would fly it on through
+/// the wall for a prediction lead. A mine does not move, so there is nothing for
+/// a client to predict: everything a trigger does — the torque, the explosion,
+/// the despawn — is the host's, and arrives with the next snapshot.
+fn trigger_mines(
+    mut commands: Commands,
+    server_player: Option<Res<LocalServerPlayer>>,
+    mut counter: ResMut<TickTrackedEntityCounter>,
+    mut mines: Query<(Entity, &Position, &mut Mine)>,
+    mut cars: Query<(&Position, &Rotation, Forces), With<CarController2d>>,
+) {
+    if server_player.is_none() {
+        return;
+    }
+    for (mine_entity, mine_pos, mut mine) in mines.iter_mut() {
+        let kart_in_range = cars
+            .iter()
+            .any(|(car_pos, _, _)| car_pos.0.distance(mine_pos.0) < MINE_TRIGGER_RADIUS);
+        if !mine.armed {
+            // The kart that laid it is standing on it. Arm as soon as it is not.
+            mine.armed = !kart_in_range;
+            continue;
+        }
+        if !kart_in_range {
+            continue;
+        }
+        debug!("mine {mine_entity} triggered at {:?}", mine_pos.0);
+        explode(&mut commands, &mut counter, &mut cars, mine_pos.0);
+        commands.entity(mine_entity).despawn();
+    }
+}
+
+/// Host-only: what an explosion does, shared by the rocket and the mine. Torque
+/// on the karts in the blast, and a tracked explosion entity for every peer to
+/// render.
+fn explode(
+    commands: &mut Commands,
+    counter: &mut TickTrackedEntityCounter,
+    cars: &mut Query<(&Position, &Rotation, Forces), With<CarController2d>>,
+    at: Vec2,
+) {
+    for (car_pos, car_rot, mut force) in cars.iter_mut() {
+        if car_pos.0.distance(at) >= EXPLOSION_RADIUS {
+            continue;
+        }
+        let right = Vec2::from_angle(car_rot.as_radians()).rotate(Vec2::X);
+        let on_right = right.dot(at - car_pos.0) > 0.;
+        force.apply_torque(if on_right { 1. } else { -1. } * 10000.);
+    }
+    let tracked_id = counter.next();
+    commands.spawn((
+        DespawnOnExit(AppState::Game),
+        Position(at),
+        EntityKind::Explosion,
+        tracked_id,
+    ));
 }
 
 /// Visual-only: animate rocket sprite.
@@ -362,7 +446,9 @@ mod tests {
     /// is at 19, so a rocket a unit wide stops with its centre at 18.
     const STOP_X: f32 = 18.;
 
-    fn app(host: bool) -> App {
+    /// Ticks, physics and this module: no window, assets or network, and
+    /// nothing in the world yet.
+    fn base_app(host: bool) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, TransformPlugin))
             .insert_resource(TimeUpdateStrategy::ManualDuration(TICK))
@@ -388,6 +474,12 @@ mod tests {
         if host {
             app.insert_resource(LocalServerPlayer(1));
         }
+        app
+    }
+
+    /// A rocket at the origin and a wall for it to hit.
+    fn app(host: bool) -> App {
+        let mut app = base_app(host);
         app.world_mut().spawn((
             RigidBody::Static,
             Collider::rectangle(2., 40.),
@@ -402,6 +494,34 @@ mod tests {
             TickTrackedEntity(1),
         ));
         app
+    }
+
+    /// A mine at the origin and a kart parked at `car_at`.
+    fn mine_app(host: bool, car_at: Vec2) -> (App, Entity) {
+        let mut app = base_app(host);
+        app.world_mut().spawn((
+            Position(Vec2::ZERO),
+            Mine::default(),
+            EntityKind::Mine,
+            TickTrackedEntity(1),
+        ));
+        let car = app
+            .world_mut()
+            .spawn((
+                Position(car_at),
+                Rotation::default(),
+                CarController2d::new(1.),
+                Mass(1.),
+                RigidBody::Dynamic,
+                Collider::rectangle(4., 8.),
+            ))
+            .id();
+        (app, car)
+    }
+
+    fn mine_count(app: &mut App) -> usize {
+        let mut query = app.world_mut().query_filtered::<(), With<Mine>>();
+        query.iter(app.world()).count()
     }
 
     fn rocket(app: &mut App) -> Option<(Vec2, Option<Vec2>)> {
@@ -478,5 +598,64 @@ mod tests {
         }
         let (_, again) = rocket(&mut app).unwrap();
         assert_eq!(again, first, "the replay reaches the same wall at the same spot");
+    }
+
+    #[test]
+    fn a_mine_lies_there_until_a_kart_comes_close() {
+        let (mut app, car) = mine_app(true, Vec2::new(MINE_TRIGGER_RADIUS + 1., 0.));
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(mine_count(&mut app), 1, "just out of reach, so it waits");
+        assert!(explosion(&mut app).is_none());
+
+        app.world_mut().entity_mut(car).insert(Position(Vec2::new(MINE_TRIGGER_RADIUS - 1., 0.)));
+        app.update();
+        app.update();
+        assert_eq!(mine_count(&mut app), 0, "the kart came close, so the mine went");
+        let at = explosion(&mut app).expect("and it explodes like a rocket");
+        assert_eq!(at, Vec2::ZERO, "where the mine lay");
+    }
+
+    /// The trigger is the host's, like the rocket's explosion: a client's mine
+    /// waits for the snapshot rather than guessing. The kart drives clear and
+    /// comes back, which on a host is the whole arm-and-explode sequence.
+    #[test]
+    fn a_client_does_not_trigger_its_own_mines() {
+        let (mut app, car) = mine_app(false, Vec2::new(MINE_TRIGGER_RADIUS + 1., 0.));
+        app.update();
+        app.world_mut().entity_mut(car).insert(Position(Vec2::ZERO));
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(mine_count(&mut app), 1, "a client leaves the mine alone");
+        assert!(explosion(&mut app).is_none());
+    }
+
+    /// The mine is dropped under its own kart, so this is the case that would
+    /// blow the layer up on the tick they used the item.
+    #[test]
+    fn a_mine_under_its_own_kart_waits_for_it_to_drive_clear() {
+        let (mut app, car) = mine_app(true, Vec2::ZERO);
+        for _ in 0..20 {
+            app.update();
+        }
+        assert_eq!(mine_count(&mut app), 1, "sitting on it does not set it off");
+        assert!(explosion(&mut app).is_none(), "and nobody blows themselves up");
+
+        // Drive clear: the mine arms.
+        app.world_mut()
+            .entity_mut(car)
+            .insert(Position(Vec2::new(MINE_TRIGGER_RADIUS + 1., 0.)));
+        app.update();
+        assert_eq!(mine_count(&mut app), 1, "still there, now armed");
+        assert!(explosion(&mut app).is_none());
+
+        // Come back over it.
+        app.world_mut().entity_mut(car).insert(Position(Vec2::ZERO));
+        app.update();
+        app.update();
+        assert_eq!(mine_count(&mut app), 0, "an armed mine goes off underfoot");
+        assert!(explosion(&mut app).is_some());
     }
 }

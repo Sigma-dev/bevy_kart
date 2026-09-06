@@ -85,7 +85,7 @@ fn extract_query_param(target: &str) -> Option<String> {
 /// | `?autostart=N` | `KART_AUTOSTART_PLAYERS=N` | as host, start the race once `N` players are in |
 /// | `?name=NAME` | `KART_NAME=NAME` | the name this peer plays under |
 /// | `?autodrive=1` | `KART_AUTODRIVE=1` | hold the throttle and weave |
-/// | `?map=SLUG` | `KART_MAP=SLUG` | race that built-in map |
+/// | `?map=SLUG` | `KART_MAP=SLUG` | race that map, built-in or saved |
 /// | `?editor=1` | `KART_EDITOR=1` | open the track editor |
 /// | `?perf=1` | `KART_PERF=1` | log the frame-cost readout |
 ///
@@ -168,14 +168,19 @@ fn apply_session_params(
         join_by_code.write(JoinWebrtcLobbyByCode(room.clone()));
     }
     if let Some(slug) = &params.map {
-        match crate::track::map::by_slug(slug) {
+        // A built-in by slug, or one of the player's own by id. Saved maps too,
+        // because "it goes wrong on the track I made" is exactly the report that
+        // needs reproducing from a command line.
+        let found = crate::track::map::by_slug(slug)
+            .or_else(|| crate::track::map::store::load(slug).ok());
+        match found {
             Some(map) => {
-                info!("racing the `{slug}` map, from the launch parameters");
+                info!("racing `{}` ({slug}), from the launch parameters", map.name);
                 selected_map.0 = map;
             }
             // Naming a map that does not exist is a typo in a script, not a
             // reason to refuse to start.
-            None => warn!("no built-in map called `{slug}`; keeping the default"),
+            None => warn!("no map called `{slug}`; keeping the default"),
         }
     }
     if params.editor {

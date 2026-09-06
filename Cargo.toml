@@ -19,7 +19,11 @@ postcard = { version = "1", features = ["alloc"] }
 
 audio_manager = { path = "audio_manager" }
 bevy_timer = { path = "bevy_timer" }
-bevy = { version = "0.19", features = ["wav"] }
+# `serialize` is what gives `IVec2`/`Vec2`/`Rect` their serde impls, which the map
+# format needs. It arrives transitively through avian2d's own `serialize` feature
+# today; naming it here means the map format does not quietly depend on a physics
+# crate's feature choice.
+bevy = { version = "0.19", features = ["wav", "serialize"] }
 avian2d = { version = "0.7", features = ["serialize"] }
 serde = { version = "1", features = ["derive"] }
 # For compact codes: deflate compression + base62 encoding

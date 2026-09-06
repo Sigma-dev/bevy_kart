@@ -38,6 +38,7 @@ pub enum EntityKind {
     ItemPickup(ItemType),
     Rocket,
     Explosion,
+    Mine,
 }
 
 /// Player metadata shared via ensemble messages.

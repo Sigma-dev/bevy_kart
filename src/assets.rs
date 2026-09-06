@@ -22,6 +22,7 @@ pub struct AssetHandles {
     pub crate_texture: Handle<Image>,
     pub items_texture: Handle<Image>,
     pub rocket_texture: Handle<Image>,
+    pub mine_texture: Handle<Image>,
     pub background_elements_texture: Handle<Image>,
     pub background_elements_atlas: Handle<TextureAtlasLayout>,
     pub clouds_texture: Handle<Image>,
@@ -70,6 +71,7 @@ pub fn load_assets(app: &mut App) {
         crate_texture: asset_server.load("sprites/crate.png"),
         items_texture: asset_server.load("sprites/items.png"),
         rocket_texture: asset_server.load("sprites/rocket.png"),
+        mine_texture: asset_server.load("sprites/mine.png"),
         background_elements_texture: asset_server.load("sprites/nature.png"),
         background_elements_atlas: texture_atlases.add(TextureAtlasLayout::from_grid(
             UVec2::splat(8),

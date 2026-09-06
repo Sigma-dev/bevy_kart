@@ -3,7 +3,7 @@ use bevy::platform::collections::HashMap;
 use crate::{
     AppState, AssetHandles, EntityKind, OwnerPlayer, SpriteLayers,
     car_controller_2d::CarControllerDisabled,
-    items::{HeldItem, spawn_spawner},
+    items::{HeldItem, ItemType, spawn_spawner},
     kart::{LapsCounter, LocalKart},
     track::position::{RacePosition, RacePositionPlugin, progress_line::ProgressLine},
 };
@@ -270,7 +270,13 @@ pub(crate) fn spawn_track(
     commands.insert_resource(RaceStarted(tick.0));
 
     let texture_handle = asset_handles.items_texture.clone();
-    let texture_atlas = TextureAtlasLayout::from_grid(UVec2::splat(8), 2, 1, None, None);
+    let texture_atlas = TextureAtlasLayout::from_grid(
+        UVec2::splat(8),
+        ItemType::ICON_COUNT,
+        1,
+        None,
+        None,
+    );
     let texture_atlas_handle = texture_atlas_layouts.add(texture_atlas);
 
     commands.spawn((

@@ -40,6 +40,6 @@ impl<B: Bundle + Clone + Send + Sync + 'static> Scene for InsertBundle<B> {
 /// `bsn!`'s template system is built around asset *paths*; this is the clean
 /// escape hatch for components built from preloaded handles (atlas `Sprite`s /
 /// `ImageNode`s, `Mesh2d`, `MeshMaterial2d`, ...) that don't map onto it neatly.
-pub fn insert(bundle: impl Bundle + Clone + Send + Sync + 'static) -> impl Scene {
+pub fn insert(bundle: impl Bundle + Clone + 'static) -> impl Scene {
     InsertBundle(bundle)
 }

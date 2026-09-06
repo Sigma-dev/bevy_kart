@@ -175,10 +175,7 @@ fn main() {
             EntitySpawnPlugin,
             LobbyLifecyclePlugin,
             DebugPlugin,
-            AudioManagerPlugin {
-                volume_mult: 0.3,
-                ..default()
-            },
+            AudioManagerPlugin { volume_mult: 0.3 },
             TimerPlugin,
         ))
         .add_plugins((

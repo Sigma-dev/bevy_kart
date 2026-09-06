@@ -71,7 +71,7 @@ fn capture_local_input(
     // fifth second. Enough to keep every kart moving and colliding in a run
     // nobody is driving.
     let input = if params.is_some_and(|p| p.autodrive) {
-        let phase = (tick.0 / 96) % 2 == 0;
+        let phase = (tick.0 / 96).is_multiple_of(2);
         PlayerInput {
             forward: true,
             backward: false,

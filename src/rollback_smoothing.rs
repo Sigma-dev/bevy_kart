@@ -89,17 +89,16 @@ fn detect_corrections(
             // are accurate (same inputs replayed) and smoothing them causes jitter
             // from physics non-determinism during rollback replay.
             let is_local = local_entity.is_some_and(|e| e == entity);
-            if !is_local {
-                if let Some(&(old_pos, old_rot)) = state.entries.get(&entity) {
-                    let correction_pos = curr_pos - old_pos;
-                    let correction_rot = (curr_rot - old_rot + PI).rem_euclid(TAU) - PI;
-                    smoothing.position_offset -= correction_pos;
-                    smoothing.rotation_offset -= correction_rot;
+            if let Some(&(old_pos, old_rot)) = state.entries.get(&entity).filter(|_| !is_local) {
+                let correction_pos = curr_pos - old_pos;
+                let correction_rot = (curr_rot - old_rot + PI).rem_euclid(TAU) - PI;
+                smoothing.position_offset -= correction_pos;
+                smoothing.rotation_offset -= correction_rot;
 
-                    // Clamp to prevent visual clipping through walls
-                    smoothing.position_offset =
-                        smoothing.position_offset.clamp_length_max(MAX_CORRECTION_OFFSET);
-                }
+                // Clamp to prevent visual clipping through walls
+                smoothing.position_offset = smoothing
+                    .position_offset
+                    .clamp_length_max(MAX_CORRECTION_OFFSET);
             }
         } else {
             smoothing.initialized = true;

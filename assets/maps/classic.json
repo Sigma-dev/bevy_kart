@@ -8,387 +8,483 @@
         -11831
       ],
       "in_handle": [
-        -3029,
-        -19
+        -2904,
+        -16
       ],
       "out_handle": [
-        3029,
-        19
+        2904,
+        16
       ],
       "half_width": 2827,
       "mirrored": true
     },
     {
       "position": [
-        4904,
+        6227,
         -11831
       ],
       "in_handle": [
-        -2689,
-        -728
+        -2612,
+        -699
       ],
       "out_handle": [
-        2689,
-        728
+        2612,
+        699
+      ],
+      "half_width": 2628,
+      "mirrored": true
+    },
+    {
+      "position": [
+        11894,
+        -7527
+      ],
+      "in_handle": [
+        -1680,
+        -1205
+      ],
+      "out_handle": [
+        1680,
+        1205
+      ],
+      "half_width": 2713,
+      "mirrored": true
+    },
+    {
+      "position": [
+        16424,
+        -4515
+      ],
+      "in_handle": [
+        -1544,
+        -102
+      ],
+      "out_handle": [
+        1544,
+        102
+      ],
+      "half_width": 1817,
+      "mirrored": true
+    },
+    {
+      "position": [
+        21159,
+        -6917
+      ],
+      "in_handle": [
+        -1463,
+        852
+      ],
+      "out_handle": [
+        1463,
+        -852
       ],
       "half_width": null,
       "mirrored": true
     },
     {
       "position": [
-        11949,
-        -7462
+        25199,
+        -9627
       ],
       "in_handle": [
-        -2419,
-        -1125
+        -871,
+        -387
       ],
       "out_handle": [
-        2419,
-        1125
+        871,
+        387
       ],
-      "half_width": 2730,
+      "half_width": 1280,
       "mirrored": true
     },
     {
       "position": [
-        19421,
-        -5081
+        26384,
+        -4597
       ],
       "in_handle": [
-        -2202,
-        389
+        -395,
+        -1677
       ],
       "out_handle": [
-        2202,
-        -389
+        395,
+        1677
+      ],
+      "half_width": 1843,
+      "mirrored": true
+    },
+    {
+      "position": [
+        27570,
+        433
+      ],
+      "in_handle": [
+        46,
+        -1963
+      ],
+      "out_handle": [
+        -46,
+        1963
+      ],
+      "half_width": 2783,
+      "mirrored": true
+    },
+    {
+      "position": [
+        26066,
+        8887
+      ],
+      "in_handle": [
+        585,
+        -1793
+      ],
+      "out_handle": [
+        -585,
+        1793
+      ],
+      "half_width": 1875,
+      "mirrored": true
+    },
+    {
+      "position": [
+        23439,
+        13098
+      ],
+      "in_handle": [
+        1407,
+        -3
+      ],
+      "out_handle": [
+        -1407,
+        3
+      ],
+      "half_width": 1280,
+      "mirrored": true
+    },
+    {
+      "position": [
+        17622,
+        8905
+      ],
+      "in_handle": [
+        2040,
+        1620
+      ],
+      "out_handle": [
+        -2040,
+        -1620
       ],
       "half_width": null,
       "mirrored": true
     },
     {
       "position": [
-        25159,
-        -9797
+        11199,
+        3378
       ],
       "in_handle": [
-        -1304,
-        -688
+        2141,
+        1842
       ],
       "out_handle": [
-        1304,
-        688
+        -2141,
+        -1842
       ],
       "half_width": null,
       "mirrored": true
     },
     {
       "position": [
-        27244,
-        -951
+        4777,
+        -2149
       ],
       "in_handle": [
-        -180,
-        -2961
+        2410,
+        1249
       ],
       "out_handle": [
-        180,
-        2961
+        -2410,
+        -1249
       ],
       "half_width": null,
       "mirrored": true
     },
     {
       "position": [
-        26238,
-        7967
+        -3263,
+        -4113
       ],
       "in_handle": [
-        977,
-        -2182
+        2814,
+        359
       ],
       "out_handle": [
-        -977,
-        2182
-      ],
-      "half_width": 2116,
-      "mirrored": true
-    },
-    {
-      "position": [
-        21385,
-        12144
-      ],
-      "in_handle": [
-        1957,
-        292
-      ],
-      "out_handle": [
-        -1957,
-        -292
-      ],
-      "half_width": 2169,
-      "mirrored": true
-    },
-    {
-      "position": [
-        14496,
-        6215
-      ],
-      "in_handle": [
-        2296,
-        1976
-      ],
-      "out_handle": [
-        -2296,
-        -1976
-      ],
-      "half_width": 2000,
-      "mirrored": true
-    },
-    {
-      "position": [
-        7607,
-        287
-      ],
-      "in_handle": [
-        2399,
-        1709
-      ],
-      "out_handle": [
-        -2399,
-        -1709
+        -2814,
+        -359
       ],
       "half_width": null,
       "mirrored": true
     },
     {
       "position": [
-        105,
-        -4040
+        -12107,
+        -4304
       ],
       "in_handle": [
-        2765,
-        754
+        2502,
+        -146
       ],
       "out_handle": [
-        -2765,
-        -754
+        -2502,
+        146
+      ],
+      "half_width": 1493,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -18611,
+        -3218
+      ],
+      "in_handle": [
+        1164,
+        -910
+      ],
+      "out_handle": [
+        -1164,
+        910
+      ],
+      "half_width": 1895,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -19094,
+        1158
+      ],
+      "in_handle": [
+        -1014,
+        -990
+      ],
+      "out_handle": [
+        1014,
+        990
+      ],
+      "half_width": 1614,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -12529,
+        2722
+      ],
+      "in_handle": [
+        -2313,
+        -472
+      ],
+      "out_handle": [
+        2313,
+        472
       ],
       "half_width": null,
       "mirrored": true
     },
     {
       "position": [
-        -8982,
-        -4237
+        -5218,
+        3989
       ],
       "in_handle": [
-        3029,
-        65
+        -2329,
+        -496
       ],
       "out_handle": [
-        -3029,
-        -65
-      ],
-      "half_width": 1718,
-      "mirrored": true
-    },
-    {
-      "position": [
-        -18068,
-        -4433
-      ],
-      "in_handle": [
-        1262,
-        -1044
-      ],
-      "out_handle": [
-        -1262,
-        1044
-      ],
-      "half_width": 3125,
-      "mirrored": true
-    },
-    {
-      "position": [
-        -16554,
-        2025
-      ],
-      "in_handle": [
-        -1745,
-        -1335
-      ],
-      "out_handle": [
-        1745,
-        1335
-      ],
-      "half_width": 2192,
-      "mirrored": true
-    },
-    {
-      "position": [
-        -7599,
-        3576
-      ],
-      "in_handle": [
-        -2972,
-        -533
-      ],
-      "out_handle": [
-        2972,
-        533
+        2329,
+        496
       ],
       "half_width": null,
       "mirrored": true
     },
     {
       "position": [
-        1276,
-        5221
+        1446,
+        5696
       ],
       "in_handle": [
-        -1328,
-        -1354
+        -1409,
+        -1121
       ],
       "out_handle": [
-        1328,
-        1354
+        1409,
+        1121
+      ],
+      "half_width": 2609,
+      "mirrored": true
+    },
+    {
+      "position": [
+        3235,
+        10716
+      ],
+      "in_handle": [
+        313,
+        -1036
+      ],
+      "out_handle": [
+        -313,
+        1036
+      ],
+      "half_width": 1280,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -431,
+        11910
+      ],
+      "in_handle": [
+        1453,
+        -189
+      ],
+      "out_handle": [
+        -1453,
+        189
+      ],
+      "half_width": 2637,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -7308,
+        12088
+      ],
+      "in_handle": [
+        2613,
+        71
+      ],
+      "out_handle": [
+        -2613,
+        -71
+      ],
+      "half_width": 2728,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -17007,
+        11457
+      ],
+      "in_handle": [
+        3131,
+        267
+      ],
+      "out_handle": [
+        -3131,
+        -267
+      ],
+      "half_width": 2519,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -26095,
+        10486
+      ],
+      "in_handle": [
+        1786,
+        910
+      ],
+      "out_handle": [
+        -1786,
+        -910
       ],
       "half_width": null,
       "mirrored": true
     },
     {
       "position": [
-        368,
-        11698
+        -28313,
+        5699
       ],
       "in_handle": [
-        1648,
-        -1130
+        240,
+        1990
       ],
       "out_handle": [
-        -1648,
-        1130
+        -240,
+        -1990
+      ],
+      "half_width": 2775,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -27705,
+        -2877
+      ],
+      "in_handle": [
+        -244,
+        2914
+      ],
+      "out_handle": [
+        244,
+        -2914
+      ],
+      "half_width": 1810,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -26850,
+        -11784
+      ],
+      "in_handle": [
+        -1373,
+        1525
+      ],
+      "out_handle": [
+        1373,
+        -1525
+      ],
+      "half_width": 1508,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -19466,
+        -12028
+      ],
+      "in_handle": [
+        -2504,
+        24
+      ],
+      "out_handle": [
+        2504,
+        -24
       ],
       "half_width": null,
       "mirrored": true
     },
     {
       "position": [
-        -8613,
-        12003
+        -11825,
+        -11929
       ],
       "in_handle": [
-        3009,
-        48
+        -2547,
+        -33
       ],
       "out_handle": [
-        -3009,
-        -48
+        2547,
+        33
       ],
-      "half_width": null,
-      "mirrored": true
-    },
-    {
-      "position": [
-        -17683,
-        11413
-      ],
-      "in_handle": [
-        2942,
-        315
-      ],
-      "out_handle": [
-        -2942,
-        -315
-      ],
-      "half_width": null,
-      "mirrored": true
-    },
-    {
-      "position": [
-        -26267,
-        10115
-      ],
-      "in_handle": [
-        1741,
-        1646
-      ],
-      "out_handle": [
-        -1741,
-        -1646
-      ],
-      "half_width": null,
-      "mirrored": true
-    },
-    {
-      "position": [
-        -28128,
-        1534
-      ],
-      "in_handle": [
-        165,
-        2938
-      ],
-      "out_handle": [
-        -165,
-        -2938
-      ],
-      "half_width": null,
-      "mirrored": true
-    },
-    {
-      "position": [
-        -27260,
-        -7513
-      ],
-      "in_handle": [
-        -961,
-        2266
-      ],
-      "out_handle": [
-        961,
-        -2266
-      ],
-      "half_width": 1534,
-      "mirrored": true
-    },
-    {
-      "position": [
-        -22359,
-        -12065
-      ],
-      "in_handle": [
-        -2331,
-        739
-      ],
-      "out_handle": [
-        2331,
-        -739
-      ],
-      "half_width": 2202,
-      "mirrored": true
-    },
-    {
-      "position": [
-        -13272,
-        -11948
-      ],
-      "in_handle": [
-        -3029,
-        -39
-      ],
-      "out_handle": [
-        3029,
-        39
-      ],
-      "half_width": null,
+      "half_width": 2695,
       "mirrored": true
     }
   ],
   "road": {
-    "half_width": 2468,
+    "half_width": 2231,
     "kerb_width": 384,
     "kerb_stripe": 2304
   },
@@ -409,43 +505,43 @@
   "item_boxes": [
     {
       "segment": 0,
-      "t": 30170,
+      "t": 26338,
       "lateral": -1481
     },
     {
       "segment": 0,
-      "t": 30170,
+      "t": 26338,
       "lateral": 1643
     },
     {
-      "segment": 5,
-      "t": 15094,
-      "lateral": 1163
+      "segment": 7,
+      "t": 6346,
+      "lateral": 1491
     },
     {
-      "segment": 5,
-      "t": 12465,
-      "lateral": -1115
+      "segment": 7,
+      "t": 2496,
+      "lateral": -658
     },
     {
-      "segment": 12,
-      "t": 22346,
-      "lateral": 1808
+      "segment": 15,
+      "t": 29111,
+      "lateral": 1230
     },
     {
-      "segment": 12,
-      "t": 29632,
-      "lateral": 235
+      "segment": 15,
+      "t": 24390,
+      "lateral": -1185
     },
     {
-      "segment": 19,
-      "t": 40290,
-      "lateral": -1991
+      "segment": 25,
+      "t": 1348,
+      "lateral": -1426
     },
     {
-      "segment": 19,
-      "t": 36456,
-      "lateral": -4
+      "segment": 25,
+      "t": 3252,
+      "lateral": 978
     }
   ],
   "bounds_padding": 4096,

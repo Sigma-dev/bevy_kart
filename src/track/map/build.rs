@@ -50,12 +50,34 @@ const FLATTEN_PER_SEGMENT: usize = 64;
 /// Target spacing, in world units, of the resampled centreline.
 const MESH_STEP: f32 = 2.0;
 
-/// One wall vertex every this many centreline samples.
+/// The longest a barrier may be, in centreline samples.
 ///
 /// Walls reuse the centreline rather than resampling, so every wall vertex lies
 /// exactly on a road-mesh edge vertex and a barrier can never drift off the
-/// tarmac. This is also the knob for how many static bodies a track costs.
+/// tarmac. On a straight nothing else has an opinion, so this is what a straight
+/// costs in static bodies.
 const WALL_EVERY: usize = 6;
+
+/// How far a barrier is allowed to sit from the road edge it is built from.
+///
+/// A barrier is a straight chord of a curved edge, so on a corner it cuts inside
+/// the arc and leaves a sliver of road showing past it. A fixed stride makes
+/// that sliver as wide as the corner is tight: six samples is twelve units,
+/// which on a hairpin of radius fourteen is a fifty-degree step, and the chord
+/// across it misses the edge by a fifth of the road's width.
+///
+/// The wall takes another vertex before the error gets that far instead. Half a
+/// unit, against a barrier two units thick, means the tarmac is covered
+/// everywhere -- and it buys corners their vertices without paying for them on
+/// the straights, where a chord of the full stride is exact.
+///
+/// This replaces pushing each vertex out by the sagitta, which is what used to
+/// happen here. That trades a chord cutting into the road for one standing off
+/// it at both ends, needs the curvature *at* a vertex to stand for the whole
+/// span either side of it, and rests on a small-angle approximation exactly
+/// where the angle stops being small. Measuring the miss is both simpler and
+/// what the requirement actually says.
+const WALL_TOLERANCE: f32 = 0.5;
 
 /// How much of the way to the fold the inner offset is allowed to go.
 ///
@@ -267,6 +289,65 @@ fn anchor_s(map: &MapData, flat: &[Flat], anchor: &TrackAnchor) -> f32 {
     a.s + (b.s - a.s) * f
 }
 
+/// Which centreline samples get a wall vertex.
+///
+/// Greedily the furthest one that still keeps both road edges within
+/// [`WALL_TOLERANCE`] of the chord to it, and never more than [`WALL_EVERY`]
+/// away. Both edges, from one shared list, because a vertex on only one side
+/// would put a barrier end somewhere the road mesh has no vertex.
+///
+/// The miss is measured, not modelled: the perpendicular distance from the chord
+/// to each edge point it skips over. That is a cross product and a square root,
+/// so it is the same arithmetic everywhere -- and unlike a curvature-and-sagitta
+/// estimate it does not care whether the corner is a constant-radius arc, which
+/// on a spline it never is.
+fn wall_posts(centre: &[Sample]) -> Vec<usize> {
+    let count = centre.len();
+    // `count` is sample 0 again -- the walk below asks for the closing chord by
+    // that name, so the wrap belongs here rather than at every call.
+    let edge = |i: usize, side: f32| {
+        let sample = centre[i % count];
+        sample.position + sample.normal * (sample.half_width * side)
+    };
+    // Does the chord from `anchor` to `i` leave either edge by too much?
+    let strays = |anchor: usize, i: usize| {
+        [1.0f32, -1.0].iter().any(|&side| {
+            let from = edge(anchor, side);
+            let along = edge(i, side) - from;
+            let span = along.length();
+            if span < f32::EPSILON {
+                return true;
+            }
+            let unit = along / span;
+            (anchor + 1..i).any(|j| {
+                let offset = edge(j, side) - from;
+                (offset.x * unit.y - offset.y * unit.x).abs() > WALL_TOLERANCE
+            })
+        })
+    };
+
+    let mut posts = vec![0usize];
+    loop {
+        let anchor = *posts.last().expect("seeded with the first sample");
+        // A one-sample chord skips nothing, so it is always acceptable and the
+        // walk always advances.
+        let mut next = anchor + 1;
+        for i in anchor + 2..=(anchor + WALL_EVERY).min(count) {
+            if strays(anchor, i) {
+                break;
+            }
+            next = i;
+        }
+        // `count` is sample 0 again: the loop has closed. The chord that closes
+        // it is the one span nothing checked, which is why the start line is a
+        // good place for a seam and the middle of a hairpin is not.
+        if next >= count {
+            return posts;
+        }
+        posts.push(next);
+    }
+}
+
 pub fn build(map: &MapData, level: BuildLevel) -> BuiltTrack {
     let mut warnings = Vec::new();
     let flat = flatten(map);
@@ -336,17 +417,9 @@ pub fn build(map: &MapData, level: BuildLevel) -> BuiltTrack {
         warnings.push(TrackWarning::WidthClamped { at_s });
     }
 
-    // Offsets. The mesh clamps at a fold so every quad stays valid and the road
-    // pinches; the walls *drop* the folded samples so the polyline stays simple
-    // and a too-tight corner comes out cut rather than knotted. A cut corner is
-    // playable; a knot is a hole a kart drives into and sticks in.
-    let mut left_wall = Vec::new();
-    let mut right_wall = Vec::new();
-    let chord = WALL_EVERY as f32 * ds;
     let mut reported_tight = false;
-    for (i, sample) in centre.iter().enumerate() {
-        let folds = sample.half_width * sample.curvature.abs() >= FOLD_LIMIT;
-        if folds && !reported_tight {
+    for sample in &centre {
+        if sample.half_width * sample.curvature.abs() >= FOLD_LIMIT && !reported_tight {
             reported_tight = true;
             warnings.push(TrackWarning::CornerTooTight {
                 at_s: sample.s,
@@ -354,37 +427,23 @@ pub fn build(map: &MapData, level: BuildLevel) -> BuiltTrack {
                 radius: 1.0 / sample.curvature.abs().max(f32::EPSILON),
             });
         }
+    }
+
+    // Offsets. The mesh clamps at a fold so every quad stays valid and the road
+    // pinches; the walls *drop* the folded samples so the polyline stays simple
+    // and a too-tight corner comes out cut rather than knotted. A cut corner is
+    // playable; a knot is a hole a kart drives into and sticks in.
+    let mut left_wall = Vec::new();
+    let mut right_wall = Vec::new();
+    for &i in &wall_posts(&centre) {
+        let sample = centre[i];
+        let folds = sample.half_width * sample.curvature.abs() >= FOLD_LIMIT;
         // Positive curvature turns left, so the left side is the inner one there.
-        let left_folds = folds && sample.curvature > 0.0;
-        let right_folds = folds && sample.curvature < 0.0;
-        if i % WALL_EVERY == 0 {
-            // A barrier is a straight chord of the road's curved edge, so on a
-            // corner it cuts *inside* the arc and leaves a sliver of road showing
-            // past it -- nearly two units on a tight one, which is a fifth of the
-            // road's width. Push each vertex away from the centre of curvature by
-            // that sagitta, so the chord ends up tangent to the true edge rather
-            // than secant to it.
-            //
-            // The sagitta of a chord `L` on radius `r` is about `L^2 / 8r`, and
-            // an edge offset `o` from a centreline of curvature `k` has curvature
-            // `k / (1 - o * k)`. Both are arithmetic; nothing here needs an angle.
-            let away = -sample.curvature.signum() * sample.normal;
-            let bulge = |offset: f32| {
-                let denominator = 1.0 - offset * sample.curvature;
-                if denominator.abs() < 1e-3 {
-                    return 0.0;
-                }
-                let edge_curvature = sample.curvature / denominator;
-                (chord * chord * edge_curvature.abs() / 8.0).min(sample.half_width * 0.5)
-            };
-            if !left_folds {
-                let offset = sample.half_width;
-                left_wall.push(sample.position + sample.normal * offset + away * bulge(offset));
-            }
-            if !right_folds {
-                let offset = -sample.half_width;
-                right_wall.push(sample.position + sample.normal * offset + away * bulge(offset));
-            }
+        if !(folds && sample.curvature > 0.0) {
+            left_wall.push(sample.position + sample.normal * sample.half_width);
+        }
+        if !(folds && sample.curvature < 0.0) {
+            right_wall.push(sample.position - sample.normal * sample.half_width);
         }
     }
 
@@ -650,6 +709,78 @@ pub(crate) mod tests {
         for pair in built.right_wall.windows(2) {
             assert!(pair[0].distance(pair[1]) > 0.0, "no zero-length wall segment");
         }
+    }
+
+    /// Every point along every barrier is within [`WALL_TOLERANCE`] of the road
+    /// edge it stands on -- not just its two ends.
+    ///
+    /// This is the thing a fixed stride got wrong. A barrier is straight and the
+    /// edge is not, so a stride long enough to be economical on a straight cuts
+    /// the corner off a hairpin: at half-width 12 on radius 14 the miss was over
+    /// two units, a fifth of the road, and the two walls of a hairpin ended up
+    /// looking like four.
+    ///
+    /// Measured against the offset of the *centreline samples*, which is what
+    /// the road mesh draws, so this is literally "the barrier is where the road
+    /// stops". Folded corners are excluded: there the wall is deliberately cut
+    /// and the chord across the cut is not standing on anything.
+    #[test]
+    fn a_barrier_never_leaves_the_road_edge_it_stands_on() {
+        for map in [circle(80.0, 11.0), circle(24.0, 10.0), circle(300.0, 6.0)] {
+            let built = build(&map, BuildLevel::Full);
+            for (wall, side) in [(&built.left_wall, 1.0f32), (&built.right_wall, -1.0)] {
+                let edge: Vec<Vec2> = built
+                    .centre
+                    .iter()
+                    .map(|s| s.position + s.normal * (s.half_width * side))
+                    .collect();
+                for i in 0..wall.len() {
+                    let (a, b) = (wall[i], wall[(i + 1) % wall.len()]);
+                    for step in 0..=8 {
+                        let point = a.lerp(b, step as f32 / 8.0);
+                        let miss = edge
+                            .iter()
+                            .enumerate()
+                            .map(|(j, p)| distance_to_segment(point, *p, edge[(j + 1) % edge.len()]))
+                            .fold(f32::MAX, f32::min);
+                        assert!(
+                            miss <= WALL_TOLERANCE + 1e-3,
+                            "barrier {i} is {miss} from the road edge"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn distance_to_segment(point: Vec2, a: Vec2, b: Vec2) -> f32 {
+        let along = b - a;
+        let t = if along.length_squared() > 1e-9 {
+            ((point - a).dot(along) / along.length_squared()).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        point.distance(a + along * t)
+    }
+
+    /// A corner takes as many vertices as it needs and a straight takes as few
+    /// as it can, which is the whole point of choosing them by the miss rather
+    /// than by a stride.
+    #[test]
+    fn a_corner_buys_wall_vertices_and_a_straight_does_not() {
+        let stride = |built: &BuiltTrack| built.length / built.right_wall.len() as f32;
+        // Six samples of two units, the cap, because a chord that long across a
+        // circle this size misses it by a hundredth of a unit.
+        let gentle = stride(&build(&circle(300.0, 6.0), BuildLevel::Preview));
+        assert!(gentle > 10.0, "a road this straight took a vertex every {gentle}");
+        // And a corner a kart has to be pointed at takes them twice as often.
+        let tight = stride(&build(&circle(24.0, 6.0), BuildLevel::Preview));
+        assert!(tight < gentle, "the tight circle took a vertex every {tight}");
+        let hairpin = stride(&build(&circle(12.0, 8.0), BuildLevel::Preview));
+        assert!(
+            hairpin < gentle * 0.5,
+            "the hairpin took a vertex every {hairpin}, the straight every {gentle}"
+        );
     }
 
     #[test]

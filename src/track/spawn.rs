@@ -15,14 +15,19 @@ use crate::decor::Decor;
 use crate::items::spawn_spawner;
 use crate::track::StartLight;
 use crate::track::map::build::BuiltTrack;
+use crate::track::map::data::scalar_to_world;
 use crate::track::map::mesh::{road_mesh, start_line_mesh};
 use crate::track::map::scatter::scatter;
 use crate::track::position::progress_line::ProgressLine;
-use crate::{AppColors, AppState, AssetHandles, SpriteLayers};
+use crate::{AppState, AssetHandles, SpriteLayers};
 
-/// How thick a barrier is, in world units. Matches the width the hand-drawn
-/// track's walls were traced at.
-const WALL_THICKNESS: f32 = 2.0;
+/// How thick a barrier is when the map draws no wall band for it to match.
+///
+/// A barrier is invisible -- the road mesh paints the band, and this is the
+/// collider under it -- so a map with `kerb_width` of zero would otherwise get a
+/// wall of nothing. Two units is what the hand-drawn track's walls were traced
+/// at.
+const MIN_WALL_THICKNESS: f32 = 2.0;
 
 /// How far beyond the road edge the start light stands.
 const START_LIGHT_CLEARANCE: f32 = 5.0;
@@ -60,10 +65,12 @@ pub(crate) fn spawn_map(
         Transform::from_xyz(0., 0., SpriteLayers::OnGround.to_z()),
     ));
 
-    let red = materials.add(ColorMaterial::from(AppColors::Kerb.color()));
-    let white = materials.add(ColorMaterial::from(Color::WHITE));
+    // The wall the player sees is the band in the road mesh above. These are the
+    // colliders under it, and they are the same thickness so that where a kart
+    // stops is where the paint is.
+    let thickness = scalar_to_world(built.map.road.kerb_width).max(MIN_WALL_THICKNESS);
     for wall in [&built.left_wall, &built.right_wall] {
-        spawn_barriers(&mut commands, &mut meshes, &red, &white, wall);
+        spawn_barriers(&mut commands, wall, thickness);
     }
 
     commands.spawn((
@@ -98,7 +105,8 @@ pub(crate) fn spawn_map(
     }
 }
 
-/// One static box body per wall segment, alternating red and white.
+/// One static box body per wall segment. Nothing is drawn: the road mesh paints
+/// the band these sit under.
 ///
 /// Takes the points as a closed loop -- consecutive pairs, wrapping -- which is
 /// exactly what the offset polylines out of the builder are.
@@ -109,17 +117,11 @@ pub(crate) fn spawn_map(
 /// intermediate -- and `atan2` is one of the functions that does not agree to
 /// the last bit between glibc, musl and wasm, which for a wall every peer builds
 /// for itself is a divergence rollback would re-create every tick.
-fn spawn_barriers(
-    commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
-    red: &Handle<ColorMaterial>,
-    white: &Handle<ColorMaterial>,
-    points: &[Vec2],
-) {
+fn spawn_barriers(commands: &mut Commands, points: &[Vec2], thickness: f32) {
     if points.len() < 2 {
         return;
     }
-    for (i, (a, b)) in points.iter().zip(points.iter().cycle().skip(1)).enumerate() {
+    for (a, b) in points.iter().zip(points.iter().cycle().skip(1)) {
         let delta = *a - *b;
         let length = delta.length();
         if length < f32::EPSILON {
@@ -127,18 +129,12 @@ fn spawn_barriers(
         }
         let direction = delta / length;
         let middle = (*a + *b) / 2.;
-        let material = if i % 2 == 0 { red } else { white };
         commands.spawn((
             DespawnOnExit(AppState::Game),
             RigidBody::Static,
-            Mesh2d(meshes.add(Rectangle::new(length, WALL_THICKNESS))),
-            MeshMaterial2d(material.clone()),
-            Collider::rectangle(length, WALL_THICKNESS),
-            // The pose goes to physics explicitly; `Transform` is only the view.
+            Collider::rectangle(length, thickness),
             Position(middle),
             Rotation::from_sin_cos(direction.y, direction.x),
-            Transform::from_translation(middle.extend(SpriteLayers::Car.to_z()))
-                .with_rotation(Quat::from_rotation_z(direction.y.atan2(direction.x))),
         ));
     }
 }

@@ -218,6 +218,7 @@ fn autostart_join(
 /// `autostart`: what the lobby's start button does, once that many players are in.
 fn autostart_race(
     params: Res<SessionParams>,
+    selected: Res<crate::track::SelectedMap>,
     mut fired: Local<bool>,
     server_player: Option<Res<LocalServerPlayer>>,
     app_state: Res<State<AppState>>,
@@ -236,11 +237,12 @@ fn autostart_race(
     let Ok(lobby) = lobbies.single() else { return };
     *fired = true;
     info!("autostart: {} players in, starting the race", wanted);
-    next_state.set(AppState::Game);
-    let msg = GameStateChanged(AppState::Game);
+    let map = selected.0.clone();
+    let msg = crate::map_sync::StartRace(map.clone());
     commands
         .entity(lobby)
         .trigger(move |e| BroadcastLobbyMessage::new(e, msg));
+    crate::map_sync::begin_race(&mut commands, &mut next_state, map);
 }
 
 /// A lobby this game has already switched its screen to and announced itself
@@ -355,6 +357,13 @@ fn receive_game_state_changed(
     for msg in reader.read() {
         if server_player.is_some() {
             continue;
+        }
+        // Starting a race goes through `map_sync::StartRace` now, because the map
+        // has to arrive in the same packet. Seeing `Game` here means the sender
+        // is on a build from before that -- which the registry handshake should
+        // already have refused, so it is worth saying out loud.
+        if msg.message.0 == AppState::Game {
+            warn!("a peer asked to start a race the old way; it is running a different build");
         }
         next_state.set(msg.message.0.clone());
     }

@@ -19,6 +19,14 @@
 //! - **In CI.** The golden test below pins the order itself, so a reorder fails
 //!   on the commit that makes it rather than at the next join between two builds.
 
+/// A protocol epoch: a marker whose *name* is bumped when the broadcast-message
+/// registry changes shape.
+///
+/// See the comment on its registration in `main.rs`. It is never spawned and
+/// never sent; it exists so a registry with no handshake of its own inherits one.
+#[derive(bevy::prelude::Component, Clone, Debug)]
+pub struct ProtocolEpoch;
+
 #[cfg(test)]
 mod tests {
     use bevy::prelude::*;
@@ -46,6 +54,7 @@ mod tests {
         "BoostEffect",
         "CarControllerDisabled",
         "RocketHit",
+        "ProtocolEpoch.maps",
     ];
 
     #[test]

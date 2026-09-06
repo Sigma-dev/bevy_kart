@@ -49,7 +49,27 @@ web-sys = { version = "0.3", features = [
     "RequestMode",
     "Response",
     "Headers",
-    "Crypto"
+    "Crypto",
+    # Saved maps.
+    "Storage",
+    # Exporting one as a file: a Blob behind an object URL, clicked through an
+    # anchor that is never added to the page.
+    "Blob",
+    "BlobPropertyBag",
+    "Url",
+    "HtmlAnchorElement",
+    # Importing one: a file input, also never added to the page. `File` derefs to
+    # `Blob`, whose `text()` gives a promise -- so no `FileReader` is needed.
+    "File",
+    "FileList",
+    "HtmlInputElement",
+    "Event",
+    # web-sys gates each step of a type's Deref chain behind its own feature, so
+    # reaching `HtmlAnchorElement` from `Document::create_element` needs these.
+    "Element",
+    "Node",
+    "EventTarget",
+    "HtmlElement",
 ] }
 js-sys = "0.3"
 wasm-bindgen = "0.2"

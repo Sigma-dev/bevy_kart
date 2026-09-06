@@ -1,5 +1,6 @@
 use crate::kart::{KART_SIZE, KartControlType, spawn_kart};
 use crate::menu::animated_button;
+use crate::menu::widgets::text_button;
 use crate::scene_util::insert;
 use crate::{
     AppColors, AppPlayerData, AppState, AssetHandles, ChatMessage, FinishTimes, RESOLUTION,
@@ -66,6 +67,7 @@ impl Plugin for LobbyPlugin {
                         on_chat_submit,
                         update_lobby_cars,
                         receive_ping,
+                        show_selected_map,
                     )
                         .run_if(in_state(Screen::Lobby)),
                     on_lobby_exit,
@@ -100,6 +102,11 @@ struct LobbyChatInputHistoryText;
 
 #[derive(Component, Default, Clone)]
 struct LobbyPlayersButtons;
+
+/// Shows the name of the map the race will use.
+#[derive(Component, Default, Clone)]
+#[require(Text)]
+struct SelectedMapText;
 
 #[derive(Component)]
 pub struct LobbyCar(pub u128);
@@ -414,14 +421,18 @@ pub fn spawn_lobby(
                 on(|_: On<Pointer<Press>>,
                     mut next_state: ResMut<NextState<AppState>>,
                     mut commands: Commands,
+                    selected: Res<crate::track::SelectedMap>,
                     lobbies: Query<Entity, With<Lobby>>| {
-                    next_state.set(AppState::Game);
+                    // The map travels with the start, in one message: two would
+                    // race each other on the native transport. See `map_sync`.
+                    let map = selected.0.clone();
                     if let Some(lobby) = lobbies.iter().next() {
-                        let msg = crate::GameStateChanged(AppState::Game);
+                        let msg = crate::map_sync::StartRace(map.clone());
                         commands
                             .entity(lobby)
                             .trigger(move |e| BroadcastLobbyMessage::new(e, msg));
                     }
+                    crate::map_sync::begin_race(&mut commands, &mut next_state, map);
                 })
             })
             .insert(ChildOf(buttons));
@@ -463,6 +474,55 @@ pub fn spawn_lobby(
         })
         .id();
 
+    // Which map the race will use. Everyone sees the name; only the host can
+    // change it, because only the host's choice is the one that travels.
+    let map_panel = commands
+        .spawn_scene(bsn! {
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(50),
+                right: px(5),
+                width: px(280),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(6),
+                align_items: AlignItems::FlexEnd,
+            }
+            Children [
+                (
+                    Text::new("MAP")
+                    TextFont { font_size: {FontSize::Px(20.)} }
+                ),
+                (
+                    Text::new("")
+                    TextFont { font_size: {FontSize::Px(26.)} }
+                    SelectedMapText
+                ),
+            ]
+        })
+        .id();
+    if is_host {
+        commands
+            .spawn_scene(bsn! {
+                text_button("NEXT MAP")
+                on(|_: On<Pointer<Press>>, mut selected: ResMut<crate::track::SelectedMap>| {
+                    // Cycles the built-ins. A placeholder for the real picker,
+                    // but enough to prove a map the clients never chose reaches
+                    // them and is what everybody races.
+                    let names: Vec<String> = crate::track::map::BUILTINS
+                        .iter()
+                        .map(|builtin| builtin.load().name)
+                        .collect();
+                    let next = names
+                        .iter()
+                        .position(|name| *name == selected.0.name)
+                        .map(|index| (index + 1) % names.len())
+                        .unwrap_or(0);
+                    selected.0 = crate::track::map::BUILTINS[next].load();
+                })
+            })
+            .insert(ChildOf(map_panel));
+    }
+
     let players_buttons = commands
         .spawn_scene(bsn! {
             LobbyPlayersButtons
@@ -476,7 +536,7 @@ pub fn spawn_lobby(
 
     commands
         .entity(lobby)
-        .add_children(&[lobby_code_text, lobby_chat, players_buttons, buttons]);
+        .add_children(&[lobby_code_text, lobby_chat, players_buttons, buttons, map_panel]);
 
     // Ping display.
     commands.spawn_scene(bsn! {
@@ -552,6 +612,22 @@ fn handle_background_elements(
             Visibility::Visible
         } else {
             Visibility::Hidden
+        }
+    }
+}
+
+/// Keep the lobby's map name in step with the selection.
+///
+/// Reads the same resource on the host and on a client: the host writes it from
+/// the picker, and a client has it written by `map_sync` when the host's choice
+/// arrives. Neither knows which it is.
+fn show_selected_map(
+    selected: Res<crate::track::SelectedMap>,
+    mut texts: Query<&mut Text, With<SelectedMapText>>,
+) {
+    for mut text in texts.iter_mut() {
+        if text.0 != selected.0.name {
+            *text = Text::new(selected.0.name.clone());
         }
     }
 }

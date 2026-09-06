@@ -8,6 +8,7 @@ pub struct MenuPlugin;
 
 pub mod lobby;
 pub mod start;
+pub(crate) mod widgets;
 
 /// Emitted when a focused single-line text input is submitted with Enter.
 ///

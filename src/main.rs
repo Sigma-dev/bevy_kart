@@ -21,6 +21,7 @@ pub mod hud;
 pub mod items;
 pub mod kart;
 pub mod lobby;
+pub mod map_sync;
 pub mod menu;
 pub mod networking;
 pub mod rollback_smoothing;
@@ -83,7 +84,40 @@ pub fn register_networked_components(app: &mut App) {
         .register_networked_ticked_component_as::<car_controller_2d::CarControllerDisabled>("CarControllerDisabled")
         // Rollback-only: a peer's own view of a rocket hit, never sent. Still an
         // entry in the registry, so it is part of the hash and of this order.
-        .register_ticked_component_as::<items::RocketHit>("RocketHit");
+        .register_ticked_component_as::<items::RocketHit>("RocketHit")
+        // Not a component anybody spawns: a protocol epoch.
+        //
+        // The broadcast-message registry below is a wire format too -- types are
+        // identified by a sequential `u16` -- but nothing hashes it and the
+        // handshake never sees it. A peer on an older build receiving an index it
+        // does not know logs `Received ensemble packet for unregistered type
+        // index N` and drops the packet: no `RegistryMismatch`, so no leave, so
+        // it sits in the lobby and simply never enters the race while the host
+        // drives away.
+        //
+        // Renaming this string whenever that registry changes shape moves
+        // `wire_hash()`, which `TickedRegistryHandshake` *does* compare, so the
+        // older peer is refused at the join instead of discovering it at the
+        // start button. `register_ticked_component_as` rather than the networked
+        // form, so it costs nothing on the wire -- the same trick `RocketHit` uses.
+        .register_ticked_component_as::<wire_format::ProtocolEpoch>("ProtocolEpoch.maps");
+}
+
+/// Every broadcast message, in order. **This order is a wire format.**
+///
+/// Types are identified on the wire by their position here as a `u16`, exactly
+/// as components are. Unlike components it is in no handshake, which is why
+/// `ProtocolEpoch` above exists. Append only, never reorder.
+///
+/// Note the plugin add order in `main` is part of this too: `EnsemblePlugin`,
+/// `LobbyBroadcastPlugin` and `PlayerDataPlugin` register their own types first,
+/// so moving them renumbers everything here.
+pub fn register_broadcast_messages(app: &mut App) {
+    app.register_broadcast_message::<ChatMessage>()
+        .register_broadcast_message::<track::OnFinishTimeUpdate>()
+        .register_broadcast_message::<GameStateChanged>()
+        .register_broadcast_message::<map_sync::MapSelected>()
+        .register_broadcast_message::<map_sync::StartRace>();
 }
 
 fn main() {
@@ -131,10 +165,7 @@ fn main() {
         // that disagree about the wire format end the session instead of
         // playing it out. `lobby.rs` keeps only the menu's side of all that.
         .add_plugins(TickedEnsembleSessionPlugin)
-        // Register ensemble messages
-        .register_broadcast_message::<ChatMessage>()
-        .register_broadcast_message::<track::OnFinishTimeUpdate>()
-        .register_broadcast_message::<GameStateChanged>()
+        // Register ensemble messages. **Append only**: see `wire_format`.
         // Game plugins
         .add_plugins((
             CarController2dPlugin,
@@ -148,7 +179,14 @@ fn main() {
             },
             TimerPlugin,
         ))
-        .add_plugins((MenuPlugin, TrackPlugin, ItemsPlugin, KartPlugin, CameraPlugin))
+        .add_plugins((
+            MenuPlugin,
+            TrackPlugin,
+            ItemsPlugin,
+            KartPlugin,
+            CameraPlugin,
+            map_sync::MapSyncPlugin,
+        ))
         // States & resources
         .init_state::<AppState>()
         .init_state::<LobbyState>()
@@ -184,6 +222,7 @@ fn main() {
             )
                 .chain(),
         )
+        .add_systems(Update, map_sync::bail_out_of_a_race_with_no_track)
         // Self-clearing, so leaving the editor by any route -- the back button, or
         // a lobby appearing underneath it -- cannot bounce straight back in.
         .add_systems(
@@ -192,9 +231,11 @@ fn main() {
         )
         .insert_resource(ClearColor(AppColors::Grass.color()));
 
-    // The wire format. Kept in a function of its own, and guarded by a golden test,
-    // because the order of those calls is a protocol rather than a style choice.
+    // The wire format. Kept in functions of their own, and guarded by golden
+    // tests, because the order of those calls is a protocol rather than a style
+    // choice.
     register_networked_components(&mut app);
+    register_broadcast_messages(&mut app);
 
     // Dev-only network debug overlay + condition simulator (F3 toggles the panel).
     #[cfg(feature = "netdebug")]

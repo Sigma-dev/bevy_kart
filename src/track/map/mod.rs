@@ -4,6 +4,7 @@ pub mod build;
 pub mod builtin;
 pub mod data;
 pub mod mesh;
+pub mod scatter;
 
 pub use build::{BuildLevel, BuiltTrack, Pose, Sample, TrackWarning, build};
 pub use builtin::{BUILTINS, by_slug, default_map};

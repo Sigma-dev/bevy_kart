@@ -11,10 +11,12 @@ use avian2d::prelude::*;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
+use crate::decor::Decor;
 use crate::items::spawn_spawner;
 use crate::track::StartLight;
 use crate::track::map::build::BuiltTrack;
 use crate::track::map::mesh::{road_mesh, start_line_mesh};
+use crate::track::map::scatter::scatter;
 use crate::track::position::progress_line::ProgressLine;
 use crate::{AppColors, AppState, AssetHandles, SpriteLayers};
 
@@ -79,6 +81,21 @@ pub(crate) fn spawn_map(
         &asset_handles,
         &mut texture_atlas_layouts,
     );
+
+    // Cosmetic only, and deliberately spawned in its own pass with its own
+    // marker: decoration must never grow a collider or a networked identity, and
+    // a rule with a marker behind it is one a debug assertion can check.
+    for placement in scatter(&built) {
+        commands.spawn((
+            DespawnOnExit(AppState::Game),
+            Decor,
+            placement.element,
+            placement.element.as_sprite(&asset_handles),
+            Transform::from_translation(
+                placement.position.extend(SpriteLayers::OnGround.to_z()),
+            ),
+        ));
+    }
 }
 
 /// One static box body per wall segment, alternating red and white.

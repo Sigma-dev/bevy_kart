@@ -14,7 +14,6 @@ pub struct AssetHandles {
     pub arrow_texture: Handle<Image>,
     pub kick_texture: Handle<Image>,
     pub name_texture: Handle<Image>,
-    pub track_texture: Handle<Image>,
     pub traffic_light_texture: Handle<Image>,
     pub karts_texture: Handle<Image>,
     pub karts_atlas: Handle<TextureAtlasLayout>,
@@ -57,7 +56,6 @@ pub fn load_assets(app: &mut App) {
         arrow_texture: asset_server.load("sprites/arrow.png"),
         kick_texture: asset_server.load("sprites/kick.png"),
         name_texture: asset_server.load("sprites/name.png"),
-        track_texture: asset_server.load("sprites/track.png"),
         traffic_light_texture: asset_server.load("sprites/start_light.png"),
         karts_texture: asset_server.load("sprites/karts.png"),
         karts_atlas: texture_atlases.add(TextureAtlasLayout::from_grid(

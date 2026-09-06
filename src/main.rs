@@ -17,6 +17,7 @@ pub mod camera;
 pub mod car_controller_2d;
 pub mod debug;
 pub mod entity_spawn;
+pub mod hud;
 pub mod items;
 pub mod kart;
 pub mod lobby;
@@ -48,7 +49,7 @@ use menu::MenuPlugin;
 use menu::lobby::spawn_lobby;
 use menu::start::spawn_menu;
 use rollback_smoothing::RollbackSmoothingPlugin;
-use track::{TrackPlugin, spawn_track};
+use track::{TrackPlugin, build_current_map, grid::spawn_starting_grid, spawn::spawn_map, start_countdown};
 
 
 /// Register every networked component. **This order is a wire format.**
@@ -152,6 +153,7 @@ fn main() {
         .init_state::<AppState>()
         .init_state::<LobbyState>()
         .init_state::<EditorState>()
+        .init_resource::<track::SelectedMap>()
         // `Screen` is the cross-product of the three above, named. Everything that
         // used to test two states at once tests this instead.
         .add_computed_state::<Screen>()
@@ -167,7 +169,20 @@ fn main() {
         // neither alone meant "the lobby screen"; `Screen::Lobby` means it once.
         .add_systems(OnEnter(Screen::StartMenu), spawn_menu)
         .add_systems(OnEnter(Screen::Lobby), spawn_lobby)
-        .add_systems(OnEnter(Screen::Race), spawn_track)
+        // Chained, and the first is exclusive so the built track is in the world
+        // before anything reads it. Geometry, then the karts on it, then the HUD
+        // over the top -- three jobs that used to be one 250-line function.
+        .add_systems(
+            OnEnter(Screen::Race),
+            (
+                build_current_map,
+                spawn_map,
+                spawn_starting_grid,
+                hud::spawn_race_hud,
+                start_countdown,
+            )
+                .chain(),
+        )
         // Self-clearing, so leaving the editor by any route -- the back button, or
         // a lobby appearing underneath it -- cannot bounce straight back in.
         .add_systems(

@@ -5,6 +5,7 @@ use bevy::window::PrimaryWindow;
 
 use crate::Screen;
 use crate::camera::MainCamera;
+use crate::track::position::progress_line::{DrawProgressLine, ProgressLine};
 use bevy_ensemble::prelude::{Lobby, NetDebugExtras, PeerRtt, PeerRttJitter};
 use bevy_ticked::prelude::{CurrentTick, TickRateDilation, TickedLoop, TickedSystems};
 use bevy_ticked_networking::client::SnapshotApplied;
@@ -24,6 +25,7 @@ impl Plugin for DebugPlugin {
                     // every line that is trying to explain something.
                     cursor_position_log.run_if(not(in_state(Screen::Editor))),
                     report_tick_buffer,
+                    toggle_progress_line,
                 ),
             )
             .init_resource::<PerfStats>()
@@ -269,6 +271,28 @@ fn cursor_position_log(
                 "World coords: Vec2::new({},{})",
                 world_position.x, world_position.y
             );
+        }
+    }
+}
+
+/// F4 draws the racing line the lap counter actually measures against.
+///
+/// Worth having for its own sake -- "why did that lap not count" is otherwise
+/// invisible -- and it is the cheapest way to see that gizmos are being drawn at
+/// all, which they were not before `GizmoRenderPlugin` was added.
+fn toggle_progress_line(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    lines: Query<(Entity, Has<DrawProgressLine>), With<ProgressLine>>,
+) {
+    if !keys.just_pressed(KeyCode::F4) {
+        return;
+    }
+    for (entity, shown) in lines.iter() {
+        if shown {
+            commands.entity(entity).remove::<DrawProgressLine>();
+        } else {
+            commands.entity(entity).insert(DrawProgressLine);
         }
     }
 }

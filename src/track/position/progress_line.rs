@@ -104,12 +104,18 @@ impl ProgressLine {
     }
 }
 
+/// Draw the racing line, when something has asked for it.
+///
+/// `Single` with a filter, so this simply does not run until a [`DrawProgressLine`]
+/// exists -- which is what the F4 toggle in `debug.rs` inserts.
 fn draw_progress_line(
     mut gizmos: Gizmos,
     progress_line: Single<&ProgressLine, With<DrawProgressLine>>,
 ) {
-    let mut last_point = progress_line.points.last().unwrap().clone();
-    for point in progress_line.points.clone() {
+    let Some(mut last_point) = progress_line.points.last().copied() else {
+        return;
+    };
+    for point in progress_line.points.iter().copied() {
         gizmos.line_2d(point, last_point, Color::WHITE);
         last_point = point;
     }

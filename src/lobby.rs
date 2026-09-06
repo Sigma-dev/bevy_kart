@@ -85,6 +85,7 @@ fn extract_query_param(target: &str) -> Option<String> {
 /// | `?autostart=N` | `KART_AUTOSTART_PLAYERS=N` | as host, start the race once `N` players are in |
 /// | `?name=NAME` | `KART_NAME=NAME` | the name this peer plays under |
 /// | `?autodrive=1` | `KART_AUTODRIVE=1` | hold the throttle and weave |
+/// | `?map=SLUG` | `KART_MAP=SLUG` | race that built-in map |
 /// | `?perf=1` | `KART_PERF=1` | log the frame-cost readout |
 ///
 /// `KART_AUTOSTART=host` on its own starts the race at two players, which is
@@ -106,6 +107,9 @@ pub struct SessionParams {
     pub name: Option<String>,
     pub autodrive: bool,
     pub perf: bool,
+    /// Which built-in map to race, by slug. An unknown one warns and falls back,
+    /// because a typo in a launch flag should not be the end of the session.
+    pub map: Option<String>,
 }
 
 impl SessionParams {
@@ -136,6 +140,7 @@ impl SessionParams {
             name: get("name", "KART_NAME"),
             autodrive: flag("autodrive", "KART_AUTODRIVE"),
             perf: flag("perf", "KART_PERF"),
+            map: get("map", "KART_MAP"),
         }
     }
 }
@@ -143,6 +148,7 @@ impl SessionParams {
 fn apply_session_params(
     mut commands: Commands,
     mut local_data: ResMut<LocalPlayerData>,
+    mut selected_map: ResMut<crate::track::SelectedMap>,
     mut join_by_code: MessageWriter<JoinWebrtcLobbyByCode>,
     mut start_hosting: MessageWriter<StartHosting>,
 ) {
@@ -155,6 +161,17 @@ fn apply_session_params(
     }
     if let Some(room) = &params.room {
         join_by_code.write(JoinWebrtcLobbyByCode(room.clone()));
+    }
+    if let Some(slug) = &params.map {
+        match crate::track::map::by_slug(slug) {
+            Some(map) => {
+                info!("racing the `{slug}` map, from the launch parameters");
+                selected_map.0 = map;
+            }
+            // Naming a map that does not exist is a typo in a script, not a
+            // reason to refuse to start.
+            None => warn!("no built-in map called `{slug}`; keeping the default"),
+        }
     }
     if params.host {
         start_hosting.write(StartHosting);

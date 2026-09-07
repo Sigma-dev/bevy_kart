@@ -1,7 +1,7 @@
 use bevy::a11y::AccessibilityPlugin;
 use bevy::app::{PanicHandlerPlugin, TaskPoolPlugin};
 use bevy::asset::AssetMetaCheck;
-use bevy::audio::AudioPlugin;
+use bevy::audio::{AudioPlugin, SpatialScale};
 use bevy::camera::CameraPlugin;
 use bevy::core_pipeline::CorePipelinePlugin;
 use bevy::diagnostic::{DiagnosticsPlugin, FrameCountPlugin};
@@ -27,6 +27,11 @@ use bevy::ui_widgets::{EditableTextInputPlugin, ScrollAreaPlugin, SliderPlugin};
 use bevy::winit::WinitPlugin;
 
 /// Replaces DefaultPlugins with only the Bevy plugins this game actually needs.
+/// World units to one "metre" of spatial audio. The whole 256 x 144 viewport is
+/// then about five metres across, so everything on screen is audible and only
+/// the far side of a large map falls away.
+const SPATIAL_UNITS_PER_METRE: f32 = 50.;
+
 pub struct NecessaryBevyPlugins;
 
 impl Plugin for NecessaryBevyPlugins {
@@ -74,7 +79,18 @@ impl Plugin for NecessaryBevyPlugins {
             TextPlugin,
             UiPlugin,
             UiRenderPlugin,
-            AudioPlugin::default(),
+            // Spatial audio measures distance in world units and attenuates by
+            // the inverse square of it (rodio's `Spatial`), while a world unit
+            // here is a pixel: a kart is 4 x 8. Left at the default scale of 1,
+            // anything more than a unit or so from the listener is already
+            // inaudible -- and the listener is the camera, which on a map that
+            // fits on one screen never moves off the centre while the karts
+            // drive 50 units away. `new2d` also drops the z axis, which is only
+            // ever a sprite layer here and would otherwise read as distance.
+            AudioPlugin {
+                default_spatial_scale: SpatialScale::new_2d(1. / SPATIAL_UNITS_PER_METRE),
+                ..default()
+            },
             GizmoPlugin,
             // `GizmoPlugin` only registers the asset, the config store and the config
             // groups; the draw pass lives here. Without it every `Gizmos` call is

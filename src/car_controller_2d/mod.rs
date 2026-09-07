@@ -151,7 +151,14 @@ fn car_controller_power(
         };
 
         let base_mult = 16.;
-        let boost = maybe_boost_effect.map_or(1., |boost_effect| boost_effect.multiplier);
+        // Forward only: a boost is a burst of speed down the track, and applying
+        // it to reverse as well made the item a way to rocket backwards out of a
+        // bad spot.
+        let boost = if dir > 0. {
+            maybe_boost_effect.map_or(1., |boost_effect| boost_effect.multiplier)
+        } else {
+            1.
+        };
         let kart_angle = rot.as_radians();
         let steer_rad = (steering.angle * 45.).to_radians();
         for child in children.iter() {

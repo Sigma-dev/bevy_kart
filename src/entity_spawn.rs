@@ -214,9 +214,12 @@ fn on_tracked_entity_spawned(
             commands.entity(entity).observe(kart::on_lap_update);
 
             let wheel_tex = asset_handles.wheel_texture.clone();
-            commands
-                .entity(entity)
-                .with_children(|parent| kart::spawn_kart_wheels(parent, wheel_tex));
+            let flame_tex = asset_handles.boost_flame_texture.clone();
+            let flame_atlas = asset_handles.boost_flame_atlas.clone();
+            commands.entity(entity).with_children(|parent| {
+                kart::spawn_kart_wheels(parent, wheel_tex);
+                kart::spawn_boost_flame(parent, flame_tex, flame_atlas);
+            });
 
             if is_local {
                 commands.entity(entity).insert(LocalKart);

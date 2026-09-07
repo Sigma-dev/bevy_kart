@@ -1,4 +1,6 @@
-use crate::car_controller_2d::{CarController2d, CarControllerDisabled, CarControllerInputs, SteeringState};
+use crate::car_controller_2d::{
+    BoostEffect, CarController2d, CarControllerDisabled, CarControllerInputs, SteeringState,
+};
 use crate::menu::lobby::{LobbyCar, LobbyCarName};
 use crate::track::LAPS_TO_WIN;
 use crate::track::position::TrackPosition;
@@ -8,9 +10,11 @@ use crate::{
     car_controller_2d::CarController2dWheel,
     track::FinishTimes,
 };
+use audio_manager::prelude::*;
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
+use bevy::sprite::Anchor;
 use crate::scene_util::insert;
 use bevy_ensemble::prelude::*;
 use bevy_ensemble::LobbyClientPlayerUuid;
@@ -22,17 +26,30 @@ pub struct KartPlugin;
 
 impl Plugin for KartPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            PostUpdate,
-            follow_transform
-                .after(ApplyCorrectionSet)
-                .before(TransformSystems::Propagate),
-        );
+        app.add_systems(Update, update_boost_flame)
+            .add_systems(
+                PostUpdate,
+                follow_transform
+                    .after(ApplyCorrectionSet)
+                    .before(TransformSystems::Propagate),
+            );
     }
 }
 
 pub const KART_SIZE: UVec2 = UVec2::new(4, 8);
 pub const KART_COLORS_COUNT: u32 = 10;
+
+/// One frame of `sprites/boost.png`. The flame is drawn hanging from the top
+/// edge of its cell, so the cell is anchored there and the art trails downwards.
+pub const BOOST_FLAME_SIZE: UVec2 = UVec2::splat(8);
+pub const BOOST_FLAME_FRAMES: u32 = 2;
+/// Frames per second the two flame frames alternate at.
+const BOOST_FLAME_FPS: f32 = 12.;
+/// `sounds/boost.wav` is recorded far quieter than the rest of the set: about
+/// 22 dB under `rocket.wav` by RMS, which the global 0.3 multiplier and the
+/// spatial falloff then take the rest of the way to inaudible. This brings it
+/// level with the rocket; normalising the file instead would let it go.
+const BOOST_SOUND_GAIN: f32 = 12.;
 
 #[derive(Component, Debug, Default)]
 pub struct LapsCounter {
@@ -106,6 +123,74 @@ pub fn spawn_kart_wheels(parent: &mut ChildSpawnerCommands, wheel_texture: Handl
             CarController2dWheel::new(powered, steerable),
             Sprite::from_image(wheel_texture.clone()),
         ));
+    }
+}
+
+/// The exhaust flame behind a kart. Spawned hidden with the kart and shown by
+/// [`update_boost_flame`] for as long as the kart carries a [`BoostEffect`],
+/// rather than spawned and despawned with the boost: the effect is a replicated
+/// component that rollback adds and removes again on a client, and a visual
+/// that lives across that churn cannot flicker with it.
+#[derive(Component)]
+pub struct BoostFlame;
+
+/// Spawn the boost flame child of a kart, hidden until the kart boosts.
+pub fn spawn_boost_flame(
+    parent: &mut ChildSpawnerCommands,
+    boost_flame_texture: Handle<Image>,
+    boost_flame_atlas: Handle<TextureAtlasLayout>,
+) {
+    parent.spawn((
+        BoostFlame,
+        // At the rear bumper, with the sprite's top edge pinned there, so the
+        // flame starts where the kart ends however tall the art is.
+        Transform::from_xyz(0., -(KART_SIZE.y as f32) / 2., SpriteLayers::Wheels.to_z()),
+        Anchor::TOP_CENTER,
+        Sprite::from_atlas_image(
+            boost_flame_texture,
+            TextureAtlas {
+                layout: boost_flame_atlas,
+                index: 0,
+            },
+        ),
+        Visibility::Hidden,
+    ));
+}
+
+/// Show the flame while its kart is boosting, run its frames, and fire the
+/// boost sound on the frame it lights up. Frame-time driven, like the rocket's:
+/// it is a visual only, and nothing in the simulation reads it.
+///
+/// The sound rides the flame's own hidden -> shown edge rather than an
+/// `Added<BoostEffect>` observer: `BoostEffect` is replicated, so rollback can
+/// add it several times over for one boost, while this runs once a frame on
+/// whatever state the tick loop settled on.
+fn update_boost_flame(
+    time: Res<Time>,
+    mut audio_manager: AudioManager,
+    boosting_karts: Query<(), With<BoostEffect>>,
+    mut flames: Query<(&ChildOf, &mut Sprite, &mut Visibility), With<BoostFlame>>,
+) {
+    let frame = (time.elapsed_secs() * BOOST_FLAME_FPS) as usize % BOOST_FLAME_FRAMES as usize;
+    for (child_of, mut sprite, mut visibility) in flames.iter_mut() {
+        let boosting = boosting_karts.contains(child_of.parent());
+        if boosting && *visibility == Visibility::Hidden {
+            // On the kart, so every peer hears the boost from where it happens
+            // and the local player's own is the loudest.
+            audio_manager.play_sound(
+                PlayAudio2D::new_once("sounds/boost.wav")
+                    .with_volume(BOOST_SOUND_GAIN)
+                    .with_spatial(SpatialSettings2D::Entity(child_of.parent())),
+            );
+        }
+        *visibility = if boosting {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if let Some(atlas) = sprite.texture_atlas.as_mut() {
+            atlas.index = frame;
+        }
     }
 }
 
@@ -211,6 +296,14 @@ pub(crate) fn spawn_kart(
                 TrackPosition,
             ));
             commands.entity(id).observe(on_lap_update);
+
+            let (flame_tex, flame_atlas) = (
+                asset_handles.boost_flame_texture.clone(),
+                asset_handles.boost_flame_atlas.clone(),
+            );
+            commands
+                .entity(id)
+                .with_children(|parent| spawn_boost_flame(parent, flame_tex, flame_atlas));
 
             if is_local {
                 commands.entity(id).insert(LocalKart);
@@ -380,5 +473,79 @@ fn follow_transform(
         } else {
             commands.entity(entity).try_despawn();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! The boost flame, headless: no window, no audio device, no network.
+    use super::*;
+    use audio_manager::AudioManagerResource;
+    use bevy::asset::AssetPlugin;
+    use bevy::audio::{AudioPlayer, AudioSource};
+
+    /// A kart with a flame child, and just enough app to run
+    /// [`update_boost_flame`]: assets for the sound to be loaded from, and the
+    /// audio manager's resource for it to be played through.
+    fn app() -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<AudioSource>()
+            .insert_resource(AudioManagerResource::new(1.))
+            .add_systems(Update, update_boost_flame);
+        let kart = app.world_mut().spawn(Transform::default()).id();
+        app.world_mut().spawn((
+            BoostFlame,
+            Sprite::from_atlas_image(
+                Handle::default(),
+                TextureAtlas {
+                    layout: Handle::default(),
+                    index: 0,
+                },
+            ),
+            Visibility::Hidden,
+            ChildOf(kart),
+        ));
+        (app, kart)
+    }
+
+    fn sounds_playing(app: &mut App) -> usize {
+        app.world_mut()
+            .query_filtered::<Entity, With<AudioPlayer>>()
+            .iter(app.world())
+            .count()
+    }
+
+    fn flame_visibility(app: &mut App) -> Visibility {
+        *app.world_mut()
+            .query_filtered::<&Visibility, With<BoostFlame>>()
+            .single(app.world())
+            .unwrap()
+    }
+
+    #[test]
+    fn the_flame_lights_and_the_sound_fires_once_for_one_boost() {
+        let (mut app, kart) = app();
+        app.update();
+        assert_eq!(flame_visibility(&mut app), Visibility::Hidden);
+        assert_eq!(sounds_playing(&mut app), 0);
+
+        app.world_mut().entity_mut(kart).insert(BoostEffect {
+            multiplier: 3.,
+            remaining_ticks: 64,
+        });
+        app.update();
+        assert_eq!(flame_visibility(&mut app), Visibility::Inherited);
+        assert_eq!(sounds_playing(&mut app), 1);
+
+        // Every later frame of the same boost is the flame already lit, not a
+        // second one starting.
+        app.update();
+        app.update();
+        assert_eq!(sounds_playing(&mut app), 1);
+
+        app.world_mut().entity_mut(kart).remove::<BoostEffect>();
+        app.update();
+        assert_eq!(flame_visibility(&mut app), Visibility::Hidden);
     }
 }

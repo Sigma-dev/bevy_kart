@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::kart::{KART_COLORS_COUNT, KART_SIZE};
+use crate::kart::{BOOST_FLAME_FRAMES, BOOST_FLAME_SIZE, KART_COLORS_COUNT, KART_SIZE};
 use crate::menu::lobby::BACKGROUND_ELEMENT_TYPES_COUNT;
 
 #[derive(Resource)]
@@ -18,6 +18,8 @@ pub struct AssetHandles {
     pub karts_texture: Handle<Image>,
     pub karts_atlas: Handle<TextureAtlasLayout>,
     pub wheel_texture: Handle<Image>,
+    pub boost_flame_texture: Handle<Image>,
+    pub boost_flame_atlas: Handle<TextureAtlasLayout>,
     pub crate_texture: Handle<Image>,
     pub items_texture: Handle<Image>,
     pub rocket_texture: Handle<Image>,
@@ -66,6 +68,14 @@ pub fn load_assets(app: &mut App) {
             None,
         )),
         wheel_texture: asset_server.load("sprites/wheel.png"),
+        boost_flame_texture: asset_server.load("sprites/boost.png"),
+        boost_flame_atlas: texture_atlases.add(TextureAtlasLayout::from_grid(
+            BOOST_FLAME_SIZE,
+            BOOST_FLAME_FRAMES,
+            1,
+            None,
+            None,
+        )),
         crate_texture: asset_server.load("sprites/crate.png"),
         items_texture: asset_server.load("sprites/items.png"),
         rocket_texture: asset_server.load("sprites/rocket.png"),

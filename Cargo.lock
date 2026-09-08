@@ -694,7 +694,6 @@ dependencies = [
  "bevy_derive",
  "bevy_ecs",
  "bevy_math",
- "bevy_mesh",
  "bevy_platform",
  "bevy_reflect",
  "bevy_time",
@@ -1054,7 +1053,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#0b47e283fb0b04478d091a5759f7662b9c7e7270"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#eef7c524181427786aeeaf1f63ee048129928602"
 dependencies = [
  "bevy",
  "postcard",
@@ -1064,7 +1063,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble_sockets"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#0b47e283fb0b04478d091a5759f7662b9c7e7270"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#eef7c524181427786aeeaf1f63ee048129928602"
 dependencies = [
  "bytes",
  "js-sys",
@@ -1082,7 +1081,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble_webrtc"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#0b47e283fb0b04478d091a5759f7662b9c7e7270"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#eef7c524181427786aeeaf1f63ee048129928602"
 dependencies = [
  "async-tungstenite",
  "axum",
@@ -1204,7 +1203,6 @@ dependencies = [
  "bevy_material",
  "bevy_math",
  "bevy_mesh",
- "bevy_pbr",
  "bevy_reflect",
  "bevy_render",
  "bevy_shader",
@@ -1213,42 +1211,6 @@ dependencies = [
  "bevy_utils",
  "bytemuck",
  "tracing",
-]
-
-[[package]]
-name = "bevy_gltf"
-version = "0.19.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d17df73b26adfb8be89f0716b8667c60660bdd2d589863b8901caca58c99841"
-dependencies = [
- "async-lock",
- "base64",
- "bevy_animation",
- "bevy_app",
- "bevy_asset",
- "bevy_camera",
- "bevy_color",
- "bevy_ecs",
- "bevy_image",
- "bevy_light",
- "bevy_material",
- "bevy_math",
- "bevy_mesh",
- "bevy_platform",
- "bevy_reflect",
- "bevy_tasks",
- "bevy_transform",
- "bevy_world_serialization",
- "fixedbitset",
- "gltf",
- "itertools 0.14.0",
- "percent-encoding",
- "serde",
- "serde_json",
- "smallvec",
- "thiserror 2.0.20",
- "tracing",
- "wgpu-types",
 ]
 
 [[package]]
@@ -1283,9 +1245,7 @@ dependencies = [
  "guillotiere",
  "half",
  "image",
- "ktx2",
  "rectangle-pack",
- "ruzstd",
  "serde",
  "thiserror 2.0.20",
  "tracing",
@@ -1352,7 +1312,6 @@ dependencies = [
  "bevy_gilrs",
  "bevy_gizmos",
  "bevy_gizmos_render",
- "bevy_gltf",
  "bevy_image",
  "bevy_input",
  "bevy_input_focus",
@@ -1573,7 +1532,6 @@ dependencies = [
  "bevy_derive",
  "bevy_diagnostic",
  "bevy_ecs",
- "bevy_gltf",
  "bevy_image",
  "bevy_light",
  "bevy_log",
@@ -1977,7 +1935,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#e1c74cf835f3c254d10ad45467f7be21462faa34"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#06b26c7dbc0e75a8d31b0f2033ce7f66b423ef9d"
 dependencies = [
  "bevy",
  "log",
@@ -1988,7 +1946,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked_networking"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#e1c74cf835f3c254d10ad45467f7be21462faa34"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#06b26c7dbc0e75a8d31b0f2033ce7f66b423ef9d"
 dependencies = [
  "bevy",
  "bevy_ticked",
@@ -1999,7 +1957,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked_networking_ensemble"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#e1c74cf835f3c254d10ad45467f7be21462faa34"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#06b26c7dbc0e75a8d31b0f2033ce7f66b423ef9d"
 dependencies = [
  "bevy",
  "bevy_ensemble",
@@ -3800,42 +3758,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gltf"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3ce1918195723ce6ac74e80542c5a96a40c2b26162c1957a5cd70799b8cacf7"
-dependencies = [
- "byteorder",
- "gltf-json",
- "lazy_static",
- "serde_json",
-]
-
-[[package]]
-name = "gltf-derive"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14070e711538afba5d6c807edb74bcb84e5dbb9211a3bf5dea0dfab5b24f4c51"
-dependencies = [
- "inflections",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "gltf-json"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6176f9d60a7eab0a877e8e96548605dedbde9190a7ae1e80bbcc1c9af03ab14"
-dependencies = [
- "gltf-derive",
- "serde",
- "serde_derive",
- "serde_json",
-]
-
-[[package]]
 name = "glutin_wgl_sys"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4320,12 +4242,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "inflections"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a257582fdcde896fd96463bf2d40eefea0580021c0712a0e2b028b60b47a837a"
-
-[[package]]
 name = "inotify"
 version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4548,30 +4464,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
-name = "ktx2"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d50be8a24c37debdf3170be6ca396d5b5b165f37f94837891adac735ca416b8"
-dependencies = [
- "bitflags 2.13.1",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
-
-[[package]]
-name = "lewton"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "777b48df9aaab155475a83a7df3070395ea1ac6902f5cd062b8f2b028075c030"
-dependencies = [
- "byteorder",
- "ogg",
- "tinyvec",
-]
 
 [[package]]
 name = "libc"
@@ -5418,15 +5314,6 @@ checksum = "e234d535da3521eb95106f40f0b73483d80bfb3aacf27c40d7e2b72f1a3e00a2"
 dependencies = [
  "log",
  "nonmax",
-]
-
-[[package]]
-name = "ogg"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6951b4e8bf21c8193da321bcce9c9dd2e13c858fe078bf9054a288b419ae5d6e"
-dependencies = [
- "byteorder",
 ]
 
 [[package]]
@@ -6345,7 +6232,6 @@ dependencies = [
  "cpal",
  "dasp_sample",
  "hound",
- "lewton",
  "num-rational",
  "thiserror 2.0.20",
  "tracing",
@@ -6492,15 +6378,6 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
-
-[[package]]
-name = "ruzstd"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7c1c839d570d835527c9a5e4db7cb2198683a988cb9d7293fc8674e6bd58fc8"
-dependencies = [
- "twox-hash",
-]
 
 [[package]]
 name = "ryu"
@@ -7546,12 +7423,6 @@ dependencies = [
  "tokio-util",
  "webrtc-util",
 ]
-
-[[package]]
-name = "twox-hash"
-version = "2.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
 
 [[package]]
 name = "typeid"

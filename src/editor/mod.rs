@@ -199,10 +199,13 @@ impl Status {
     }
 }
 
-/// What the editor draws the road with. Held so the mesh can be edited in place
-/// rather than replaced every frame.
+/// What the editor draws the road with. Held so the meshes can be edited in
+/// place rather than replaced every frame.
 #[derive(Resource)]
-pub struct PreviewMesh(pub Handle<Mesh>);
+pub struct PreviewMesh {
+    pub road: Handle<Mesh>,
+    pub wall: Handle<Mesh>,
+}
 
 fn enter_editor(
     mut commands: Commands,
@@ -225,16 +228,26 @@ fn enter_editor(
         .unwrap_or_else(|| (starter_map(), None));
     let editor = EditorMap::from_map(map, source);
 
-    let mesh = meshes.add(crate::track::map::mesh::road_mesh(&editor.built));
+    let road = meshes.add(crate::track::map::mesh::road_mesh(&editor.built));
+    let wall = meshes.add(crate::track::map::mesh::wall_mesh(&editor.built));
+    // White, because the road carries its colours per vertex and the shader
+    // multiplies the two.
+    let vertex_coloured = materials.add(ColorMaterial::from(Color::WHITE));
+    // The same two entities, at the same depths, as the race spawns: the editor
+    // shows the track the way it will be driven.
     commands.spawn((
         DespawnOnExit(Screen::Editor),
-        Mesh2d(mesh.clone()),
-        // White, because the road carries its colours per vertex and the shader
-        // multiplies the two.
-        MeshMaterial2d(materials.add(ColorMaterial::from(Color::WHITE))),
+        Mesh2d(road.clone()),
+        MeshMaterial2d(vertex_coloured.clone()),
         Transform::from_xyz(0., 0., crate::SpriteLayers::Background.to_z()),
     ));
-    commands.insert_resource(PreviewMesh(mesh));
+    commands.spawn((
+        DespawnOnExit(Screen::Editor),
+        Mesh2d(wall.clone()),
+        MeshMaterial2d(vertex_coloured),
+        Transform::from_xyz(0., 0., crate::SpriteLayers::Wall.to_z()),
+    ));
+    commands.insert_resource(PreviewMesh { road, wall });
     // Frame it on the way in. The camera is shared with the race and the menus,
     // so without this the editor opens wherever the last thing left it -- which
     // for a map larger than a screen is often looking at empty grass.
@@ -261,11 +274,12 @@ fn leave_editor(mut commands: Commands, mut camera: Query<&mut Projection>) {
 
 /// Rebuild the geometry, but only what is cheap, and only when something changed.
 ///
-/// The road mesh is mutated **in place** rather than replaced: `meshes.add`
-/// every frame while a handle is being dragged leaks a mesh per frame. The walls
-/// and the scenery are not rebuilt as entities at all here -- the overlay draws
-/// them as gizmos, because respawning a couple of hundred static bodies at sixty
-/// hertz would have avian rebuilding its broadphase sixty times a second.
+/// The road and wall meshes are mutated **in place** rather than replaced:
+/// `meshes.add` every frame while a handle is being dragged leaks a mesh per
+/// frame. The barriers and the scenery are not rebuilt as entities at all here
+/// -- the overlay draws them as gizmos, because respawning a couple of hundred
+/// static bodies at sixty hertz would have avian rebuilding its broadphase sixty
+/// times a second.
 fn rebuild_preview(
     mut editor: ResMut<EditorMap>,
     drag: Option<Res<tools::Drag>>,
@@ -285,8 +299,11 @@ fn rebuild_preview(
         Some(_) => BuildLevel::Preview,
     };
     editor.built = build(&editor.data, level);
-    if let Some(mut mesh) = meshes.get_mut(&preview.0) {
+    if let Some(mut mesh) = meshes.get_mut(&preview.road) {
         *mesh = crate::track::map::mesh::road_mesh(&editor.built);
+    }
+    if let Some(mut mesh) = meshes.get_mut(&preview.wall) {
+        *mesh = crate::track::map::mesh::wall_mesh(&editor.built);
     }
 }
 

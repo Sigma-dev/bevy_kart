@@ -1,8 +1,10 @@
 //! The road, as geometry rather than as a painted sprite.
 //!
-//! One mesh carries the road body and both kerb bands, in a single draw call,
-//! by putting the colour on the vertices. That is only sound because of one
-//! detail worth stating loudly: `ColorMaterial`'s shader does
+//! Two meshes: the tarmac, and the wall band down each edge of it. They are
+//! separate because they are drawn at different depths -- the road under
+//! everything, the band over a kart's wheels -- and depth belongs to an entity,
+//! not a vertex. Each puts its colours on the vertices, which is only sound
+//! because of one detail worth stating loudly: `ColorMaterial`'s shader does
 //! `output_color = material.color * mesh.color`, so **the material has to be
 //! white** or every vertex colour is tinted twice.
 
@@ -15,42 +17,37 @@ use crate::AppColors;
 use super::build::BuiltTrack;
 use super::data::scalar_to_world;
 
-/// Build the road surface for a track.
+/// How far the wall band reaches either side of the road edge.
 ///
-/// A `TriangleList` rather than a strip: a strip would need degenerate triangles
-/// to jump between the tarmac and the two wall bands, and the extra indices cost
-/// nothing. Winding is irrelevant -- `Mesh2d`'s pipeline sets `cull_mode: None`.
-///
-/// The wall bands are what the player sees of the track's walls. The barriers
-/// `spawn_barriers` builds are colliders and nothing else: a second
-/// red-and-white polyline drawn over this one, from a coarser set of points, is
-/// what made the track look like it had two rows of barriers with only one of
-/// them stopping anything.
-pub fn road_mesh(built: &BuiltTrack) -> Mesh {
-    let stripe_length = scalar_to_world(built.map.road.kerb_stripe).max(0.1);
+/// Half of it hangs over the grass, exactly as the barriers standing on that
+/// edge used to -- and it is clamped, so a map with an absurd kerb width cannot
+/// eat the road it is supposed to be edging. The tarmac stops where the band
+/// starts, so both meshes measure from the same rule.
+fn band_reach(built: &BuiltTrack, half_width: f32) -> f32 {
     let kerb_width = scalar_to_world(built.map.road.kerb_width);
+    (kerb_width / 2.0).min(half_width * 0.5)
+}
 
+/// Build the tarmac for a track: the road between its two wall bands.
+///
+/// A `TriangleList` rather than a strip: the extra indices cost nothing, and
+/// it is the one topology [`wall_mesh`]'s quads can use too, so the two share
+/// a builder. Winding is irrelevant -- `Mesh2d`'s pipeline sets
+/// `cull_mode: None`.
+pub fn road_mesh(built: &BuiltTrack) -> Mesh {
     let road = AppColors::Road.color().to_linear().to_f32_array();
-    let kerb = AppColors::Kerb.color().to_linear().to_f32_array();
-    let white = Color::WHITE.to_linear().to_f32_array();
 
     let count = built.centre.len();
-    let mut positions = Vec::with_capacity(count * 10);
-    let mut uvs = Vec::with_capacity(count * 10);
-    let mut colors = Vec::with_capacity(count * 10);
-    let mut indices = Vec::with_capacity(count * 18);
+    let mut positions = Vec::with_capacity(count * 2);
+    let mut uvs = Vec::with_capacity(count * 2);
+    let mut colors = Vec::with_capacity(count * 2);
+    let mut indices = Vec::with_capacity(count * 6);
 
-    // How far the band reaches either side of the road edge. Half of it hangs
-    // over the grass, exactly as the barriers standing on that edge used to --
-    // and it is clamped, so a map with an absurd kerb width cannot eat the road
-    // it is supposed to be edging.
-    let reach = |half: f32| (kerb_width / 2.0).min(half * 0.5);
-
-    // The tarmac: one ribbon of shared rings, closed by indexing modulo the
-    // vertex count rather than by repeating the first ring, so there is no
-    // hairline crack and no pair of coincident vertices to z-fight.
+    // One ribbon of shared rings, closed by indexing modulo the vertex count
+    // rather than by repeating the first ring, so there is no hairline crack and
+    // no pair of coincident vertices to z-fight.
     for sample in &built.centre {
-        let inner = sample.half_width - reach(sample.half_width);
+        let inner = sample.half_width - band_reach(built, sample.half_width);
         for lateral in [inner, -inner] {
             let point = sample.position + sample.normal * lateral;
             positions.push([point.x, point.y, 0.0]);
@@ -67,13 +64,39 @@ pub fn road_mesh(built: &BuiltTrack) -> Mesh {
         indices.extend_from_slice(&[a, b, a + 1, a + 1, b, b + 1]);
     }
 
-    // The wall band down each edge, as quads that own their four vertices.
-    //
-    // Its own quads rather than two more columns of the ribbon, because a stripe
-    // has to *start*. Sharing a ring between the span before a colour change and
-    // the span after it is an instruction to the shader to interpolate across
-    // it, and a two-unit fade at each end of a nine-unit stripe is the whole
-    // band reading as a blur rather than as paint.
+    flat_mesh(positions, uvs, colors, indices)
+}
+
+/// Build the red-and-white wall band down each edge of a track.
+///
+/// This is what the player sees of the track's walls. The barriers
+/// `spawn_barriers` builds are colliders and nothing else: a second
+/// red-and-white polyline drawn over this one, from a coarser set of points, is
+/// what made the track look like it had two rows of barriers with only one of
+/// them stopping anything.
+///
+/// Its own mesh rather than two more columns of the road, because it is drawn
+/// at a different depth: over a kart's wheels, where the road is under
+/// everything. A kart's wheels reach past its collider, so a kart leaning on a
+/// wall has its wheels over the band, and a wheel painted on top of a barrier
+/// is a kart standing on the wall rather than against it.
+pub fn wall_mesh(built: &BuiltTrack) -> Mesh {
+    let stripe_length = scalar_to_world(built.map.road.kerb_stripe).max(0.1);
+
+    let kerb = AppColors::Kerb.color().to_linear().to_f32_array();
+    let white = Color::WHITE.to_linear().to_f32_array();
+
+    let count = built.centre.len();
+    let mut positions = Vec::with_capacity(count * 8);
+    let mut uvs = Vec::with_capacity(count * 8);
+    let mut colors = Vec::with_capacity(count * 8);
+    let mut indices = Vec::with_capacity(count * 12);
+
+    // Quads that own their four vertices rather than a shared ribbon, because a
+    // stripe has to *start*. Sharing a ring between the span before a colour
+    // change and the span after it is an instruction to the shader to
+    // interpolate across it, and a two-unit fade at each end of a nine-unit
+    // stripe is the whole band reading as a blur rather than as paint.
     for i in 0..count {
         let (a, b) = (&built.centre[i], &built.centre[(i + 1) % count]);
         // The same phase drives both sides, so the two edges read as one
@@ -87,7 +110,7 @@ pub fn road_mesh(built: &BuiltTrack) -> Mesh {
             let base = positions.len() as u32;
             for sample in [a, b] {
                 let edge = sample.half_width * side;
-                let out = reach(sample.half_width) * side;
+                let out = band_reach(built, sample.half_width) * side;
                 for lateral in [edge - out, edge + out] {
                     let point = sample.position + sample.normal * lateral;
                     positions.push([point.x, point.y, 0.0]);
@@ -99,6 +122,16 @@ pub fn road_mesh(built: &BuiltTrack) -> Mesh {
         }
     }
 
+    flat_mesh(positions, uvs, colors, indices)
+}
+
+/// A vertex-coloured triangle list on the z = 0 plane.
+fn flat_mesh(
+    positions: Vec<[f32; 3]>,
+    uvs: Vec<[f32; 2]>,
+    colors: Vec<[f32; 4]>,
+    indices: Vec<u32>,
+) -> Mesh {
     Mesh::new(
         PrimitiveTopology::TriangleList,
         // MAIN_WORLD as well as RENDER_WORLD, so the editor can mutate this mesh
@@ -160,11 +193,7 @@ pub fn start_line_mesh(built: &BuiltTrack) -> Mesh {
         }
     }
 
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
-        .with_inserted_indices(Indices::U32(indices))
+    flat_mesh(positions, uvs, colors, indices)
 }
 
 #[cfg(test)]
@@ -185,16 +214,15 @@ mod tests {
         let mesh = road_mesh(&built);
         let count = built.centre.len();
 
-        // Two shared vertices per sample for the tarmac, and four of its own per
-        // wall-band quad, twice.
-        assert_eq!(positions(&mesh).len(), count * 10);
+        // Two shared vertices per sample.
+        assert_eq!(positions(&mesh).len(), count * 2);
         let Some(Indices::U32(indices)) = mesh.indices() else {
             panic!("expected u32 indices")
         };
-        // One quad of tarmac and two of band per sample, two triangles each.
-        assert_eq!(indices.len(), count * 3 * 6);
+        // One quad of tarmac per sample, two triangles each.
+        assert_eq!(indices.len(), count * 6);
         assert!(
-            indices.iter().all(|i| (*i as usize) < count * 10),
+            indices.iter().all(|i| (*i as usize) < count * 2),
             "every index is in range, so the seam wraps rather than dangling"
         );
         // The tarmac's first and last rings are distinct vertices that meet: no
@@ -213,18 +241,20 @@ mod tests {
     #[test]
     fn the_wall_band_is_painted_rather_than_blended() {
         let built = build(&circle(80.0, 11.0), BuildLevel::Preview);
-        let mesh = road_mesh(&built);
+        let mesh = wall_mesh(&built);
         let count = built.centre.len();
         let colors = match mesh.attribute(Mesh::ATTRIBUTE_COLOR).unwrap() {
             bevy::mesh::VertexAttributeValues::Float32x4(v) => v.clone(),
             other => panic!("unexpected colour attribute: {other:?}"),
         };
+        // Four vertices of its own per quad, two quads per sample.
+        assert_eq!(colors.len(), count * 8);
         let kerb = AppColors::Kerb.color().to_linear().to_f32_array();
         let white = Color::WHITE.to_linear().to_f32_array();
 
         let mut seen_red = false;
         let mut seen_white = false;
-        for quad in colors[count * 2..].chunks(4) {
+        for quad in colors.chunks(4) {
             assert!(
                 quad.iter().all(|c| *c == quad[0]),
                 "a band quad blends across itself: {quad:?}"
@@ -243,9 +273,37 @@ mod tests {
             assert!(x.is_finite() && y.is_finite());
             assert_eq!(z, 0.0, "the road is one flat plane; z lives on the entity");
             let r = Vec2::new(x, y).length();
-            // Tarmac from radius 69.75 to 90.25, and a band straddling each edge
-            // out to 68.25 and 91.75. The slack is for the sampling.
-            assert!((68.0..=92.0).contains(&r), "vertex at radius {r}");
+            // Tarmac from radius 69.75 to 90.25. The slack is for the sampling.
+            assert!((69.5..=90.5).contains(&r), "tarmac vertex at radius {r}");
+        }
+        for [x, y, z] in positions(&wall_mesh(&built)) {
+            assert!(x.is_finite() && y.is_finite());
+            assert_eq!(z, 0.0, "the band is one flat plane; z lives on the entity");
+            let r = Vec2::new(x, y).length();
+            // A band straddling each edge: 68.25 to 69.75 and 90.25 to 91.75.
+            let inner = (68.0..=70.0).contains(&r);
+            let outer = (90.0..=92.0).contains(&r);
+            assert!(inner || outer, "band vertex at radius {r}");
+        }
+    }
+
+    /// The band starts where the tarmac stops: the two meshes are cut from one
+    /// rule, so a change to how far the band reaches cannot open a gap of grass
+    /// between them, or paint one over the other.
+    #[test]
+    fn the_band_meets_the_tarmac_without_a_gap_or_an_overlap() {
+        let built = build(&circle(80.0, 11.0), BuildLevel::Preview);
+        let road = positions(&road_mesh(&built));
+        let wall = positions(&wall_mesh(&built));
+        let count = built.centre.len();
+        for i in 0..count {
+            // Sample `i`'s tarmac ring, and the inner corners of the two band
+            // quads that start at it: `[edge - out, edge + out]` for each side,
+            // so the first of each pair of vertices is the one on the tarmac.
+            let (left, right) = (road[i * 2], road[i * 2 + 1]);
+            let quads = &wall[i * 8..(i + 1) * 8];
+            assert_eq!(quads[0], left, "left band meets the tarmac at sample {i}");
+            assert_eq!(quads[4], right, "right band meets the tarmac at sample {i}");
         }
     }
 

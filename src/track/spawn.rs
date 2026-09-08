@@ -16,14 +16,14 @@ use crate::items::spawn_spawner;
 use crate::track::StartLight;
 use crate::track::map::build::BuiltTrack;
 use crate::track::map::data::scalar_to_world;
-use crate::track::map::mesh::{road_mesh, start_line_mesh};
+use crate::track::map::mesh::{road_mesh, start_line_mesh, wall_mesh};
 use crate::track::map::scatter::scatter;
 use crate::track::position::progress_line::ProgressLine;
 use crate::{AppState, AssetHandles, SpriteLayers};
 
 /// How thick a barrier is when the map draws no wall band for it to match.
 ///
-/// A barrier is invisible -- the road mesh paints the band, and this is the
+/// A barrier is invisible -- the wall mesh paints the band, and this is the
 /// collider under it -- so a map with `kerb_width` of zero would otherwise get a
 /// wall of nothing. Two units is what the hand-drawn track's walls were traced
 /// at.
@@ -49,14 +49,26 @@ pub(crate) fn spawn_map(
     // all carry their own colours per vertex.
     let vertex_coloured = materials.add(ColorMaterial::from(Color::WHITE));
 
+    // The road and its wall band are the entities the minimap shares with the
+    // main view, so the map in the corner is the track being raced rather than
+    // a copy of it.
+    let on_minimap_too = RenderLayers::from_layers(&[0, crate::track::minimap::MINIMAP_LAYER]);
     commands.spawn((
         DespawnOnExit(AppState::Game),
         Mesh2d(meshes.add(road_mesh(&built))),
         MeshMaterial2d(vertex_coloured.clone()),
         Transform::from_xyz(0., 0., SpriteLayers::Background.to_z()),
-        // The one entity the minimap shares with the main view, so the map in
-        // the corner is the road being raced rather than a copy of it.
-        RenderLayers::from_layers(&[0, crate::track::minimap::MINIMAP_LAYER]),
+        on_minimap_too.clone(),
+    ));
+    // The band is its own entity because it is drawn at its own depth: over a
+    // kart's wheels, which reach past the collider and would otherwise be
+    // painted on top of the wall the kart is leaning on.
+    commands.spawn((
+        DespawnOnExit(AppState::Game),
+        Mesh2d(meshes.add(wall_mesh(&built))),
+        MeshMaterial2d(vertex_coloured.clone()),
+        Transform::from_xyz(0., 0., SpriteLayers::Wall.to_z()),
+        on_minimap_too,
     ));
     commands.spawn((
         DespawnOnExit(AppState::Game),
@@ -65,7 +77,7 @@ pub(crate) fn spawn_map(
         Transform::from_xyz(0., 0., SpriteLayers::OnGround.to_z()),
     ));
 
-    // The wall the player sees is the band in the road mesh above. These are the
+    // The wall the player sees is the band in the wall mesh above. These are the
     // colliders under it, and they are the same thickness so that where a kart
     // stops is where the paint is.
     let thickness = scalar_to_world(built.map.road.kerb_width).max(MIN_WALL_THICKNESS);
@@ -105,7 +117,7 @@ pub(crate) fn spawn_map(
     }
 }
 
-/// One static box body per wall segment. Nothing is drawn: the road mesh paints
+/// One static box body per wall segment. Nothing is drawn: the wall mesh paints
 /// the band these sit under.
 ///
 /// Takes the points as a closed loop -- consecutive pairs, wrapping -- which is

@@ -14,7 +14,7 @@ use crate::menu::widgets::text_button;
 use crate::scene_util::insert;
 use crate::track::SelectedMap;
 use crate::track::map::build::{BuildLevel, build};
-use crate::track::map::builtin::{BUILTINS, by_slug};
+use crate::track::map::builtin::{BUILTINS, by_slug, random_except};
 use crate::track::map::store;
 
 /// Where the little map drawing sits, in world units.
@@ -77,6 +77,23 @@ pub(crate) fn spawn_picker(commands: &mut Commands, is_host: bool) -> Entity {
         .id();
 
     if is_host {
+        // Above the list rather than in it: the list is rebuilt whenever a map
+        // is saved or deleted, and this is not one of its entries. It picks a
+        // built-in at random, never the one already showing, and changes the
+        // resource exactly as a row in the list does -- so the announce system
+        // tells everybody, and a client cannot tell the two apart.
+        let random = commands
+            .spawn_scene(bsn! {
+                text_button("RANDOM")
+                on(|_: On<Pointer<Press>>, mut selected: ResMut<SelectedMap>| {
+                    if let Some(map) = random_except(&selected.0) {
+                        selected.0 = map;
+                    }
+                })
+            })
+            .id();
+        commands.entity(random).insert(ChildOf(panel));
+
         let list = commands
             .spawn_scene(bsn! {
                 MapPickerList

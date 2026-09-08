@@ -4,6 +4,9 @@ pub mod build;
 pub mod builtin;
 pub mod data;
 pub mod file;
+/// The built-in maps, drawn. Tests only: what ships is the JSON it writes.
+#[cfg(test)]
+mod generate;
 pub mod mesh;
 pub mod scatter;
 pub mod share;

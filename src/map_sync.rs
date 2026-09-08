@@ -199,7 +199,7 @@ pub(crate) fn bail_out_of_a_race_with_no_track(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::track::map::builtin::by_slug;
+    use crate::track::map::builtin::{BUILTINS, by_slug};
 
     #[test]
     fn the_hash_follows_the_contents() {
@@ -224,11 +224,11 @@ mod tests {
     /// what actually goes over the socket.
     #[test]
     fn a_map_survives_the_wire_encoding_exactly() {
-        for slug in ["classic", "sweeping"] {
-            let map = by_slug(slug).unwrap();
+        for builtin in BUILTINS {
+            let map = builtin.load();
             let bytes = postcard::to_allocvec(&map).unwrap();
             let back: MapData = postcard::from_bytes(&bytes).unwrap();
-            assert_eq!(map, back, "{slug} did not survive the round trip");
+            assert_eq!(map, back, "{} did not survive the round trip", builtin.slug);
             assert_eq!(map_hash(&map), map_hash(&back));
         }
     }
@@ -240,11 +240,13 @@ mod tests {
     #[test]
     fn the_built_in_maps_are_small_enough_to_send() {
         const LIMIT: usize = 16 * 1024;
-        for slug in ["classic", "sweeping"] {
-            let size = postcard::to_allocvec(&by_slug(slug).unwrap())
-                .unwrap()
-                .len();
-            assert!(size < LIMIT, "{slug} encodes to {size} bytes, over {LIMIT}");
+        for builtin in BUILTINS {
+            let size = postcard::to_allocvec(&builtin.load()).unwrap().len();
+            assert!(
+                size < LIMIT,
+                "{} encodes to {size} bytes, over {LIMIT}",
+                builtin.slug
+            );
         }
     }
 }

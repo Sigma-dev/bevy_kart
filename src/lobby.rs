@@ -21,18 +21,17 @@ pub struct LobbyLifecyclePlugin;
 
 impl Plugin for LobbyLifecyclePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, apply_session_params)
-            .add_systems(
-                Update,
-                (
-                    enter_lobby,
-                    leave_on_registry_mismatch,
-                    exit_lobby_when_session_ends,
-                    receive_game_state_changed,
-                    autostart_join,
-                    autostart_race,
-                ),
-            );
+        app.add_systems(Startup, apply_session_params).add_systems(
+            Update,
+            (
+                enter_lobby,
+                leave_on_registry_mismatch,
+                exit_lobby_when_session_ends,
+                receive_game_state_changed,
+                autostart_join,
+                autostart_race,
+            ),
+        );
     }
 }
 
@@ -131,7 +130,11 @@ impl SessionParams {
         let join_first = flag("join", "") || autostart_env.as_deref() == Some("join");
         let autostart = get("autostart", "KART_AUTOSTART_PLAYERS")
             .and_then(|v| v.parse().ok())
-            .or(if autostart_env.as_deref() == Some("host") { Some(2) } else { None });
+            .or(if autostart_env.as_deref() == Some("host") {
+                Some(2)
+            } else {
+                None
+            });
         if let Some(other) = autostart_env.filter(|v| v != "host" && v != "join") {
             warn!("KART_AUTOSTART={other} is not `host` or `join`; ignoring");
         }
@@ -171,8 +174,8 @@ fn apply_session_params(
         // A built-in by slug, or one of the player's own by id. Saved maps too,
         // because "it goes wrong on the track I made" is exactly the report that
         // needs reproducing from a command line.
-        let found = crate::track::map::by_slug(slug)
-            .or_else(|| crate::track::map::store::load(slug).ok());
+        let found =
+            crate::track::map::by_slug(slug).or_else(|| crate::track::map::store::load(slug).ok());
         match found {
             Some(map) => {
                 info!("racing `{}` ({slug}), from the launch parameters", map.name);
@@ -240,7 +243,9 @@ fn autostart_race(
     mut next_state: ResMut<NextState<AppState>>,
     mut commands: Commands,
 ) {
-    let Some(wanted) = params.autostart else { return };
+    let Some(wanted) = params.autostart else {
+        return;
+    };
     if *fired || server_player.is_none() || *app_state.get() != AppState::OutOfGame {
         return;
     }

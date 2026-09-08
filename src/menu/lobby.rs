@@ -1,10 +1,10 @@
+use crate::decor::BackgroundElement;
 use crate::kart::{KART_SIZE, KartControlType, spawn_kart};
 use crate::menu::animated_button;
-use crate::decor::BackgroundElement;
 use crate::scene_util::insert;
 use crate::{
-    AppColors, AppPlayerData, AppState, AssetHandles, ChatMessage, FinishTimes, RESOLUTION,
-    Screen, SpriteLayers,
+    AppColors, AppPlayerData, AppState, AssetHandles, ChatMessage, FinishTimes, RESOLUTION, Screen,
+    SpriteLayers,
 };
 use bevy::prelude::*;
 use bevy::text::EditableText;
@@ -112,7 +112,6 @@ struct LobbyPlayersButtons;
 /// the map -- which is exactly what they did.
 #[derive(Component)]
 struct ScrollingBackground;
-
 
 #[derive(Component)]
 pub struct LobbyCar(pub u128);
@@ -411,9 +410,13 @@ pub fn spawn_lobby(
         })
         .id();
 
-    commands
-        .entity(lobby)
-        .add_children(&[lobby_code_text, lobby_chat, players_buttons, buttons, map_panel]);
+    commands.entity(lobby).add_children(&[
+        lobby_code_text,
+        lobby_chat,
+        players_buttons,
+        buttons,
+        map_panel,
+    ]);
 
     // Ping display.
     commands.spawn_scene(bsn! {

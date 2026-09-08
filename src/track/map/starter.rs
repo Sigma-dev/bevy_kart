@@ -134,7 +134,10 @@ mod tests {
     #[test]
     fn the_starter_is_smaller_than_the_track_it_replaced() {
         let starter = build(&starter_map(), BuildLevel::Full);
-        let classic = build(&crate::track::map::by_slug("classic").unwrap(), BuildLevel::Full);
+        let classic = build(
+            &crate::track::map::by_slug("classic").unwrap(),
+            BuildLevel::Full,
+        );
         assert!(
             starter.length < classic.length / 1.5,
             "a {} lap against the classic track's {}",
@@ -164,7 +167,11 @@ mod tests {
             // the tolerance is in units rather than in whatever that sum is.
             let normalised = Vec2::new(sample.position.x / ALONG, sample.position.y / ACROSS);
             let off = (normalised.length() - 1.0).abs() * ACROSS;
-            assert!(off < 0.5, "sample at {:?} is {off} off the oval", sample.position);
+            assert!(
+                off < 0.5,
+                "sample at {:?} is {off} off the oval",
+                sample.position
+            );
         }
     }
 }

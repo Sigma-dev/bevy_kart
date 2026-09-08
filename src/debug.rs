@@ -117,7 +117,9 @@ fn perf_frame_end(
     local_kart: Query<(&Position, &LinearVelocity), With<crate::kart::LocalKart>>,
 ) {
     let now = Instant::now();
-    let Some(frame_start) = stats.frame_start else { return };
+    let Some(frame_start) = stats.frame_start else {
+        return;
+    };
     let main_ms = now.duration_since(frame_start).as_secs_f64() * 1000.0;
     stats.frames += 1;
     stats.main_ms_sum += main_ms;
@@ -126,7 +128,9 @@ fn perf_frame_end(
     stats.tick_ms_sum += tick_ms;
     stats.tick_ms_max = stats.tick_ms_max.max(tick_ms);
 
-    let Some(window_start) = stats.window_start else { return };
+    let Some(window_start) = stats.window_start else {
+        return;
+    };
     let elapsed = now.duration_since(window_start).as_secs_f64();
     if elapsed < PERF_WINDOW_SECS {
         return;

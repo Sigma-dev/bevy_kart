@@ -489,10 +489,7 @@ pub fn build(map: &MapData, level: BuildLevel) -> BuiltTrack {
             let index = ((back / ds).round() as usize) % count;
             let tangent = centre[(count - index) % count].tangent;
             let normal = Vec2::new(-tangent.y, tangent.x);
-            grid.push(Pose::facing(
-                position + normal * (across * column),
-                tangent,
-            ));
+            grid.push(Pose::facing(position + normal * (across * column), tangent));
         }
 
         for anchor in &map.item_boxes {
@@ -663,7 +660,10 @@ pub(crate) mod tests {
         }
         assert_eq!(built.centre[0].s, 0.0, "sample 0 is the start line");
         let last = built.centre.last().unwrap();
-        assert!((last.s + step - built.length).abs() < 1e-3, "the loop closes");
+        assert!(
+            (last.s + step - built.length).abs() < 1e-3,
+            "the loop closes"
+        );
     }
 
     /// The start line is progress zero, wherever the author put it. Without
@@ -675,7 +675,10 @@ pub(crate) mod tests {
         let built = build(&map, BuildLevel::Full);
         // Segment 2 starts at (-r, 0) and runs to (0, -r), so halfway is the
         // bottom-left of the circle.
-        let expected = Vec2::new(-80.0, 0.0).lerp(Vec2::new(0.0, -80.0), 0.5).normalize() * 80.0;
+        let expected = Vec2::new(-80.0, 0.0)
+            .lerp(Vec2::new(0.0, -80.0), 0.5)
+            .normalize()
+            * 80.0;
         assert!(
             built.centre[0].position.distance(expected) < 3.0,
             "start at {:?}, expected near {expected:?}",
@@ -707,7 +710,10 @@ pub(crate) mod tests {
             "the folded inner wall is dropped, not inverted"
         );
         for pair in built.right_wall.windows(2) {
-            assert!(pair[0].distance(pair[1]) > 0.0, "no zero-length wall segment");
+            assert!(
+                pair[0].distance(pair[1]) > 0.0,
+                "no zero-length wall segment"
+            );
         }
     }
 
@@ -741,7 +747,9 @@ pub(crate) mod tests {
                         let miss = edge
                             .iter()
                             .enumerate()
-                            .map(|(j, p)| distance_to_segment(point, *p, edge[(j + 1) % edge.len()]))
+                            .map(|(j, p)| {
+                                distance_to_segment(point, *p, edge[(j + 1) % edge.len()])
+                            })
                             .fold(f32::MAX, f32::min);
                         assert!(
                             miss <= WALL_TOLERANCE + 1e-3,
@@ -772,10 +780,16 @@ pub(crate) mod tests {
         // Six samples of two units, the cap, because a chord that long across a
         // circle this size misses it by a hundredth of a unit.
         let gentle = stride(&build(&circle(300.0, 6.0), BuildLevel::Preview));
-        assert!(gentle > 10.0, "a road this straight took a vertex every {gentle}");
+        assert!(
+            gentle > 10.0,
+            "a road this straight took a vertex every {gentle}"
+        );
         // And a corner a kart has to be pointed at takes them twice as often.
         let tight = stride(&build(&circle(24.0, 6.0), BuildLevel::Preview));
-        assert!(tight < gentle, "the tight circle took a vertex every {tight}");
+        assert!(
+            tight < gentle,
+            "the tight circle took a vertex every {tight}"
+        );
         let hairpin = stride(&build(&circle(12.0, 8.0), BuildLevel::Preview));
         assert!(
             hairpin < gentle * 0.5,
@@ -807,7 +821,10 @@ pub(crate) mod tests {
             // On the road: within half-width of the circle, allowing for the
             // lateral column offset.
             let from_centre = (pose.position.length() - 80.0).abs();
-            assert!(from_centre < 11.0, "slot {slot} is off the road: {from_centre}");
+            assert!(
+                from_centre < 11.0,
+                "slot {slot} is off the road: {from_centre}"
+            );
             // Facing along the track: on an anticlockwise circle the heading is
             // perpendicular to the radius.
             let facing = Vec2::new(pose.cos, pose.sin);
@@ -820,7 +837,9 @@ pub(crate) mod tests {
         // Behind the line, not in front of it: the first slot is further round
         // the circle backwards than the last.
         let first = built.grid[0].position.distance(built.start_pose.position);
-        let last = built.grid[MAX_GRID - 1].position.distance(built.start_pose.position);
+        let last = built.grid[MAX_GRID - 1]
+            .position
+            .distance(built.start_pose.position);
         assert!(first < last, "the grid runs backwards from the line");
     }
 
@@ -914,8 +933,16 @@ pub(crate) mod tests {
         map.nodes[0].half_width = Some(scalar_to_map(5.0));
         map.nodes[2].half_width = Some(scalar_to_map(16.0));
         let built = build(&map, BuildLevel::Full);
-        let narrowest = built.centre.iter().map(|s| s.half_width).fold(f32::MAX, f32::min);
-        let widest = built.centre.iter().map(|s| s.half_width).fold(f32::MIN, f32::max);
+        let narrowest = built
+            .centre
+            .iter()
+            .map(|s| s.half_width)
+            .fold(f32::MAX, f32::min);
+        let widest = built
+            .centre
+            .iter()
+            .map(|s| s.half_width)
+            .fold(f32::MIN, f32::max);
         assert!((narrowest - 5.0).abs() < 0.3, "narrowest {narrowest}");
         assert!((widest - 16.0).abs() < 0.3, "widest {widest}");
     }
@@ -1131,10 +1158,7 @@ pub(crate) mod tests {
         // The two boxes away from the removed node barely move; the one on a
         // merged segment stays on the road rather than jumping a quarter-lap.
         for (i, (a, b)) in before.iter().zip(after.iter()).enumerate() {
-            assert!(
-                a.distance(*b) < 40.0,
-                "box {i} jumped from {a:?} to {b:?}"
-            );
+            assert!(a.distance(*b) < 40.0, "box {i} jumped from {a:?} to {b:?}");
         }
     }
 }

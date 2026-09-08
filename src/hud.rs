@@ -48,21 +48,19 @@ pub(crate) fn spawn_race_hud(
                     ..default()
                 },
                 BackgroundColor(Color::srgb(0.18039, 0.13333, 0.18431)),
-                children![
-                    (
-                        ImageNode::from_atlas_image(
-                            texture_handle,
-                            TextureAtlas::from(texture_atlas_handle)
-                        ),
-                        Node {
-                            height: Val::Px(80.),
-                            width: Val::Px(80.),
-                            ..default()
-                        },
-                        Visibility::Hidden,
-                        HeldItemIcon,
-                    )
-                ],
+                children![(
+                    ImageNode::from_atlas_image(
+                        texture_handle,
+                        TextureAtlas::from(texture_atlas_handle)
+                    ),
+                    Node {
+                        height: Val::Px(80.),
+                        width: Val::Px(80.),
+                        ..default()
+                    },
+                    Visibility::Hidden,
+                    HeldItemIcon,
+                )],
             )
         ],
     ));

@@ -12,9 +12,9 @@ pub mod store;
 
 pub use build::{BuildLevel, BuiltTrack, Pose, Sample, TrackWarning, build};
 pub use builtin::{BUILTINS, by_slug, default_map};
-pub use mesh::{road_mesh, start_line_mesh, wall_mesh};
-pub use starter::starter_map;
 pub use data::{
     DecorSettings, GridLayout, MAP_FORMAT_VERSION, MapData, MapError, RoadShape, StartLine,
     TrackAnchor, TrackNode,
 };
+pub use mesh::{road_mesh, start_line_mesh, wall_mesh};
+pub use starter::starter_map;

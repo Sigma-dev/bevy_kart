@@ -67,7 +67,6 @@ impl FinishTimes {
 #[derive(Clone, Debug, Serialize, Deserialize, Message)]
 pub struct OnFinishTimeUpdate(pub FinishTimes);
 
-
 #[derive(Resource)]
 struct RaceEnded(f32);
 
@@ -76,7 +75,6 @@ pub(crate) struct StartLight;
 
 #[derive(Resource)]
 struct RaceStarted(u64);
-
 
 fn on_receive_finish_times(
     mut commands: Commands,
@@ -101,8 +99,7 @@ fn handle_end_race(
         return;
     }
     let car_counts: Vec<i32> = cars.iter().map(|c| c.count).collect();
-    let race_not_over =
-        car_counts.is_empty() || car_counts.iter().any(|&c| c < LAPS_TO_WIN as i32);
+    let race_not_over = car_counts.is_empty() || car_counts.iter().any(|&c| c < LAPS_TO_WIN as i32);
     let cheat = input.pressed(KeyCode::KeyU) && input.pressed(KeyCode::KeyK);
     if race_not_over && !cheat {
         return;
@@ -138,7 +135,10 @@ fn end_with_delay(
     if elapsed < 3. {
         return;
     }
-    info!("end_with_delay: transitioning to OutOfGame (waited {:.1}s)", elapsed);
+    info!(
+        "end_with_delay: transitioning to OutOfGame (waited {:.1}s)",
+        elapsed
+    );
     next_state.set(AppState::OutOfGame);
     if let Some(lobby) = lobbies.iter().next() {
         let msg = crate::GameStateChanged(crate::AppState::OutOfGame);

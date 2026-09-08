@@ -19,22 +19,19 @@ pub struct ItemsPlugin;
 impl Plugin for ItemsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
-                TickedSimulation,
-                (
-                    spawn_items,
-                    detect_item_pickup,
-                    use_item,
-                    move_rocket,
-                    detect_rocket_hits,
-                    resolve_rocket_hits,
-                    trigger_mines,
-                )
-                    .chain(),
+            TickedSimulation,
+            (
+                spawn_items,
+                detect_item_pickup,
+                use_item,
+                move_rocket,
+                detect_rocket_hits,
+                resolve_rocket_hits,
+                trigger_mines,
             )
-            .add_systems(
-                Update,
-                animate_rocket,
-            );
+                .chain(),
+        )
+        .add_systems(Update, animate_rocket);
     }
 }
 
@@ -201,7 +198,9 @@ fn detect_item_pickup(
             if maybe_held.is_some_and(|h| h.0.is_some()) {
                 continue;
             }
-            commands.entity(car_entity).insert(HeldItem(Some(item_pickup.0)));
+            commands
+                .entity(car_entity)
+                .insert(HeldItem(Some(item_pickup.0)));
             commands.entity(item_entity).despawn();
             if let Ok(mut spawner) = spawners.get_mut(spawner_id.0) {
                 spawner.item_exists = false;
@@ -284,9 +283,7 @@ fn use_item(
 /// deterministic, so a client predicts it through rollback like a kart and the
 /// rocket stays level with the karts around it instead of a prediction lead
 /// behind them. A rocket that has hit stays where it hit.
-fn move_rocket(
-    mut rockets: Query<(&mut Position, &Rotation), (With<Rocket>, Without<RocketHit>)>,
-) {
+fn move_rocket(mut rockets: Query<(&mut Position, &Rotation), (With<Rocket>, Without<RocketHit>)>) {
     for (mut pos, rot) in rockets.iter_mut() {
         pos.0 += rocket_direction(rot) * (ROCKET_SPEED * SECONDS_PER_TICK);
     }
@@ -429,7 +426,6 @@ fn animate_rocket(time: Res<Time>, mut rockets: Query<&mut Sprite, With<Rocket>>
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     //! The rocket's flight and hit, headless: ticks, physics and this module, no
@@ -525,7 +521,9 @@ mod tests {
     }
 
     fn rocket(app: &mut App) -> Option<(Vec2, Option<Vec2>)> {
-        let mut query = app.world_mut().query_filtered::<(&Position, Option<&RocketHit>), With<Rocket>>();
+        let mut query = app
+            .world_mut()
+            .query_filtered::<(&Position, Option<&RocketHit>), With<Rocket>>();
         query
             .iter(app.world())
             .next()
@@ -559,9 +557,15 @@ mod tests {
         let mut app = app(true);
         fly_until_hit(&mut app);
         app.update();
-        assert!(rocket(&mut app).is_none(), "the host despawns a rocket that hit");
+        assert!(
+            rocket(&mut app).is_none(),
+            "the host despawns a rocket that hit"
+        );
         let at = explosion(&mut app).expect("the host spawns an explosion");
-        assert!((at.x - STOP_X).abs() < 0.2, "explosion at {at:?}, expected x = {STOP_X}");
+        assert!(
+            (at.x - STOP_X).abs() < 0.2,
+            "explosion at {at:?}, expected x = {STOP_X}"
+        );
     }
 
     #[test]
@@ -569,14 +573,20 @@ mod tests {
         let mut app = app(false);
         fly_until_hit(&mut app);
         let (pos, hit) = rocket(&mut app).expect("a client keeps the rocket");
-        assert!((pos.x - STOP_X).abs() < 0.2, "stopped at {pos:?}, expected x = {STOP_X}");
+        assert!(
+            (pos.x - STOP_X).abs() < 0.2,
+            "stopped at {pos:?}, expected x = {STOP_X}"
+        );
         assert_eq!(hit, Some(pos), "the marker records where it stopped");
         for _ in 0..10 {
             app.update();
         }
         let (later, _) = rocket(&mut app).expect("still there, still waiting");
         assert_eq!(later, pos, "a rocket that hit does not move on");
-        assert!(explosion(&mut app).is_none(), "the explosion is the host's to make");
+        assert!(
+            explosion(&mut app).is_none(),
+            "the explosion is the host's to make"
+        );
     }
 
     /// The reason the marker is a rollback component: rewinding to before the
@@ -591,13 +601,19 @@ mod tests {
         app.update();
         let (pos, hit) = rocket(&mut app).unwrap();
         assert!(hit.is_none(), "the rewind restored the tick before the hit");
-        assert!(pos.x < STOP_X - 1.0, "and the rocket is back in flight at {pos:?}");
+        assert!(
+            pos.x < STOP_X - 1.0,
+            "and the rocket is back in flight at {pos:?}"
+        );
 
         for _ in 0..5 {
             app.update();
         }
         let (_, again) = rocket(&mut app).unwrap();
-        assert_eq!(again, first, "the replay reaches the same wall at the same spot");
+        assert_eq!(
+            again, first,
+            "the replay reaches the same wall at the same spot"
+        );
     }
 
     #[test]
@@ -609,10 +625,16 @@ mod tests {
         assert_eq!(mine_count(&mut app), 1, "just out of reach, so it waits");
         assert!(explosion(&mut app).is_none());
 
-        app.world_mut().entity_mut(car).insert(Position(Vec2::new(MINE_TRIGGER_RADIUS - 1., 0.)));
+        app.world_mut()
+            .entity_mut(car)
+            .insert(Position(Vec2::new(MINE_TRIGGER_RADIUS - 1., 0.)));
         app.update();
         app.update();
-        assert_eq!(mine_count(&mut app), 0, "the kart came close, so the mine went");
+        assert_eq!(
+            mine_count(&mut app),
+            0,
+            "the kart came close, so the mine went"
+        );
         let at = explosion(&mut app).expect("and it explodes like a rocket");
         assert_eq!(at, Vec2::ZERO, "where the mine lay");
     }
@@ -641,7 +663,10 @@ mod tests {
             app.update();
         }
         assert_eq!(mine_count(&mut app), 1, "sitting on it does not set it off");
-        assert!(explosion(&mut app).is_none(), "and nobody blows themselves up");
+        assert!(
+            explosion(&mut app).is_none(),
+            "and nobody blows themselves up"
+        );
 
         // Drive clear: the mine arms.
         app.world_mut()

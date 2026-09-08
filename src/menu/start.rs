@@ -309,13 +309,11 @@ fn handle_spawning_menu_cars(
 ) {
     for (transform, mut spawner) in spawners.iter_mut() {
         if let Some(next_spawn) = spawner.next_spawn
-            && time.elapsed_secs() > next_spawn {
-                commands.run_system_cached_with(
-                    spawn_kart,
-                    (KartControlType::AutoCar, *transform),
-                );
-                spawner.next_spawn = None;
-            }
+            && time.elapsed_secs() > next_spawn
+        {
+            commands.run_system_cached_with(spawn_kart, (KartControlType::AutoCar, *transform));
+            spawner.next_spawn = None;
+        }
         if spawner.next_spawn.is_none() {
             spawner.next_spawn = Some(time.elapsed_secs() + rand::rng().random_range(1.0..5.0));
         }

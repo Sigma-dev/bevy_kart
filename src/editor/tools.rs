@@ -18,10 +18,10 @@ use crate::track::map::data::{
     MIN_NODES, TrackAnchor, TrackNode, scalar_to_map, scalar_to_world, to_map, to_world,
 };
 
-use super::cursor::EditorCursor;
-use super::{EditorMap, History, Status, Tool};
 #[cfg(test)]
 use super::HISTORY_DEPTH;
+use super::cursor::EditorCursor;
+use super::{EditorMap, History, Status, Tool};
 
 /// Grab radius, in screen pixels.
 const GRAB_PX: f32 = 12.0;
@@ -561,7 +561,10 @@ pub fn handle_keys(
     // Not `focus.get().is_some()`: `set_initial_focus` focuses the primary window
     // whenever nothing else claims it, so something is always focused and that
     // test silently disables every shortcut in the editor, permanently.
-    if focus.get().is_some_and(|entity| text_fields.contains(entity)) {
+    if focus
+        .get()
+        .is_some_and(|entity| text_fields.contains(entity))
+    {
         return;
     }
     let control = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
@@ -661,9 +664,8 @@ pub fn handle_keys(
 pub fn frame_map(editor: &EditorMap, transform: &mut Transform, projection: &mut Projection) {
     let bounds = editor.built.bounds;
     if let Projection::Orthographic(orthographic) = projection {
-        let needed = (bounds.width() / crate::RESOLUTION.x)
-            .max(bounds.height() / crate::RESOLUTION.y)
-            * 1.1;
+        let needed =
+            (bounds.width() / crate::RESOLUTION.x).max(bounds.height() / crate::RESOLUTION.y) * 1.1;
         orthographic.scale = needed.clamp(MIN_ZOOM, MAX_ZOOM);
     }
     let centre = bounds.center();
@@ -767,7 +769,10 @@ mod tests {
 
         assert_eq!(before.len(), after.len());
         for (index, (a, b)) in before.iter().zip(after.iter()).enumerate() {
-            assert!(a.distance(*b) < 1.0, "item box {index} moved from {a:?} to {b:?}");
+            assert!(
+                a.distance(*b) < 1.0,
+                "item box {index} moved from {a:?} to {b:?}"
+            );
         }
     }
 
@@ -796,7 +801,10 @@ mod tests {
         let dragged = Vec2::new(10.0, 0.0);
         let other = Vec2::new(-3.0, 0.0);
         let mirrored = mirror(dragged, other);
-        assert!((mirrored.length() - other.length()).abs() < 1e-4, "length kept");
+        assert!(
+            (mirrored.length() - other.length()).abs() < 1e-4,
+            "length kept"
+        );
         assert!(
             mirrored.normalize().dot(dragged.normalize()) < -0.99,
             "direction opposed"

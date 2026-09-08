@@ -110,9 +110,7 @@ pub(crate) fn spawn_map(
             Decor,
             placement.element,
             placement.element.as_sprite(&asset_handles),
-            Transform::from_translation(
-                placement.position.extend(SpriteLayers::OnGround.to_z()),
-            ),
+            Transform::from_translation(placement.position.extend(SpriteLayers::OnGround.to_z())),
         ));
     }
 }

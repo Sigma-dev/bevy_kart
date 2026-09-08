@@ -111,14 +111,12 @@ mod backend {
             let text = file.text();
             let slot = slot.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                slot.put(
-                    match wasm_bindgen_futures::JsFuture::from(text).await {
-                        Ok(value) => value
-                            .as_string()
-                            .ok_or_else(|| "that file is not text".to_string()),
-                        Err(_) => Err("could not read that file".to_string()),
-                    },
-                );
+                slot.put(match wasm_bindgen_futures::JsFuture::from(text).await {
+                    Ok(value) => value
+                        .as_string()
+                        .ok_or_else(|| "that file is not text".to_string()),
+                    Err(_) => Err("could not read that file".to_string()),
+                });
             });
         });
         input.set_onchange(Some(on_change.unchecked_ref()));
@@ -163,7 +161,10 @@ mod backend {
     }
 
     pub fn import_hint() -> String {
-        format!("Drop a map file on the window, or put one in {}", store::storage_hint())
+        format!(
+            "Drop a map file on the window, or put one in {}",
+            store::storage_hint()
+        )
     }
 }
 

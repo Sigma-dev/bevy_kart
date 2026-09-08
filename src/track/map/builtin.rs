@@ -78,11 +78,28 @@ mod tests {
             assert_eq!(map.validate(), Ok(()), "{}", builtin.slug);
 
             let built = build(&map, BuildLevel::Full);
-            assert!(built.length > 100.0, "{} is tiny: {}", builtin.slug, built.length);
+            assert!(
+                built.length > 100.0,
+                "{} is tiny: {}",
+                builtin.slug,
+                built.length
+            );
             assert_eq!(built.grid.len(), MAX_GRID, "{}", builtin.slug);
-            assert!(built.left_wall.len() > 8, "{} has no left wall", builtin.slug);
-            assert!(built.right_wall.len() > 8, "{} has no right wall", builtin.slug);
-            assert!(built.progress.len() > 8, "{} has no progress line", builtin.slug);
+            assert!(
+                built.left_wall.len() > 8,
+                "{} has no left wall",
+                builtin.slug
+            );
+            assert!(
+                built.right_wall.len() > 8,
+                "{} has no right wall",
+                builtin.slug
+            );
+            assert!(
+                built.progress.len() > 8,
+                "{} has no progress line",
+                builtin.slug
+            );
             assert_eq!(
                 built.item_boxes.len(),
                 map.item_boxes.len(),
@@ -143,8 +160,16 @@ mod tests {
         assert_eq!(overrides, 0, "{overrides} nodes narrow the classic road");
 
         let built = build(&map, BuildLevel::Full);
-        let narrowest = built.centre.iter().map(|s| s.half_width).fold(f32::MAX, f32::min);
-        let widest = built.centre.iter().map(|s| s.half_width).fold(f32::MIN, f32::max);
+        let narrowest = built
+            .centre
+            .iter()
+            .map(|s| s.half_width)
+            .fold(f32::MAX, f32::min);
+        let widest = built
+            .centre
+            .iter()
+            .map(|s| s.half_width)
+            .fold(f32::MIN, f32::max);
         assert_eq!(narrowest, widest, "the classic road changes width");
         // Twenty-four units across, which is what the sprite was drawn at.
         assert!((widest - 12.0).abs() < 0.01, "half-width {widest}");
@@ -167,28 +192,82 @@ mod tests {
     fn the_classic_walls_still_stand_where_they_were_traced() {
         // Anticlockwise from the bottom straight, the outside of the circuit.
         const OUTER: &[[f32; 2]] = &[
-            [-97.0, -61.5], [33.0, -57.2], [48.2, -47.4], [55.7, -38.0],
-            [61.6, -26.0], [66.0, -25.6], [76.6, -45.8], [86.0, -54.0],
-            [99.8, -54.2], [106.5, -51.4], [114.6, -43.4], [119.2, -27.0],
-            [119.6, 4.2], [115.4, 48.0], [110.6, 57.4], [100.2, 63.2],
-            [87.8, 63.6], [69.3, 53.0], [53.4, 41.6], [14.0, 0.0],
-            [7.0, -1.4], [0.1, -5.5], [-54.2, -10.6], [-63.0, -6.5],
-            [-59.6, -0.2], [-35.1, 0.2], [-9.6, 2.4], [9.8, 11.0],
-            [23.2, 22.6], [27.0, 31.2], [27.0, 39.0], [13.8, 54.6],
-            [-10.0, 60.0], [-47.2, 58.2], [-90.0, 57.8], [-106.6, 50.0],
-            [-119.6, 37.2], [-124.0, 26.2], [-123.8, -34.8], [-120.6, -45.6],
+            [-97.0, -61.5],
+            [33.0, -57.2],
+            [48.2, -47.4],
+            [55.7, -38.0],
+            [61.6, -26.0],
+            [66.0, -25.6],
+            [76.6, -45.8],
+            [86.0, -54.0],
+            [99.8, -54.2],
+            [106.5, -51.4],
+            [114.6, -43.4],
+            [119.2, -27.0],
+            [119.6, 4.2],
+            [115.4, 48.0],
+            [110.6, 57.4],
+            [100.2, 63.2],
+            [87.8, 63.6],
+            [69.3, 53.0],
+            [53.4, 41.6],
+            [14.0, 0.0],
+            [7.0, -1.4],
+            [0.1, -5.5],
+            [-54.2, -10.6],
+            [-63.0, -6.5],
+            [-59.6, -0.2],
+            [-35.1, 0.2],
+            [-9.6, 2.4],
+            [9.8, 11.0],
+            [23.2, 22.6],
+            [27.0, 31.2],
+            [27.0, 39.0],
+            [13.8, 54.6],
+            [-10.0, 60.0],
+            [-47.2, 58.2],
+            [-90.0, 57.8],
+            [-106.6, 50.0],
+            [-119.6, 37.2],
+            [-124.0, 26.2],
+            [-123.8, -34.8],
+            [-120.6, -45.6],
             [-109.0, -57.8],
         ];
         // The infield: one self-touching loop around the track's two islands.
         const INNER: &[[f32; 2]] = &[
-            [-92.0, -37.8], [-50.6, -35.2], [15.8, -33.2], [31.8, -32.0],
-            [41.8, -13.8], [54.4, -1.4], [72.4, -1.6], [85.4, -11.8],
-            [94.5, -29.0], [95.4, -1.4], [92.4, 20.6], [93.6, 36.4],
-            [89.4, 40.0], [83.0, 33.8], [62.6, 17.8], [26.2, -21.0],
-            [5.6, -29.8], [-20.2, -31.2], [-77.6, -30.8], [-84.7, -25.8],
-            [-90.2, -18.8], [-90.4, 5.0], [-84.6, 14.8], [-69.8, 23.6],
-            [-26.1, 25.2], [-13.0, 28.0], [-0.8, 31.4], [-0.2, 34.8],
-            [-27.4, 35.6], [-87.2, 33.0], [-98.6, 25.8], [-100.6, -22.2],
+            [-92.0, -37.8],
+            [-50.6, -35.2],
+            [15.8, -33.2],
+            [31.8, -32.0],
+            [41.8, -13.8],
+            [54.4, -1.4],
+            [72.4, -1.6],
+            [85.4, -11.8],
+            [94.5, -29.0],
+            [95.4, -1.4],
+            [92.4, 20.6],
+            [93.6, 36.4],
+            [89.4, 40.0],
+            [83.0, 33.8],
+            [62.6, 17.8],
+            [26.2, -21.0],
+            [5.6, -29.8],
+            [-20.2, -31.2],
+            [-77.6, -30.8],
+            [-84.7, -25.8],
+            [-90.2, -18.8],
+            [-90.4, 5.0],
+            [-84.6, 14.8],
+            [-69.8, 23.6],
+            [-26.1, 25.2],
+            [-13.0, 28.0],
+            [-0.8, 31.4],
+            [-0.2, 34.8],
+            [-27.4, 35.6],
+            [-87.2, 33.0],
+            [-98.6, 25.8],
+            [-100.6, -22.2],
             [-98.4, -35.2],
         ];
 
@@ -230,7 +309,11 @@ mod tests {
     fn slugs_are_unique_and_findable() {
         let mut seen = Vec::new();
         for builtin in BUILTINS {
-            assert!(!seen.contains(&builtin.slug), "duplicate slug {}", builtin.slug);
+            assert!(
+                !seen.contains(&builtin.slug),
+                "duplicate slug {}",
+                builtin.slug
+            );
             seen.push(builtin.slug);
             assert!(by_slug(builtin.slug).is_some());
         }

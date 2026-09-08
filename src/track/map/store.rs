@@ -125,7 +125,9 @@ mod backend {
         // is a second thing to keep in step, and a half-written one loses
         // everything it claims to list.
         for i in 0..count {
-            let Ok(Some(key)) = storage.key(i) else { continue };
+            let Ok(Some(key)) = storage.key(i) else {
+                continue;
+            };
             let Some(id) = key.strip_prefix(PREFIX) else {
                 continue;
             };
@@ -275,8 +277,14 @@ mod tests {
     #[test]
     fn a_second_map_of_the_same_name_gets_its_own_id() {
         let taken = vec![
-            MapMeta { id: "loop".into(), name: "Loop".into() },
-            MapMeta { id: "loop-2".into(), name: "Loop".into() },
+            MapMeta {
+                id: "loop".into(),
+                name: "Loop".into(),
+            },
+            MapMeta {
+                id: "loop-2".into(),
+                name: "Loop".into(),
+            },
         ];
         assert_eq!(unique_id("Fresh", &taken), "fresh");
         assert_eq!(unique_id("Loop", &taken), "loop-3");
@@ -311,10 +319,8 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn saving_then_listing_then_loading_finds_the_map() {
-        let directory = std::env::temp_dir().join(format!(
-            "bevy_kart_store_test_{}",
-            std::process::id()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("bevy_kart_store_test_{}", std::process::id()));
         // SAFETY: single-threaded within this test, and the variable is only
         // read by this module.
         unsafe { std::env::set_var("KART_MAPS_DIR", &directory) };

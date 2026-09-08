@@ -114,11 +114,20 @@ fn detect_corrections(
 fn apply_correction_offset(
     interpolation: TickInterpolation,
     time: Res<Time>,
-    mut query: Query<(&Position, &Rotation, &mut Transform, &mut CorrectionSmoothing)>,
+    mut query: Query<(
+        &Position,
+        &Rotation,
+        &mut Transform,
+        &mut CorrectionSmoothing,
+    )>,
 ) {
     let alpha = interpolation.fraction();
     let dt = time.delta_secs();
-    let decay = if dt > 0.0 { (-CORRECTION_DECAY_RATE * dt).exp() } else { 1.0 };
+    let decay = if dt > 0.0 {
+        (-CORRECTION_DECAY_RATE * dt).exp()
+    } else {
+        1.0
+    };
 
     for (pos, rot, mut transform, mut smoothing) in query.iter_mut() {
         if !smoothing.initialized {

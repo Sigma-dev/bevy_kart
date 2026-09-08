@@ -60,9 +60,10 @@ pub fn from_share_code(code: &str) -> Result<MapData, String> {
             "that map code was made by a different version of the game (v{version}, this is v{CODE_VERSION})"
         ));
     }
-    let map: MapData = postcard::from_bytes(payload)
-        .map_err(|_| "that map code is damaged".to_string())?;
-    map.validate().map_err(|error: MapError| error.to_string())?;
+    let map: MapData =
+        postcard::from_bytes(payload).map_err(|_| "that map code is damaged".to_string())?;
+    map.validate()
+        .map_err(|error: MapError| error.to_string())?;
     Ok(map)
 }
 
@@ -101,10 +102,7 @@ mod tests {
         let map = by_slug("classic").unwrap();
         let mut bytes = vec![CODE_VERSION + 1];
         bytes.extend(postcard::to_allocvec(&map).unwrap());
-        let code = base_x::encode(
-            ALPHABET,
-            &miniz_oxide::deflate::compress_to_vec(&bytes, 9),
-        );
+        let code = base_x::encode(ALPHABET, &miniz_oxide::deflate::compress_to_vec(&bytes, 9));
         assert!(
             from_share_code(&code)
                 .unwrap_err()

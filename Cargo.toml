@@ -19,11 +19,23 @@ postcard = { version = "1", features = ["alloc"] }
 
 audio_manager = { path = "audio_manager" }
 bevy_timer = { path = "bevy_timer" }
+# Without the defaults. `default` is `2d`, `3d`, `ui` and `audio`, and this is a
+# 2D game: the `3d` group compiled bevy_pbr and embedded three tonemapping lookup
+# tables that Camera2d never reads -- 0.68 MB of already-compressed data, which
+# was 7% of the web download. `bevy_audio` plus `wav` rather than the `audio`
+# group, because the group also brings the vorbis decoder and every sound here
+# is a wav.
+#
+# Every other crate in the tree that depends on bevy has to say
+# `default-features = false` as well, or cargo's feature unification puts the
+# group straight back. The two crates in this repo and the two Sigma-studios
+# crates do; avian2d always did.
+#
 # `serialize` is what gives `IVec2`/`Vec2`/`Rect` their serde impls, which the map
 # format needs. It arrives transitively through avian2d's own `serialize` feature
 # today; naming it here means the map format does not quietly depend on a physics
 # crate's feature choice.
-bevy = { version = "0.19", features = ["wav", "serialize"] }
+bevy = { version = "0.19", default-features = false, features = ["2d", "ui", "bevy_audio", "wav", "serialize"] }
 avian2d = { version = "0.7", features = ["serialize"] }
 serde = { version = "1", features = ["derive"] }
 # For compact codes: deflate compression + base62 encoding

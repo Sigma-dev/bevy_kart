@@ -9,10 +9,8 @@ use bevy_ticked_networking::prelude::*;
 use bevy_timer::{Timer as GameTimer, TimerFinished};
 
 use crate::{
-    AssetHandles, AppPlayerData, AppState, CorrectionSmoothing, EntityKind, OwnerPlayer,
-    PlayerInput, SpriteLayers,
-    car_controller_2d,
-    items,
+    AppPlayerData, AppState, AssetHandles, CorrectionSmoothing, EntityKind, OwnerPlayer,
+    PlayerInput, SpriteLayers, car_controller_2d, items,
     kart::{self, FollowTransform, LapsCounter, LocalKart},
     track,
 };
@@ -39,10 +37,7 @@ impl Plugin for EntitySpawnPlugin {
                     .after(TickedSystems::PreTick)
                     .before(TickedSystems::Tick),
             )
-            .add_systems(
-                PostUpdate,
-                sync_visuals.before(TransformSystems::Propagate),
-            );
+            .add_systems(PostUpdate, sync_visuals.before(TransformSystems::Propagate));
     }
 }
 

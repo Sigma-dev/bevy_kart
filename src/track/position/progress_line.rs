@@ -1,5 +1,5 @@
-pub use bevy::prelude::*;
 use avian2d::prelude::*;
+pub use bevy::prelude::*;
 use bevy_ticked::prelude::*;
 
 pub struct ProgressLinePlugin;

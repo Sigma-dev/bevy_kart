@@ -205,7 +205,11 @@ mod tests {
             .zip(b.iter())
             .filter(|(x, y)| x.position == y.position)
             .count();
-        assert!(same < a.len() / 10, "{same} of {} placements unchanged", a.len());
+        assert!(
+            same < a.len() / 10,
+            "{same} of {} placements unchanged",
+            a.len()
+        );
     }
 
     /// Nothing on the tarmac: a tree in the racing line is not scenery.

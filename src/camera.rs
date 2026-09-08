@@ -20,10 +20,7 @@ impl Plugin for CameraPlugin {
             // put it there again. Two transitions rather than one because
             // `AppState` and `LobbyState` are independent: a race can end into
             // the lobby, and a session can end from inside a race.
-            .add_systems(
-                OnEnter(Screen::StartMenu),
-                reset_camera,
-            )
+            .add_systems(OnEnter(Screen::StartMenu), reset_camera)
             .add_systems(OnEnter(Screen::Lobby), reset_camera)
             .add_systems(OnExit(Screen::Race), clear_camera_bounds)
             .add_systems(
@@ -114,8 +111,16 @@ pub fn camera_target(kart: Vec2, bounds: Rect, viewport: Vec2) -> Vec2 {
     // a map that fits on one screen behave exactly as the game did before the
     // camera could move at all.
     Vec2::new(
-        if lo.x <= hi.x { kart.x.clamp(lo.x, hi.x) } else { centre.x },
-        if lo.y <= hi.y { kart.y.clamp(lo.y, hi.y) } else { centre.y },
+        if lo.x <= hi.x {
+            kart.x.clamp(lo.x, hi.x)
+        } else {
+            centre.x
+        },
+        if lo.y <= hi.y {
+            kart.y.clamp(lo.y, hi.y)
+        } else {
+            centre.y
+        },
     )
 }
 

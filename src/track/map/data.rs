@@ -217,7 +217,10 @@ pub enum MapError {
     UnknownVersion(u32),
     TooFewNodes(usize),
     /// A `segment` index that is not a segment.
-    AnchorOutOfRange { segment: u16, segments: usize },
+    AnchorOutOfRange {
+        segment: u16,
+        segments: usize,
+    },
     NoName,
 }
 
@@ -339,7 +342,11 @@ impl MapData {
             };
             // Indices after the removed node shuffle down, and the survivor is
             // itself renumbered when it sat after the removal point.
-            let shifted = if new_seg > removed { new_seg - 1 } else { new_seg };
+            let shifted = if new_seg > removed {
+                new_seg - 1
+            } else {
+                new_seg
+            };
             anchor.segment = shifted as u16;
             anchor.t = quantise_t(new_t);
         };

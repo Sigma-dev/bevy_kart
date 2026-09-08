@@ -8,7 +8,9 @@ use bevy_ensemble::prelude::*;
 use bevy_ensemble_webrtc::BevyEnsembleWebrtcPlugin;
 use bevy_ticked::prelude::*;
 use bevy_ticked_networking::prelude::*;
-use bevy_ticked_networking_ensemble::{TickedEnsembleSessionPlugin, TickedNetworkingEnsemblePlugin};
+use bevy_ticked_networking_ensemble::{
+    TickedEnsembleSessionPlugin, TickedNetworkingEnsemblePlugin,
+};
 use bevy_timer::TimerPlugin;
 
 pub mod assets;
@@ -27,8 +29,8 @@ pub mod map_sync;
 pub mod menu;
 pub mod networking;
 pub mod rollback_smoothing;
-pub mod screen;
 pub mod scene_util;
+pub mod screen;
 pub mod theme;
 pub mod track;
 pub mod wire_format;
@@ -52,8 +54,9 @@ use menu::MenuPlugin;
 use menu::lobby::spawn_lobby;
 use menu::start::spawn_menu;
 use rollback_smoothing::RollbackSmoothingPlugin;
-use track::{TrackPlugin, build_current_map, grid::spawn_starting_grid, spawn::spawn_map, start_countdown};
-
+use track::{
+    TrackPlugin, build_current_map, grid::spawn_starting_grid, spawn::spawn_map, start_countdown,
+};
 
 /// Register every networked component. **This order is a wire format.**
 ///
@@ -69,8 +72,7 @@ use track::{TrackPlugin, build_current_map, grid::spawn_starting_grid, spawn::sp
 /// A free function rather than an inline chain so the golden test in
 /// `wire_format` can build a registry without building an app.
 pub fn register_networked_components(app: &mut App) {
-    app
-        .register_networked_ticked_component_as::<Position>("Position")
+    app.register_networked_ticked_component_as::<Position>("Position")
         .register_networked_ticked_component_as::<Rotation>("Rotation")
         .register_networked_ticked_component_as::<LinearVelocity>("LinearVelocity")
         .register_networked_ticked_component_as::<AngularVelocity>("AngularVelocity")
@@ -79,11 +81,15 @@ pub fn register_networked_components(app: &mut App) {
         // Retired (see `networking.rs`), kept so the indices after them hold.
         .register_networked_ticked_component_as::<NetworkedPosition>("NetworkedPosition")
         .register_networked_ticked_component_as::<NetworkedRotation>("NetworkedRotation")
-        .register_networked_ticked_component_as::<car_controller_2d::CarControllerInputs>("CarControllerInputs")
+        .register_networked_ticked_component_as::<car_controller_2d::CarControllerInputs>(
+            "CarControllerInputs",
+        )
         .register_networked_ticked_component_as::<car_controller_2d::SteeringState>("SteeringState")
         .register_networked_ticked_component_as::<items::HeldItem>("HeldItem")
         .register_networked_ticked_component_as::<car_controller_2d::BoostEffect>("BoostEffect")
-        .register_networked_ticked_component_as::<car_controller_2d::CarControllerDisabled>("CarControllerDisabled")
+        .register_networked_ticked_component_as::<car_controller_2d::CarControllerDisabled>(
+            "CarControllerDisabled",
+        )
         // Rollback-only: a peer's own view of a rocket hit, never sent. Still an
         // entry in the registry, so it is part of the hash and of this order.
         .register_ticked_component_as::<items::RocketHit>("RocketHit")
@@ -268,4 +274,3 @@ fn signalling_server_url() -> String {
         .or_else(|| option_env!("SIGNALLING_SERVER_URL").map(String::from))
         .unwrap_or_else(|| "wss://signal.sigma-dev.eu/ws".into())
 }
-

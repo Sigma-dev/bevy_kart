@@ -7,9 +7,9 @@
 use bevy::prelude::*;
 
 use crate::track::map::build::{BuildLevel, BuiltTrack, build};
-use crate::track::map::starter::starter_map;
 use crate::track::map::data::MapData;
 use crate::track::map::file::PendingImport;
+use crate::track::map::starter::starter_map;
 use crate::{EditorState, Screen};
 
 pub mod cursor;

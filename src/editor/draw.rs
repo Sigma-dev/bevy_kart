@@ -7,9 +7,9 @@
 
 use bevy::prelude::*;
 
+use crate::RESOLUTION;
 use crate::track::map::build::TrackWarning;
 use crate::track::map::data::to_world;
-use crate::RESOLUTION;
 
 use super::cursor::EditorCursor;
 use super::tools::{Hovered, Selection, width_handles};
@@ -71,7 +71,11 @@ pub fn draw_overlay(
 
     // The racing line, which is what the lap counter measures against.
     gizmos.linestrip_2d(
-        built.progress.iter().copied().chain(built.progress.first().copied()),
+        built
+            .progress
+            .iter()
+            .copied()
+            .chain(built.progress.first().copied()),
         Color::srgba(1., 1., 1., 0.22),
     );
 

@@ -2,22 +2,20 @@ use crate::car_controller_2d::{
     BoostEffect, CarController2d, CarControllerDisabled, CarControllerInputs, SteeringState,
 };
 use crate::menu::lobby::{LobbyCar, LobbyCarName};
+use crate::scene_util::insert;
 use crate::track::LAPS_TO_WIN;
 use crate::track::position::TrackPosition;
 use crate::{
     AppPlayerData, AppState, ApplyCorrectionSet, AssetHandles, LocalPlayerData, OwnerPlayer,
-    Screen, SpriteLayers,
-    car_controller_2d::CarController2dWheel,
-    track::FinishTimes,
+    Screen, SpriteLayers, car_controller_2d::CarController2dWheel, track::FinishTimes,
 };
 use audio_manager::prelude::*;
 use avian2d::prelude::*;
-use bevy::prelude::*;
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
+use bevy::prelude::*;
 use bevy::sprite::Anchor;
-use crate::scene_util::insert;
-use bevy_ensemble::prelude::*;
 use bevy_ensemble::LobbyClientPlayerUuid;
+use bevy_ensemble::prelude::*;
 use bevy_ticked::prelude::*;
 use bevy_ticked_networking::prelude::*;
 use rand::Rng;
@@ -26,13 +24,12 @@ pub struct KartPlugin;
 
 impl Plugin for KartPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, update_boost_flame)
-            .add_systems(
-                PostUpdate,
-                follow_transform
-                    .after(ApplyCorrectionSet)
-                    .before(TransformSystems::Propagate),
-            );
+        app.add_systems(Update, update_boost_flame).add_systems(
+            PostUpdate,
+            follow_transform
+                .after(ApplyCorrectionSet)
+                .before(TransformSystems::Propagate),
+        );
     }
 }
 
@@ -348,9 +345,7 @@ pub(crate) fn spawn_kart(
                 .iter()
                 .find(|(p, _)| p.player_uuid == player_uuid)
                 .and_then(|(_, data)| data.map(|d| &d.0));
-            let player_name = player_data
-                .map(|d| d.name.as_str())
-                .unwrap_or("...");
+            let player_name = player_data.map(|d| d.name.as_str()).unwrap_or("...");
             let player_color = player_data
                 .map(|d| d.kart_color.to_u32() as usize)
                 .unwrap_or(0);
@@ -361,19 +356,17 @@ pub(crate) fn spawn_kart(
                 .to_string()
                 + &name;
 
-            commands
-                .entity(id)
-                .insert((
-                    Sprite::from_atlas_image(
-                        asset_handles.karts_texture.clone(),
-                        TextureAtlas {
-                            layout: asset_handles.karts_atlas.clone(),
-                            index: player_color,
-                        },
-                    ),
-                    LobbyCar(player_uuid),
-                    DespawnOnExit(Screen::Lobby),
-                ));
+            commands.entity(id).insert((
+                Sprite::from_atlas_image(
+                    asset_handles.karts_texture.clone(),
+                    TextureAtlas {
+                        layout: asset_handles.karts_atlas.clone(),
+                        index: player_color,
+                    },
+                ),
+                LobbyCar(player_uuid),
+                DespawnOnExit(Screen::Lobby),
+            ));
 
             let ui = commands
                 .spawn_scene(bsn! {

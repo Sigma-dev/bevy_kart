@@ -261,7 +261,10 @@ mod tests {
             );
             seen_red |= quad[0] == kerb;
             seen_white |= quad[0] == white;
-            assert!(quad[0] == kerb || quad[0] == white, "off-palette band colour");
+            assert!(
+                quad[0] == kerb || quad[0] == white,
+                "off-palette band colour"
+            );
         }
         assert!(seen_red && seen_white, "the band is meant to be striped");
     }

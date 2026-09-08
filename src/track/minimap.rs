@@ -88,7 +88,10 @@ pub(crate) fn spawn_minimap(
 }
 
 fn viewport_for(window: &Window, built: &BuiltTrack) -> Viewport {
-    let window_size = Vec2::new(window.physical_width() as f32, window.physical_height() as f32);
+    let window_size = Vec2::new(
+        window.physical_width() as f32,
+        window.physical_height() as f32,
+    );
     let aspect = built.bounds.height() / built.bounds.width().max(1.0);
     let width = (window_size.x * WIDTH_FRACTION).max(1.0);
     let height = (width * aspect).clamp(1.0, window_size.y * 0.5);

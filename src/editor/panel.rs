@@ -441,14 +441,25 @@ pub(crate) fn run_panel(
     >,
     mut controls_texts: Query<
         &mut Text,
-        (With<ControlsText>, Without<ValidationText>, Without<ToolText>),
+        (
+            With<ControlsText>,
+            Without<ValidationText>,
+            Without<ToolText>,
+        ),
     >,
     mut validation_texts: Query<
         (&mut Text, &mut TextColor),
-        (With<ValidationText>, Without<ToolText>, Without<ControlsText>),
+        (
+            With<ValidationText>,
+            Without<ToolText>,
+            Without<ControlsText>,
+        ),
     >,
     mut tool_texts: Query<&mut Text, (With<ToolText>, Without<ControlsText>)>,
-    mut tool_buttons: Query<(&mut BackgroundColor, Has<EditToolButton>), Or<(With<EditToolButton>, With<ItemToolButton>)>>,
+    mut tool_buttons: Query<
+        (&mut BackgroundColor, Has<EditToolButton>),
+        Or<(With<EditToolButton>, With<ItemToolButton>)>,
+    >,
 ) {
     // Typing in the name field *is* renaming; there is no separate button.
     for field in names.iter() {
@@ -491,7 +502,10 @@ pub(crate) fn run_panel(
         //
         // And only that. The tool's name used to lead this line, which the two
         // buttons directly above it now say by being lit and unlit.
-        let wanted = match selection.node.and_then(|index| editor.data.nodes.get(index)) {
+        let wanted = match selection
+            .node
+            .and_then(|index| editor.data.nodes.get(index))
+        {
             Some(node) => match node.half_width {
                 Some(own) => format!("node width {:.1}", scalar_to_world(own)),
                 None => format!(
@@ -605,13 +619,15 @@ fn describe(editor: &EditorMap) -> (String, Color) {
     let mut lines: Vec<String> = Vec::new();
     for warning in &editor.built.warnings {
         lines.push(match warning {
-            TrackWarning::CornerTooTight { half_width, radius, .. } => format!(
+            TrackWarning::CornerTooTight {
+                half_width, radius, ..
+            } => format!(
                 "A corner of radius {radius:.0} is too tight for a road {:.0} wide.",
                 half_width * 2.0
             ),
-            TrackWarning::LapPassesItself { gap, .. } => format!(
-                "The lap passes within {gap:.0} of itself: laps may not count there."
-            ),
+            TrackWarning::LapPassesItself { gap, .. } => {
+                format!("The lap passes within {gap:.0} of itself: laps may not count there.")
+            }
             TrackWarning::AnchorOffRoad { .. } => "Something is off the road.".to_string(),
             TrackWarning::WidthClamped { .. } => {
                 "A node is narrower than a road can be.".to_string()

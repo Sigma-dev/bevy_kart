@@ -85,11 +85,7 @@ pub fn map_hash(map: &MapData) -> u64 {
 ///
 /// The map and the state change happen in one place because they are one fact.
 /// Nothing can order them wrongly because there is nothing to order.
-pub fn begin_race(
-    commands: &mut Commands,
-    next_state: &mut NextState<AppState>,
-    map: MapData,
-) {
+pub fn begin_race(commands: &mut Commands, next_state: &mut NextState<AppState>, map: MapData) {
     commands.insert_resource(SelectedMap(map));
     next_state.set(AppState::Game);
 }
@@ -245,7 +241,9 @@ mod tests {
     fn the_built_in_maps_are_small_enough_to_send() {
         const LIMIT: usize = 16 * 1024;
         for slug in ["classic", "sweeping"] {
-            let size = postcard::to_allocvec(&by_slug(slug).unwrap()).unwrap().len();
+            let size = postcard::to_allocvec(&by_slug(slug).unwrap())
+                .unwrap()
+                .len();
             assert!(size < LIMIT, "{slug} encodes to {size} bytes, over {LIMIT}");
         }
     }

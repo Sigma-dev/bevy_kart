@@ -110,7 +110,11 @@ fn wheel_world_pose(
     wheel_local: &Transform,
     steerable: bool,
 ) -> (Vec2, Vec2, Vec2) {
-    let angle = if steerable { kart_angle + steer_rad } else { kart_angle };
+    let angle = if steerable {
+        kart_angle + steer_rad
+    } else {
+        kart_angle
+    };
     let (sin, cos) = angle.sin_cos();
     let up = Vec2::new(-sin, cos);
     let right = Vec2::new(cos, sin);
@@ -184,7 +188,13 @@ fn car_controller_steering(
     mut wheels: Query<(&mut Transform, &CarController2dWheel)>,
 ) {
     for (inputs, mut steering, children) in cars.iter_mut() {
-        let target: f32 = if inputs.left { 1. } else if inputs.right { -1. } else { 0. };
+        let target: f32 = if inputs.left {
+            1.
+        } else if inputs.right {
+            -1.
+        } else {
+            0.
+        };
         steering.angle += (target - steering.angle) * STEERING_RATE;
 
         let rotation = Quat::from_rotation_z((steering.angle * 45.).to_radians());

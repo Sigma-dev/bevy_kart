@@ -1,0 +1,573 @@
+{
+  "version": 1,
+  "name": "Clover",
+  "nodes": [
+    {
+      "position": [
+        21154,
+        19047
+      ],
+      "in_handle": [
+        3029,
+        -347
+      ],
+      "out_handle": [
+        -3029,
+        347
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        12645,
+        20660
+      ],
+      "in_handle": [
+        2490,
+        -1205
+      ],
+      "out_handle": [
+        -2490,
+        1205
+      ],
+      "half_width": 2073,
+      "mirrored": true
+    },
+    {
+      "position": [
+        7161,
+        26145
+      ],
+      "in_handle": [
+        1737,
+        -2381
+      ],
+      "out_handle": [
+        -1737,
+        2381
+      ],
+      "half_width": 2666,
+      "mirrored": true
+    },
+    {
+      "position": [
+        885,
+        33733
+      ],
+      "in_handle": [
+        2250,
+        -2179
+      ],
+      "out_handle": [
+        -2250,
+        2179
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -6339,
+        38879
+      ],
+      "in_handle": [
+        2589,
+        -1245
+      ],
+      "out_handle": [
+        -2589,
+        1245
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -14304,
+        40906
+      ],
+      "in_handle": [
+        2684,
+        -77
+      ],
+      "out_handle": [
+        -2684,
+        77
+      ],
+      "half_width": 2815,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -21804,
+        39268
+      ],
+      "in_handle": [
+        2306,
+        1178
+      ],
+      "out_handle": [
+        -2306,
+        -1178
+      ],
+      "half_width": 2741,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -27470,
+        34179
+      ],
+      "in_handle": [
+        1474,
+        2209
+      ],
+      "out_handle": [
+        -1474,
+        -2209
+      ],
+      "half_width": 2755,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -30312,
+        26600
+      ],
+      "in_handle": [
+        424,
+        2801
+      ],
+      "out_handle": [
+        -424,
+        -2801
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -30048,
+        17864
+      ],
+      "in_handle": [
+        -580,
+        3007
+      ],
+      "out_handle": [
+        580,
+        -3007
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -27073,
+        8796
+      ],
+      "in_handle": [
+        -1214,
+        2797
+      ],
+      "out_handle": [
+        1214,
+        -2797
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -24215,
+        621
+      ],
+      "in_handle": [
+        -201,
+        2759
+      ],
+      "out_handle": [
+        201,
+        -2759
+      ],
+      "half_width": 2073,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -26223,
+        -6871
+      ],
+      "in_handle": [
+        1193,
+        2695
+      ],
+      "out_handle": [
+        -1193,
+        -2695
+      ],
+      "half_width": 2666,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -29656,
+        -16100
+      ],
+      "in_handle": [
+        762,
+        3038
+      ],
+      "out_handle": [
+        -762,
+        -3038
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -30501,
+        -24930
+      ],
+      "in_handle": [
+        -217,
+        2865
+      ],
+      "out_handle": [
+        217,
+        -2865
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -28274,
+        -32841
+      ],
+      "in_handle": [
+        -1275,
+        2363
+      ],
+      "out_handle": [
+        1275,
+        -2363
+      ],
+      "half_width": 2815,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -23105,
+        -38517
+      ],
+      "in_handle": [
+        -2173,
+        1409
+      ],
+      "out_handle": [
+        2173,
+        -1409
+      ],
+      "half_width": 2741,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -15865,
+        -40879
+      ],
+      "in_handle": [
+        -2650,
+        173
+      ],
+      "out_handle": [
+        2650,
+        -173
+      ],
+      "half_width": 2755,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -7880,
+        -39551
+      ],
+      "in_handle": [
+        -2638,
+        -1033
+      ],
+      "out_handle": [
+        2638,
+        1033
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        -446,
+        -34954
+      ],
+      "in_handle": [
+        -2315,
+        -2005
+      ],
+      "out_handle": [
+        2315,
+        2005
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        5918,
+        -27844
+      ],
+      "in_handle": [
+        -1815,
+        -2450
+      ],
+      "out_handle": [
+        1815,
+        2450
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        11570,
+        -21281
+      ],
+      "in_handle": [
+        -2289,
+        -1553
+      ],
+      "out_handle": [
+        2289,
+        1553
+      ],
+      "half_width": 2073,
+      "mirrored": true
+    },
+    {
+      "position": [
+        19062,
+        -19274
+      ],
+      "in_handle": [
+        -2931,
+        -314
+      ],
+      "out_handle": [
+        2931,
+        314
+      ],
+      "half_width": 2666,
+      "mirrored": true
+    },
+    {
+      "position": [
+        28771,
+        -17633
+      ],
+      "in_handle": [
+        -3012,
+        -859
+      ],
+      "out_handle": [
+        3012,
+        859
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        36840,
+        -13950
+      ],
+      "in_handle": [
+        -2373,
+        -1620
+      ],
+      "out_handle": [
+        2373,
+        1620
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        42578,
+        -8065
+      ],
+      "in_handle": [
+        -1408,
+        -2286
+      ],
+      "out_handle": [
+        1408,
+        2286
+      ],
+      "half_width": 2816,
+      "mirrored": true
+    },
+    {
+      "position": [
+        44909,
+        -751
+      ],
+      "in_handle": [
+        -133,
+        -2586
+      ],
+      "out_handle": [
+        133,
+        2586
+      ],
+      "half_width": 2740,
+      "mirrored": true
+    },
+    {
+      "position": [
+        43334,
+        6700
+      ],
+      "in_handle": [
+        1176,
+        -2381
+      ],
+      "out_handle": [
+        -1176,
+        2381
+      ],
+      "half_width": 2755,
+      "mirrored": true
+    },
+    {
+      "position": [
+        38192,
+        12951
+      ],
+      "in_handle": [
+        2213,
+        -1768
+      ],
+      "out_handle": [
+        -2213,
+        1768
+      ],
+      "half_width": null,
+      "mirrored": true
+    },
+    {
+      "position": [
+        30494,
+        17091
+      ],
+      "in_handle": [
+        2894,
+        -1002
+      ],
+      "out_handle": [
+        -2894,
+        1002
+      ],
+      "half_width": null,
+      "mirrored": true
+    }
+  ],
+  "road": {
+    "half_width": 3237,
+    "kerb_width": 384,
+    "kerb_stripe": 2560
+  },
+  "start": {
+    "at": {
+      "segment": 0,
+      "t": 0,
+      "lateral": 0
+    },
+    "depth": 1024,
+    "grid": {
+      "columns": 3,
+      "row_spacing": 2816,
+      "column_spacing": 1792,
+      "first_row_offset": 2304
+    }
+  },
+  "item_boxes": [
+    {
+      "segment": 2,
+      "t": 32768,
+      "lateral": -1024
+    },
+    {
+      "segment": 2,
+      "t": 32768,
+      "lateral": 1024
+    },
+    {
+      "segment": 7,
+      "t": 32768,
+      "lateral": -1024
+    },
+    {
+      "segment": 7,
+      "t": 32768,
+      "lateral": 1024
+    },
+    {
+      "segment": 12,
+      "t": 32768,
+      "lateral": -1024
+    },
+    {
+      "segment": 12,
+      "t": 32768,
+      "lateral": 1024
+    },
+    {
+      "segment": 17,
+      "t": 32768,
+      "lateral": -1024
+    },
+    {
+      "segment": 17,
+      "t": 32768,
+      "lateral": 1024
+    },
+    {
+      "segment": 22,
+      "t": 32768,
+      "lateral": -1024
+    },
+    {
+      "segment": 22,
+      "t": 32768,
+      "lateral": 1024
+    },
+    {
+      "segment": 27,
+      "t": 32768,
+      "lateral": -1024
+    },
+    {
+      "segment": 27,
+      "t": 32768,
+      "lateral": 1024
+    }
+  ],
+  "bounds_padding": 4096,
+  "decor": {
+    "seed": 20260908,
+    "density": 1.4,
+    "clearance": 768
+  }
+}

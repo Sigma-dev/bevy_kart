@@ -70,14 +70,14 @@ pub fn from_share_code(code: &str) -> Result<MapData, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::track::map::builtin::by_slug;
+    use crate::track::map::builtin::{BUILTINS, by_slug};
 
     #[test]
     fn a_map_survives_a_code() {
-        for slug in ["classic", "sweeping"] {
-            let map = by_slug(slug).unwrap();
+        for builtin in BUILTINS {
+            let map = builtin.load();
             let code = to_share_code(&map).unwrap();
-            assert_eq!(from_share_code(&code).unwrap(), map, "{slug}");
+            assert_eq!(from_share_code(&code).unwrap(), map, "{}", builtin.slug);
         }
     }
 
@@ -123,11 +123,12 @@ mod tests {
     /// Short enough to paste is the entire point, so it is worth an assertion.
     #[test]
     fn a_code_is_short_enough_to_hand_to_somebody() {
-        for slug in ["classic", "sweeping"] {
-            let code = to_share_code(&by_slug(slug).unwrap()).unwrap();
+        for builtin in BUILTINS {
+            let code = to_share_code(&builtin.load()).unwrap();
             assert!(
                 code.len() < 1400,
-                "{slug} makes a {}-character code",
+                "{} makes a {}-character code",
+                builtin.slug,
                 code.len()
             );
         }

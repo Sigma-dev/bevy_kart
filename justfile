@@ -29,6 +29,10 @@ signalling port="9090":
 test:
     cargo test
 
+# Redraw the built-in maps from `src/track/map/generate.rs` into `assets/maps/`.
+maps:
+    cargo test regenerate_the_built_in_maps -- --ignored
+
 # The web build, as the release workflow makes it.
 build-web:
     bevy build --release --yes web --bundle

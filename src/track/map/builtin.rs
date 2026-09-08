@@ -23,6 +23,12 @@ pub struct Builtin {
 }
 
 /// In menu order. The first is the default, and the one a session falls back to.
+///
+/// All but the classic one are drawn by `generate.rs`, and the files here are its
+/// snapshot: a test holds the two together, and `just maps` redraws. The classic
+/// one was converted from the game's original track sprite -- kept as
+/// `scripts/classic-reference.png` -- by a script that has since been retired;
+/// the file is the track now.
 pub const BUILTINS: &[Builtin] = &[
     Builtin {
         slug: "classic",
@@ -31,6 +37,22 @@ pub const BUILTINS: &[Builtin] = &[
     Builtin {
         slug: "sweeping",
         json: include_str!("../../../assets/maps/sweeping.json"),
+    },
+    Builtin {
+        slug: "clover",
+        json: include_str!("../../../assets/maps/clover.json"),
+    },
+    Builtin {
+        slug: "horseshoe",
+        json: include_str!("../../../assets/maps/horseshoe.json"),
+    },
+    Builtin {
+        slug: "serpent",
+        json: include_str!("../../../assets/maps/serpent.json"),
+    },
+    Builtin {
+        slug: "peanut",
+        json: include_str!("../../../assets/maps/peanut.json"),
     },
 ];
 
@@ -61,6 +83,25 @@ pub fn by_slug(slug: &str) -> Option<MapData> {
         .map(|builtin| builtin.load())
 }
 
+/// A built-in chosen at random -- and never `current`, so the lobby's Random
+/// button always changes the track. A random pick that lands on the map already
+/// showing looks like a button that does nothing.
+///
+/// Compared by contents rather than by slug because the caller holds a
+/// [`MapData`], not a name: the selection may be one of the player's own maps,
+/// which no slug refers to.
+///
+/// `None` only when every built-in is `current`, which takes fewer than two of
+/// them.
+pub fn random_except(current: &MapData) -> Option<MapData> {
+    use rand::seq::IteratorRandom;
+    BUILTINS
+        .iter()
+        .map(Builtin::load)
+        .filter(|map| map != current)
+        .choose(&mut rand::rng())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,8 +109,10 @@ mod tests {
     use crate::track::map::data::MAP_FORMAT_VERSION;
     use bevy::prelude::Vec2;
 
-    /// Every shipped map parses, validates, and builds into something raceable.
-    /// This is what stops a broken built-in reaching a player as a crash.
+    /// Every shipped map parses, validates, and builds into something raceable,
+    /// without a word from the shape checks. This is what stops a broken
+    /// built-in reaching a player as a crash, or a bent one as a corner the
+    /// editor would have flagged.
     #[test]
     fn the_built_in_maps_are_raceable() {
         for builtin in BUILTINS {
@@ -78,6 +121,19 @@ mod tests {
             assert_eq!(map.validate(), Ok(()), "{}", builtin.slug);
 
             let built = build(&map, BuildLevel::Full);
+            // The classic track was traced off a sprite, and it has a hairpin
+            // tighter than its road and two straights a road's width apart --
+            // both true of the original, and both exactly what these checks
+            // exist to catch in a map drawn *since*. It is what it was;
+            // everything after it is held to the checks.
+            if builtin.slug != "classic" {
+                assert!(
+                    built.warnings.is_empty(),
+                    "{} warns: {:?}",
+                    builtin.slug,
+                    built.warnings
+                );
+            }
             assert!(
                 built.length > 100.0,
                 "{} is tiny: {}",
@@ -318,5 +374,47 @@ mod tests {
             assert!(by_slug(builtin.slug).is_some());
         }
         assert!(by_slug("no-such-map").is_none());
+    }
+
+    /// The lobby lists built-ins by name, so two with one name would be two
+    /// buttons a player cannot tell apart.
+    #[test]
+    fn names_are_unique() {
+        let mut seen: Vec<String> = Vec::new();
+        for builtin in BUILTINS {
+            let name = builtin.load().name;
+            assert!(!seen.contains(&name), "two built-ins are called {name}");
+            seen.push(name);
+        }
+    }
+
+    /// A random pick is always a built-in and never the one already showing.
+    /// Fifty draws, because a pick that was merely *usually* different would pass
+    /// a single one.
+    #[test]
+    fn a_random_pick_is_a_built_in_other_than_the_current_one() {
+        let current = default_map();
+        let mut picked = Vec::new();
+        for _ in 0..50 {
+            let map = random_except(&current).expect("five other maps to choose from");
+            assert_ne!(map, current);
+            assert!(
+                BUILTINS.iter().any(|b| b.load() == map),
+                "{} is not a built-in",
+                map.name
+            );
+            if !picked.contains(&map.name) {
+                picked.push(map.name);
+            }
+        }
+        // And it really is random: fifty draws from five maps that always land
+        // on the same one would be a `choose` that is not choosing.
+        assert!(picked.len() > 1, "fifty draws only ever gave {picked:?}");
+
+        // A saved map that matches no built-in is a fine `current` too: every
+        // built-in is then fair game.
+        let mut own = default_map();
+        own.name = "Mine".into();
+        assert!(random_except(&own).is_some());
     }
 }

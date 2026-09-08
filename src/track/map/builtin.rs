@@ -25,7 +25,8 @@ pub struct Builtin {
 /// In menu order. The first is the default, and the one a session falls back to.
 ///
 /// All but the classic one are drawn by `generate.rs`, and the files here are its
-/// snapshot: a test holds the two together, and `just maps` redraws. The classic
+/// snapshot: a test holds the two together, and an ignored test redraws (see the
+/// README). The classic
 /// one was converted from the game's original track sprite -- kept as
 /// `scripts/classic-reference.png` -- by a script that has since been retired;
 /// the file is the track now.

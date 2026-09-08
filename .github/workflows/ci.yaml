@@ -1,4 +1,4 @@
-# Runs the tests. Until this existed, `just test` ran on whichever machine the
+# Runs the tests. Until this existed, `cargo test` ran on whichever machine the
 # author happened to be at -- despite `Cargo.toml` claiming "the CI workflow
 # treats them as errors" about the clippy lints.
 #

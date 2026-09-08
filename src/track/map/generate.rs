@@ -6,7 +6,7 @@
 //! road wide on the straights and narrow through the corners, spreads item boxes
 //! round the lap, and hands back a [`MapData`]. The JSON under `assets/maps/` is
 //! a snapshot of the result: `the_shipped_maps_are_what_this_draws` keeps the two
-//! in step, and `just maps` rewrites the snapshot.
+//! in step, and `cargo test regenerate_the_built_in_maps -- --ignored` rewrites the snapshot.
 //!
 //! Test-only, so none of this is in the game or the web bundle. What the game
 //! ships is the JSON.
@@ -827,7 +827,7 @@ mod tests {
     }
 
     /// The files under `assets/maps/` are what this file draws. Edit a shape
-    /// here and this fails until `just maps` has been run; edit a JSON by hand
+    /// here and this fails until the snapshot is regenerated; edit a JSON by hand
     /// and it fails until the shape agrees.
     #[test]
     fn the_shipped_maps_are_what_this_draws() {
@@ -840,7 +840,7 @@ mod tests {
         }
         assert!(
             report.is_empty(),
-            "the shipped maps differ from the drawing; run `just maps` if the drawing changed:\n{}",
+            "the shipped maps differ from the drawing; if the drawing changed, run `cargo test regenerate_the_built_in_maps -- --ignored`:\n{}",
             report.join("\n")
         );
     }
@@ -856,8 +856,7 @@ mod tests {
         }
     }
 
-    /// Rewrite the snapshot. `just maps`, or
-    /// `cargo test regenerate_the_built_in_maps -- --ignored`.
+    /// Rewrite the snapshot: `cargo test regenerate_the_built_in_maps -- --ignored`.
     ///
     /// Refuses the whole batch if any one drawing has a problem, so a broken
     /// shape cannot half-land.

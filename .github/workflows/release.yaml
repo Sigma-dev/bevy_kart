@@ -93,6 +93,16 @@ jobs:
       version: ${{ needs.get-version.outputs.version }}
       # Avoid rate-limiting. See: <https://github.com/cargo-bins/cargo-binstall/issues/2045>.
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The relay, for peers who cannot reach each other directly. Set on the job rather than one
+      # step because a wasm bundle has no environment to read at runtime and a native download
+      # benefits from the same default; `option_env!` picks them up wherever cargo runs.
+      #
+      # The credential ships inside the build and is therefore public. The relay accepts any
+      # username against its password, so `TURN_USER` is only this game's label in the relay's
+      # logs. All three or none -- the game warns and falls back to STUN if only some are set.
+      TURN_URL: turn:signal.sigma-dev.eu:3478
+      TURN_USER: bevy_kart
+      TURN_PASSWORD: ${{ secrets.TURN_PASSWORD }}
     strategy:
       matrix:
         include:

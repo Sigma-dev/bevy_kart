@@ -129,6 +129,7 @@ pub fn register_broadcast_messages(app: &mut App) {
 }
 
 fn main() {
+    let signalling_url = signalling_server_url();
     let mut app = App::new();
     app.add_plugins(NecessaryBevyPlugins)
         // Networking stack
@@ -138,8 +139,11 @@ fn main() {
             PlayerDataPlugin::<AppPlayerData>::default(),
         ))
         .add_plugins(BevyEnsembleWebrtcPlugin {
-            server_url: signalling_server_url(),
+            server_url: signalling_url.clone(),
             display_name: "Player".into(),
+            // STUN, plus a relay when this build was given one, and neither when signalling is
+            // loopback. Decided upstream so every game makes the call the same way.
+            ice_servers: bevy_ensemble_webrtc::ice_servers_from_env!(&signalling_url),
             ..default()
         })
         // Ticks come from the crate's own accumulator rather than FixedUpdate,

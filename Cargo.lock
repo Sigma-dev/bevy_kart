@@ -1053,7 +1053,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#f2c1269e21eda63a3affd13170c199e4d09e4dfc"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#3f5525b1a8cbdd644e1cbd96a08465c45c29b530"
 dependencies = [
  "bevy",
  "postcard",
@@ -1063,7 +1063,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble_sockets"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#f2c1269e21eda63a3affd13170c199e4d09e4dfc"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#3f5525b1a8cbdd644e1cbd96a08465c45c29b530"
 dependencies = [
  "bytes",
  "js-sys",
@@ -1081,7 +1081,7 @@ dependencies = [
 [[package]]
 name = "bevy_ensemble_webrtc"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#f2c1269e21eda63a3affd13170c199e4d09e4dfc"
+source = "git+https://github.com/Sigma-studios/bevy_ensemble?branch=master#3f5525b1a8cbdd644e1cbd96a08465c45c29b530"
 dependencies = [
  "async-tungstenite",
  "axum",
@@ -1098,8 +1098,10 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "turn",
  "uuid",
  "wasm-bindgen-futures",
+ "webrtc-util",
  "ws_stream_wasm",
 ]
 

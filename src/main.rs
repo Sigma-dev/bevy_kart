@@ -128,15 +128,7 @@ fn main() {
         // sync off so the blended transform the renderer sees is never read
         // back as the body's place. Everything that moves a body writes
         // `Position`.
-        //
-        // Warm starting kept, explicitly. The bundle used to zero it, and a kart
-        // driven into a wall was then held there: two seconds of reverse at
-        // exactly zero speed. The rolled-back contact graph carries the impulses
-        // warm starting seeds from, so a replay is unaffected. The default flips
-        // in Sigma-studios/bevy_ticked#15; until that is merged and the pin
-        // bumped, this call is what makes the difference, and after, a no-op
-        // that can go.
-        .add_plugins(TickedAvianPlugin::default().keep_warm_starting())
+        .add_plugins(TickedAvianPlugin::default())
         .insert_resource(Gravity::ZERO)
         .add_plugins(TickedServerPlugin::<PlayerInput>::new())
         .add_plugins(TickedClientPlugin::<PlayerInput>::new())

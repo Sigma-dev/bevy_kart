@@ -4,7 +4,7 @@ use bevy_ensemble_webrtc::{
     JoinWebrtcLobby, JoinWebrtcLobbyByCode, LobbyWebrtcCode, RefreshLobbyList,
 };
 use bevy_ticked_networking::prelude::*;
-use bevy_ticked_networking_ensemble::RegistryMismatch;
+use bevy_ticked_networking_ensemble::{HandshakeTimedOut, RegistryMismatch};
 
 use crate::{AppState, GameStateChanged, LobbyState, LocalPlayerData};
 
@@ -26,6 +26,7 @@ impl Plugin for LobbyLifecyclePlugin {
             (
                 enter_lobby,
                 leave_on_registry_mismatch,
+                leave_on_handshake_timeout,
                 exit_lobby_when_session_ends,
                 receive_game_state_changed,
                 autostart_join,
@@ -343,10 +344,10 @@ fn exit_lobby_when_session_ends(
 
 /// A peer built from a different commit cannot be played with, so leave.
 ///
-/// The handshake has already said why, at `error`, and dropped the role. It
-/// leaves the lobby standing for the game to decide, and this game has no screen
-/// for "in a lobby with nobody to play with", so it does what the leave button
-/// does. Going through the lobby entity rather than the state is what makes the
+/// The handshake has already said which registration differs, at `error`, and
+/// dropped the role. It leaves the lobby standing for the game to decide, and
+/// this game has no screen for "in a lobby with nobody to play with", so it
+/// does what the leave button does. Going through the lobby entity rather than the state is what makes the
 /// signalling server, the peer connections and the mismatch itself all clean up
 /// behind it.
 fn leave_on_registry_mismatch(
@@ -359,8 +360,29 @@ fn leave_on_registry_mismatch(
         return;
     }
     warn!(
-        "leaving the lobby: peer {:#x} is not running this build",
-        mismatch.peer
+        "leaving the lobby: peer {:#x} is not running this build ({})",
+        mismatch.peer, mismatch.difference
+    );
+    for lobby in &lobbies {
+        commands.entity(lobby).despawn();
+    }
+}
+
+/// A host that never announced its registries is on a build without the
+/// handshake, or behind a link that never delivered it. Either way there is
+/// nothing to wait for; the same leave as a mismatch.
+fn leave_on_handshake_timeout(
+    mut commands: Commands,
+    timed_out: Option<Res<HandshakeTimedOut>>,
+    lobbies: Query<Entity, Or<(With<Lobby>, With<PendingLobby>)>>,
+) {
+    let Some(timed_out) = timed_out else { return };
+    if !timed_out.is_added() {
+        return;
+    }
+    warn!(
+        "leaving the lobby: the host never announced its registries in {:?}",
+        timed_out.waited
     );
     for lobby in &lobbies {
         commands.entity(lobby).despawn();

@@ -7,6 +7,7 @@ use crate::{
 use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter};
 use bevy_ensemble::prelude::*;
+use bevy_ensemble::{LobbyLeft, LobbyLeftReason};
 use bevy_ensemble_webrtc::JoinWebrtcLobbyByCode;
 use rand::Rng;
 
@@ -354,13 +355,16 @@ fn show_joining_controls(
     }
 }
 
-/// Say why the last attempt to open a session ended, until another one is made.
+/// Say why the last session ended, until another one is opened.
 ///
-/// The backend has already torn the lobby down by the time [`LobbyJoinFailed`] arrives — it is
-/// telling us why, not asking what to do — so there is nothing to undo here, only something to
-/// put on the screen. Cleared when a new attempt starts, because the old reason is then wrong.
+/// The transport has already torn the lobby down by the time [`LobbyJoinFailed`] or
+/// [`LobbyLeft`] arrives — it is telling us why, not asking what to do — so there is nothing to
+/// undo here, only something to put on the screen. A session that ended on the other side, a
+/// kick, a host that went quiet, a build that does not match, all read here as what they were.
+/// Cleared when a new attempt starts, because the old reason is then wrong.
 fn report_join_failure(
     mut failures: MessageReader<LobbyJoinFailed>,
+    mut ended: MessageReader<LobbyLeft>,
     started: Query<(), Added<PendingLobby>>,
     mut last: ResMut<LastJoinFailure>,
     mut texts: Query<&mut Text, With<JoinErrorText>>,
@@ -371,6 +375,21 @@ fn report_join_failure(
     if let Some(failure) = failures.read().last() {
         warn!("session could not be opened: {}", failure.reason);
         last.0 = Some(failure.reason.clone());
+    }
+    for left in ended.read() {
+        let reason = match &left.reason {
+            // Our own doing, and nothing to explain.
+            LobbyLeftReason::Left => continue,
+            LobbyLeftReason::Kicked => "the host removed you".to_string(),
+            LobbyLeftReason::HostGone => "the host left".to_string(),
+            LobbyLeftReason::PeerTimeout => "the host stopped answering".to_string(),
+            LobbyLeftReason::SignallingLost => "lost the signalling server".to_string(),
+            LobbyLeftReason::ProtocolMismatch(difference) => {
+                format!("the host is on a different build: {difference}")
+            }
+        };
+        warn!("session ended: {reason}");
+        last.0 = Some(reason);
     }
     let wanted = last.0.as_deref().unwrap_or("");
     for mut text in texts.iter_mut() {

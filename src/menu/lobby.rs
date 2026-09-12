@@ -3,8 +3,8 @@ use crate::kart::{KART_SIZE, KartControlType, spawn_kart};
 use crate::menu::animated_button;
 use crate::scene_util::insert;
 use crate::{
-    AppColors, AppPlayerData, AppState, AssetHandles, ChatMessage, FinishTimes, RESOLUTION, Screen,
-    SpriteLayers,
+    AppColors, AppPlayerData, AppState, AssetHandles, ChatMessage, FinishTimes, LobbyState,
+    RESOLUTION, Screen, SpriteLayers,
 };
 use bevy::prelude::*;
 use bevy::text::EditableText;
@@ -20,15 +20,11 @@ fn on_chat_submit(
     mut commands: Commands,
     lobbies: Query<Entity, With<Lobby>>,
     local_player: Option<Res<LocalMultiplayerPlayerId>>,
-    local_server: Option<Res<LocalServerPlayer>>,
     mut history: ResMut<LobbyChatInputHistory>,
     mut inputs: Query<&mut EditableText>,
 ) {
     for submit in submit_reader.read() {
-        let uuid = local_player
-            .as_ref()
-            .map(|p| p.0)
-            .or_else(|| local_server.as_ref().map(|p| p.0));
+        let uuid = local_player.as_ref().map(|p| p.0);
         if let (Some(lobby), Some(uuid)) = (lobbies.iter().next(), uuid) {
             let msg = ChatMessage {
                 sender: uuid,
@@ -71,11 +67,14 @@ impl Plugin for LobbyPlugin {
                         crate::menu::map_picker::draw_preview,
                     )
                         .run_if(in_state(Screen::Lobby)),
-                    on_lobby_exit,
                     spawn_background_elements,
                     handle_background_elements,
                 ),
-            );
+            )
+            // The session is over, however it ended: the role went, and with
+            // it `LobbyState`. `RemovedComponents<Lobby>` never fired for a
+            // join that was refused, whose entity never carried `Lobby`.
+            .add_systems(OnExit(LobbyState::InLobby), on_lobby_exit);
     }
 }
 
@@ -144,12 +143,8 @@ fn on_client_message_received(
     mut reader: MessageReader<ReceivedEnsembleMessage<ChatMessage>>,
     participants: Query<(&LobbyParticipant, Option<&PlayerData<AppPlayerData>>)>,
     local_player: Option<Res<LocalMultiplayerPlayerId>>,
-    local_server: Option<Res<LocalServerPlayer>>,
 ) {
-    let local_uuid = local_player
-        .as_ref()
-        .map(|p| p.0)
-        .or_else(|| local_server.as_ref().map(|p| p.0));
+    let local_uuid = local_player.as_ref().map(|p| p.0);
     for msg in reader.read() {
         let chat = &msg.message;
         // Skip own messages — already added locally by on_chat_submit
@@ -165,20 +160,11 @@ fn on_client_message_received(
     }
 }
 
-fn on_lobby_exit(
-    mut removed_lobbies: RemovedComponents<Lobby>,
-    mut inputs: Query<&mut EditableText>,
-    mut history: ResMut<LobbyChatInputHistory>,
-    mut next_state: ResMut<NextState<AppState>>,
-) {
-    if removed_lobbies.read().next().is_none() {
-        return;
-    }
+fn on_lobby_exit(mut inputs: Query<&mut EditableText>, mut history: ResMut<LobbyChatInputHistory>) {
     for mut input in inputs.iter_mut() {
         input.clear();
     }
     history.0.clear();
-    next_state.set(AppState::OutOfGame);
 }
 
 fn spawn_lobby_players_buttons(
@@ -187,7 +173,6 @@ fn spawn_lobby_players_buttons(
     cars: Query<&LobbyCar>,
     participants: Query<&LobbyParticipant>,
     local_player: Option<Res<LocalMultiplayerPlayerId>>,
-    local_server: Option<Res<LocalServerPlayer>>,
     new_participants: Query<(), Added<LobbyParticipant>>,
 ) {
     let first_time = cars.count() == 0;
@@ -195,10 +180,7 @@ fn spawn_lobby_players_buttons(
     if !has_new && !first_time {
         return;
     }
-    let local_uuid = local_player
-        .as_ref()
-        .map(|p| p.0)
-        .or_else(|| local_server.as_ref().map(|p| p.0));
+    let local_uuid = local_player.as_ref().map(|p| p.0);
     let all_participants: Vec<_> = participants.iter().collect();
     let count = all_participants.len();
     for (i, participant) in all_participants.iter().enumerate() {

@@ -7,6 +7,7 @@
 //! everywhere.
 
 use bevy::prelude::*;
+use bevy_ticked::prelude::TickedInterpolationSet;
 
 use crate::{RESOLUTION, Screen, kart::LocalKart};
 
@@ -26,12 +27,12 @@ impl Plugin for CameraPlugin {
             .add_systems(
                 PostUpdate,
                 follow_local_kart
-                    // The local kart's `Transform` is written by the rollback
-                    // smoothing inside this set. Reading it any earlier gets a
-                    // frame-old position, which does not make the camera lag --
-                    // it makes the whole world jitter against a kart that is
-                    // supposed to be nailed to the middle of the screen.
-                    .after(crate::ApplyCorrectionSet)
+                    // The local kart's `Transform` is the tick blend, written
+                    // in this set. Reading it any earlier gets a frame-old
+                    // position, which does not make the camera lag -- it makes
+                    // the whole world jitter against a kart that is supposed
+                    // to be nailed to the middle of the screen.
+                    .after(TickedInterpolationSet)
                     .before(TransformSystems::Propagate)
                     .run_if(in_state(Screen::Race)),
             );
@@ -48,8 +49,8 @@ pub struct CameraBounds(pub Rect);
 
 /// How much of the distance to the target is closed each second.
 ///
-/// The kart is already smoothed by `rollback_smoothing`, so this only has to
-/// take the edge off a correction the smoothing has already absorbed most of.
+/// The local kart is drawn from its prediction, uncorrected by design, so this
+/// is what takes the edge off a correction to it.
 const FOLLOW_RESPONSE: f32 = 12.0;
 
 fn setup_camera(mut commands: Commands) {
@@ -129,7 +130,7 @@ fn follow_local_kart(
     bounds: Option<Res<CameraBounds>>,
     // Read the kart's `Transform`, never its `Position`: `Position` is the tick
     // pose and steps at 64 Hz, so following it would stutter on every frame that
-    // is not a tick and would throw away everything `rollback_smoothing` does.
+    // is not a tick and would throw away the blend between ticks.
     kart: Query<&Transform, (With<LocalKart>, Without<MainCamera>)>,
     mut camera: Query<&mut Transform, (With<MainCamera>, Without<LocalKart>)>,
 ) {

@@ -133,10 +133,11 @@ that only ever ran on one architecture would be a hash of that machine.
 
 Two tests are worth knowing about before they surprise you:
 
-- **`registration_order_is_the_wire_format`** in `src/wire_format.rs`. Networked
-  components are identified by their position in the registration list in
-  `main.rs`. The list is append-only; reordering it fails this test rather than
-  corrupting the next session between two builds.
+- **`the_tick_does_not_read_the_frame`** in `tests/sim_is_deterministic.rs`. The
+  modules with `TickedSimulation` systems may not read the frame clock, the
+  keyboard, the wall clock or the thread's randomness: a replayed tick would
+  differ from the first run. Frame-side code in those files is listed as an
+  exception with the system it belongs to.
 - **`the_shipped_maps_are_what_this_draws`** in `src/track/map/generate.rs`. The
   built-in maps are drawn by code and committed as JSON. Change the code and this
   fails until you regenerate; edit the JSON by hand and it fails until the code
@@ -179,12 +180,13 @@ storage. The directory is gitignored.
 
 ```
 src/
-  main.rs              plugin wiring, states, the networked-component registration list
+  main.rs              plugin wiring, states, the networked components and messages by wire name
   screen.rs            Screen: which of the four screens is up, computed from the states
   lobby.rs             lobby lifecycle and the session parameters above
   map_sync.rs          getting the host's chosen map to every peer, and starting the race
-  networking.rs        PlayerInput and the networked components
-  wire_format.rs       the golden test on the registration order
+  networking.rs        PlayerInput, EntityKind, and which entities this peer simulates
+  input.rs             the local player's input, sampled once per tick
+  entity_spawn.rs      what a tracked entity looks like when it appears and when it goes
   menu/                start menu, lobby UI, the map picker
   track/               the race: laps, positions, minimap, the starting grid
   track/map/           MapData, the deterministic builder, built-ins, storage, sharing
@@ -201,9 +203,19 @@ scripts/local-session.sh       the one-command multiplayer session
 ```
 
 The networking stack is `bevy_ticked` (a fixed 64 Hz tick with rollback),
-`bevy_ticked_networking` (snapshots and prediction over it) and `bevy_ensemble`
-(lobbies and WebRTC transport). All three come from git; `Cargo.toml` points at
-them.
+`bevy_ticked_networking` (snapshots, prediction and interpolation over it),
+`bevy_ticked_avian` (avian2d under the tick, replay-safe) and `bevy_ensemble`
+(lobbies and WebRTC transport). All of it comes from git; `Cargo.toml` points at
+it, and pins `bevy_ensemble` at the commit `bevy_ticked` pins, because the two
+must agree about the transport's wire format. `bevy_ticked`'s `docs/MIGRATION.md`
+and `docs/migration/bevy_kart.md` say what each upstream phase changed here.
+
+On a client, only the local kart is simulated; every other tracked entity is
+drawn from the host's history a couple of ticks behind (`networking::simulates`
+is the question every ticked system asks). Spawns go through `TrackedSpawner`
+and despawns through `despawn_ticked`, which leaves a tombstone a rewind can
+revive -- and which `entity_spawn` turns into the explosion or pickup sound on
+every peer.
 
 ## Conventions
 
@@ -216,8 +228,13 @@ them.
   `sin`, `cos` or `atan2`, no `mul_add`, `Vec2` only. The file's header explains
   each rule. Anything a peer might build differently from another is a divergence
   rollback corrects and recreates every tick, forever.
-- **The registration list is append-only.** New networked components go at the
-  end of the list in `main.rs`, retired ones stay as empty entries.
+- **Wire names are forever.** A networked component or message is registered
+  under a string in `main.rs`, and that string is its identity on the wire: the
+  order of the list means nothing, the Rust type can be renamed, and changing
+  the string is a wire break the join handshake refuses by name.
+- **The simulation obeys the rollback rules.** No frame clock, keyboard, wall
+  clock or thread randomness inside a `TickedSimulation` system;
+  `tests/sim_is_deterministic.rs` greps for the reaches.
 - **Tools are Rust.** A generator or converter is a `#[cfg(test)]` module with an
   `#[ignore]`d regeneration test and a snapshot test holding the output to it, the
   way the maps are done. Nothing dev-only ships in the binary or the web bundle.

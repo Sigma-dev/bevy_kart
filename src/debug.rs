@@ -1,4 +1,4 @@
-use avian2d::prelude::{LinearVelocity, Position};
+use avian2d::prelude::{LinearVelocity, Position, RigidBody};
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -7,9 +7,15 @@ use crate::Screen;
 use crate::camera::MainCamera;
 use crate::track::position::progress_line::{DrawProgressLine, ProgressLine};
 use bevy_ensemble::prelude::{Lobby, NetDebugExtras, PeerRtt, PeerRttJitter};
-use bevy_ticked::prelude::{CurrentTick, TickRateDilation, TickedLoop, TickedSystems};
+use bevy_ticked::prelude::{
+    CurrentTick, TickHolds, TickRateDilation, TickTrackedEntity, TickedLoop, TickedSystems,
+};
 use bevy_ticked_networking::client::SnapshotApplied;
-use bevy_ticked_networking::prelude::{ClientTickBuffer, LocalClientPlayer, LocalServerPlayer};
+use bevy_ticked_networking::diagnostics::{ReplayStats, SnapshotStats};
+use bevy_ticked_networking::prelude::{
+    ClientTickBuffer, LocalClientPlayer, LocalServerPlayer, SessionPause, SnapshotRecipientList,
+};
+use bevy_ticked_networking_ensemble::RegistryVerified;
 
 pub struct DebugPlugin;
 
@@ -114,7 +120,24 @@ fn perf_frame_end(
     client: Option<Res<LocalClientPlayer>>,
     extras: Option<ResMut<NetDebugExtras>>,
     params: Option<Res<crate::lobby::SessionParams>>,
-    local_kart: Query<(&Position, &LinearVelocity), With<crate::kart::LocalKart>>,
+    local_kart: Query<
+        (
+            &Position,
+            &LinearVelocity,
+            Has<crate::car_controller_2d::CarControllerDisabled>,
+            Option<&crate::car_controller_2d::CarControllerInputs>,
+            &RigidBody,
+        ),
+        With<crate::kart::LocalKart>,
+    >,
+    tick: Res<CurrentTick>,
+    holds: Res<TickHolds>,
+    pause: Option<Res<SessionPause>>,
+    verified: Option<Res<RegistryVerified>>,
+    recipients: Option<Res<SnapshotRecipientList>>,
+    replay: Option<Res<ReplayStats>>,
+    snapshots: Option<Res<SnapshotStats>>,
+    tracked: Query<(), With<TickTrackedEntity>>,
 ) {
     let now = Instant::now();
     let Some(frame_start) = stats.frame_start else {
@@ -145,11 +168,52 @@ fn perf_frame_end(
     };
     let kart = local_kart
         .single()
-        .map(|(pos, vel)| format!("kart=({:.1},{:.1}) speed={:.1}", pos.x, pos.y, vel.length()))
+        .map(|(pos, vel, disabled, inputs, body)| {
+            format!(
+                "kart=({:.1},{:.1}) speed={:.1} disabled={disabled} forward={:?} body={body:?}",
+                pos.x,
+                pos.y,
+                vel.length(),
+                inputs.map(|i| i.forward),
+            )
+        })
         .unwrap_or_else(|_| "kart=none".to_string());
+    // The session as the stack sees it: the tick, what holds the clock, the
+    // replicated pause, whether the registry handshake passed (a client) or how
+    // many clients it passed for (a host), and the upstream counters.
+    let holds: Vec<String> = holds.reasons().map(|r| format!("{r:?}")).collect();
+    let paused = pause
+        .as_ref()
+        .and_then(|p| p.0.as_ref())
+        .map_or("no".to_string(), |p| format!("{:?}@{}", p.reason, p.at));
+    let session = if server.is_some() {
+        format!(
+            "recipients={} sent={} bytes={}",
+            recipients.as_ref().map_or(0, |r| r.0.len()),
+            snapshots.as_ref().map_or(0, |s| s.sent),
+            snapshots.as_ref().map_or(0, |s| s.bytes),
+        )
+    } else {
+        let r = replay.as_deref().copied().unwrap_or_default();
+        format!(
+            "verified={} applied={} rollbacks={} identical={} stale={} unverified={} deltas={}",
+            verified.is_some(),
+            r.snapshots_applied,
+            r.rollbacks,
+            r.skipped_identical,
+            r.dropped_stale,
+            r.dropped_before_handshake,
+            r.deltas_applied,
+        )
+    };
+    let net = format!(
+        "tick={} holds={holds:?} pause={paused} tracked={} {session}",
+        tick.0,
+        tracked.iter().count(),
+    );
     let line = format!(
         "PERF role={role} fps={:.1} frame_ms avg={:.2} max={:.2} | main_ms avg={:.2} max={:.2} \
-         | tick_ms avg={:.2} max={:.2} ticks/frame={:.2} | replay/snapshot={:.1} snapshots/s={:.1} | {kart}",
+         | tick_ms avg={:.2} max={:.2} ticks/frame={:.2} | replay/snapshot={:.1} snapshots/s={:.1} | {kart} | {net}",
         frames / elapsed,
         stats.frame_ms_sum / frames,
         stats.frame_ms_max,

@@ -6,8 +6,8 @@ use crate::scene_util::insert;
 use crate::track::LAPS_TO_WIN;
 use crate::track::position::TrackPosition;
 use crate::{
-    AppPlayerData, AppState, ApplyCorrectionSet, AssetHandles, LocalPlayerData, OwnerPlayer,
-    Screen, SpriteLayers, car_controller_2d::CarController2dWheel, track::FinishTimes,
+    AppPlayerData, AppState, AssetHandles, LocalPlayerData, Screen, SpriteLayers,
+    car_controller_2d::CarController2dWheel, track::FinishTimes,
 };
 use audio_manager::prelude::*;
 use avian2d::prelude::*;
@@ -27,7 +27,8 @@ impl Plugin for KartPlugin {
         app.add_systems(Update, update_boost_flame).add_systems(
             PostUpdate,
             follow_transform
-                .after(ApplyCorrectionSet)
+                // After the tick blend has written the kart's drawn pose.
+                .after(TickedInterpolationSet)
                 .before(TransformSystems::Propagate),
         );
     }
@@ -197,7 +198,7 @@ pub fn on_lap_update(
     tick: Res<CurrentTick>,
     karts: Query<&CarControllerDisabled>,
     mut commands: Commands,
-    owners: Query<&OwnerPlayer>,
+    owners: Query<&Owner>,
     mut finish_times: ResMut<FinishTimes>,
 ) {
     if trigger.event().count == LAPS_TO_WIN as i32 {
@@ -217,7 +218,7 @@ pub fn on_lap_update(
 pub struct AutoCar;
 
 pub enum KartControlType {
-    Player(OwnerPlayer),
+    Player(Owner),
     AutoCar,
     LobbyCar(u128, Option<usize>),
 }
@@ -231,9 +232,9 @@ pub struct LocalKart;
 /// [`update_lobby_cars`](crate::menu::lobby)), so giving them a `RigidBody` would
 /// pull in avian's transform interpolation and fight the puppet positioning.
 ///
-/// Takes the pose explicitly: with `transform_to_position` off (see `main.rs`),
-/// avian no longer reads a spawn's `Transform`, and a body given only a
-/// `Transform` starts at the origin.
+/// Takes the pose explicitly: `TickedAvianPlugin` keeps avian from reading a
+/// `Transform` back into the body, and only places one from its `Transform`
+/// when its `Position` is the default.
 fn kart_physics(transform: &Transform) -> impl Bundle {
     (
         Mass(1.),
@@ -273,11 +274,7 @@ pub(crate) fn spawn_kart(
                 commands.entity(id).despawn();
                 return;
             };
-            let local_uuid = local_player
-                .as_ref()
-                .map(|p| p.0)
-                .or_else(|| server_player.as_ref().map(|p| p.0));
-            let is_local = local_uuid.is_some_and(|uuid| uuid == owner.0);
+            let is_local = local_player.as_ref().is_some_and(|p| p.0 == owner.0);
             commands.entity(id).insert((
                 kart_physics(&transform),
                 owner,
@@ -335,11 +332,7 @@ pub(crate) fn spawn_kart(
             ));
         }
         KartControlType::LobbyCar(player_uuid, rank) => {
-            let local_uuid = local_player
-                .as_ref()
-                .map(|p| p.0)
-                .or_else(|| server_player.as_ref().map(|p| p.0));
-            let is_local = local_uuid.is_some_and(|uuid| uuid == player_uuid);
+            let is_local = local_player.as_ref().is_some_and(|p| p.0 == player_uuid);
             let is_host = server_player.is_some();
             let player_data = participants_with_data
                 .iter()

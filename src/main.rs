@@ -1,4 +1,3 @@
-use avian2d::interpolation::PhysicsInterpolationPlugin;
 use avian2d::prelude::*;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -7,6 +6,7 @@ use audio_manager::AudioManagerPlugin;
 use bevy_ensemble::prelude::*;
 use bevy_ensemble_webrtc::BevyEnsembleWebrtcPlugin;
 use bevy_ticked::prelude::*;
+use bevy_ticked_avian::avian2d::TickedAvianPlugin;
 use bevy_ticked_networking::prelude::*;
 use bevy_ticked_networking_ensemble::{
     TickedEnsembleSessionPlugin, TickedNetworkingEnsemblePlugin,
@@ -22,22 +22,20 @@ pub mod decor;
 pub mod editor;
 pub mod entity_spawn;
 pub mod hud;
+pub mod input;
 pub mod items;
 pub mod kart;
 pub mod lobby;
 pub mod map_sync;
 pub mod menu;
 pub mod networking;
-pub mod rollback_smoothing;
 pub mod scene_util;
 pub mod screen;
 pub mod theme;
 pub mod track;
-pub mod wire_format;
 
 pub use assets::AssetHandles;
 pub use networking::*;
-pub use rollback_smoothing::{ApplyCorrectionSet, CorrectionSmoothing};
 pub use screen::{EditorState, Screen};
 pub use theme::*;
 pub use track::FinishTimes;
@@ -53,79 +51,49 @@ use lobby::LobbyLifecyclePlugin;
 use menu::MenuPlugin;
 use menu::lobby::spawn_lobby;
 use menu::start::spawn_menu;
-use rollback_smoothing::RollbackSmoothingPlugin;
 use track::{
     TrackPlugin, build_current_map, grid::spawn_starting_grid, spawn::spawn_map, start_countdown,
 };
 
-/// Register every networked component. **This order is a wire format.**
+/// Every networked component of the game's own, each under its wire name.
 ///
-/// Indices are assigned by position as `u16` and travel in every snapshot, so
-/// reordering two lines makes a peer read one component's bytes as another's,
-/// silently. Append only, never reorder, never delete.
+/// The name is the type's identity on the wire. A component's index in a
+/// snapshot is its rank among every registered name, sorted, so the order of
+/// these lines is not a format, and the join handshake names the first
+/// registration two builds disagree on rather than letting them play it out.
+/// Renaming a Rust type is free; changing one of these strings is a wire break.
 ///
-/// The string is what `TickedComponentRegistry::wire_hash()` hashes, and the
-/// handshake in `TickedEnsembleSessionPlugin` compares it between every pair of
-/// peers at the join. Renaming the Rust type is free; changing one of these
-/// strings is a wire break.
+/// Not here: avian's four body components, which `TickedAvianPlugin` registers
+/// under `avian::*`, and `Owner`, which the role plugins register.
 ///
-/// A free function rather than an inline chain so the golden test in
-/// `wire_format` can build a registry without building an app.
+/// A free function rather than an inline chain so the headless test in `items`
+/// can register the same set without building the whole app.
 pub fn register_networked_components(app: &mut App) {
-    app.register_networked_ticked_component_as::<Position>("Position")
-        .register_networked_ticked_component_as::<Rotation>("Rotation")
-        .register_networked_ticked_component_as::<LinearVelocity>("LinearVelocity")
-        .register_networked_ticked_component_as::<AngularVelocity>("AngularVelocity")
-        .register_networked_ticked_component_as::<OwnerPlayer>("OwnerPlayer")
-        .register_networked_ticked_component_as::<EntityKind>("EntityKind")
-        // Retired (see `networking.rs`), kept so the indices after them hold.
-        .register_networked_ticked_component_as::<NetworkedPosition>("NetworkedPosition")
-        .register_networked_ticked_component_as::<NetworkedRotation>("NetworkedRotation")
-        .register_networked_ticked_component_as::<car_controller_2d::CarControllerInputs>(
+    // What an entity is never changes, so it travels with the entity's first
+    // record and in keyframes, never in a delta.
+    app.register_networked_ticked_component_once::<EntityKind>("EntityKind")
+        .register_networked_ticked_component::<car_controller_2d::CarControllerInputs>(
             "CarControllerInputs",
         )
-        .register_networked_ticked_component_as::<car_controller_2d::SteeringState>("SteeringState")
-        .register_networked_ticked_component_as::<items::HeldItem>("HeldItem")
-        .register_networked_ticked_component_as::<car_controller_2d::BoostEffect>("BoostEffect")
-        .register_networked_ticked_component_as::<car_controller_2d::CarControllerDisabled>(
+        .register_networked_ticked_component::<car_controller_2d::SteeringState>("SteeringState")
+        .register_networked_ticked_component::<items::HeldItem>("HeldItem")
+        .register_networked_ticked_component::<car_controller_2d::BoostEffect>("BoostEffect")
+        .register_networked_ticked_component::<car_controller_2d::CarControllerDisabled>(
             "CarControllerDisabled",
         )
-        // Rollback-only: a peer's own view of a rocket hit, never sent. Still an
-        // entry in the registry, so it is part of the hash and of this order.
-        .register_ticked_component_as::<items::RocketHit>("RocketHit")
-        // Not a component anybody spawns: a protocol epoch.
-        //
-        // The broadcast-message registry below is a wire format too -- types are
-        // identified by a sequential `u16` -- but nothing hashes it and the
-        // handshake never sees it. A peer on an older build receiving an index it
-        // does not know logs `Received ensemble packet for unregistered type
-        // index N` and drops the packet: no `RegistryMismatch`, so no leave, so
-        // it sits in the lobby and simply never enters the race while the host
-        // drives away.
-        //
-        // Renaming this string whenever that registry changes shape moves
-        // `wire_hash()`, which `TickedRegistryHandshake` *does* compare, so the
-        // older peer is refused at the join instead of discovering it at the
-        // start button. `register_ticked_component_as` rather than the networked
-        // form, so it costs nothing on the wire -- the same trick `RocketHit` uses.
-        .register_ticked_component_as::<wire_format::ProtocolEpoch>("ProtocolEpoch.maps");
+        // Rollback-only: a peer's own view of a rocket hit, never sent.
+        .register_ticked_component_as::<items::RocketHit>("RocketHit");
 }
 
-/// Every broadcast message, in order. **This order is a wire format.**
-///
-/// Types are identified on the wire by their position here as a `u16`, exactly
-/// as components are. Unlike components it is in no handshake, which is why
-/// `ProtocolEpoch` above exists. Append only, never reorder.
-///
-/// Note the plugin add order in `main` is part of this too: `EnsemblePlugin`,
-/// `LobbyBroadcastPlugin` and `PlayerDataPlugin` register their own types first,
-/// so moving them renumbers everything here.
+/// Every broadcast message, each under its wire name. As with the components,
+/// the name is the identity and the order is nothing; the transport's own
+/// handshake compares the sorted lists at the join.
 pub fn register_broadcast_messages(app: &mut App) {
-    app.register_broadcast_message::<ChatMessage>()
-        .register_broadcast_message::<track::OnFinishTimeUpdate>()
-        .register_broadcast_message::<GameStateChanged>()
-        .register_broadcast_message::<map_sync::MapSelected>()
-        .register_broadcast_message::<map_sync::StartRace>();
+    app.register_broadcast_message::<ChatMessage>("ChatMessage")
+        .register_broadcast_message::<track::OnFinishTimeUpdate>("OnFinishTimeUpdate")
+        .register_broadcast_message::<GameStateChanged>("GameStateChanged")
+        .register_broadcast_message::<map_sync::MapSelected>("MapSelected")
+        .register_broadcast_message::<map_sync::StartRace>("StartRace");
 }
 
 fn main() {
@@ -148,40 +116,61 @@ fn main() {
         })
         // Ticks come from the crate's own accumulator rather than FixedUpdate,
         // so the client can steer its prediction lead by dilating the tick rate
-        // instead of adding or dropping whole ticks.
+        // instead of adding or dropping whole ticks. The networking plugins
+        // refuse `FixedUpdate` outright.
         .add_plugins(TickedPlugin {
             source: TickSource::Hz(64.0),
             ..default()
         })
-        .add_plugins(
-            PhysicsPlugins::new(TickedSimulation)
-                .set(PhysicsInterpolationPlugin::interpolate_all()),
-        )
+        // avian2d on the tick, replay-safe: the four body components on the
+        // wire under `avian::*`, sleeping off, the solver's contact graph
+        // rolled back with the bodies, and avian's `Transform` -> `Position`
+        // sync off so the blended transform the renderer sees is never read
+        // back as the body's place. Everything that moves a body writes
+        // `Position`.
+        //
+        // Warm starting kept, explicitly. The bundle used to zero it, and a kart
+        // driven into a wall was then held there: two seconds of reverse at
+        // exactly zero speed. The rolled-back contact graph carries the impulses
+        // warm starting seeds from, so a replay is unaffected. The default flips
+        // in Sigma-studios/bevy_ticked#15; until that is merged and the pin
+        // bumped, this call is what makes the difference, and after, a no-op
+        // that can go.
+        .add_plugins(TickedAvianPlugin::default().keep_warm_starting())
         .insert_resource(Gravity::ZERO)
-        // `Position` and `Rotation` are the simulation's truth and `Transform` is
-        // a view of them. The kart smoothing writes an interpolated `Transform`
-        // every frame, and with this sync on avian copied it back into
-        // `Position` at the start of every tick, dragging every body back by the
-        // interpolation lag: 30% speed loss in a 16-tick sawtooth. Everything
-        // that moves a body writes `Position` directly.
-        .insert_resource(avian2d::physics_transform::PhysicsTransformConfig {
-            transform_to_position: false,
-            ..default()
-        })
         .add_plugins(TickedServerPlugin::<PlayerInput>::new())
         .add_plugins(TickedClientPlugin::<PlayerInput>::new())
         .add_plugins(TickedNetworkingEnsemblePlugin::<PlayerInput>::new())
         // Adopts the host or client role from the ensemble lobby, releases it
-        // when the lobby goes, stops a lone host serialising snapshots for
-        // nobody, and exchanges the registry hashes at the join so two builds
-        // that disagree about the wire format end the session instead of
-        // playing it out. `lobby.rs` keeps only the menu's side of all that.
-        .add_plugins(TickedEnsembleSessionPlugin)
-        // Register ensemble messages. **Append only**: see `wire_format`.
+        // when the lobby goes, exchanges the registries at the join so two
+        // builds that disagree about the wire format end the session instead
+        // of playing it out, and hands each client its spawner slot.
+        // `lobby.rs` keeps only the menu's side of all that.
+        .add_plugins(TickedEnsembleSessionPlugin::default())
+        // Not on focus loss. A desktop window that is not in front still renders
+        // and ticks at full rate, and with two copies of the game on one screen
+        // -- the local session script, or a friend on the same machine -- exactly
+        // one window is in front, so the focus pause froze every session the
+        // moment the second window opened. A host that really stalls (a browser
+        // tab in the background gets a frame a second) still pauses, from the
+        // gap between its frames.
+        .insert_resource(PausePolicy {
+            auto_pause_on_focus_loss: false,
+            ..default()
+        })
+        // The renderer blends every tracked body between its last two tick
+        // states, and a correction to a predicted body slides into place
+        // instead of blinking there. Neither reaches the simulation.
+        .add_plugins((TickedInterpolationPlugin, TickedSmoothingPlugin))
+        // The local player's input, sampled once per tick inside the loop and
+        // filed for the tick about to run: a keypress costs no extra frame,
+        // and a frame that runs two ticks samples twice.
+        .add_plugins(TickedInputPlugin::<PlayerInput>::new(
+            input::sample_local_input,
+        ))
         // Game plugins
         .add_plugins((
             CarController2dPlugin,
-            RollbackSmoothingPlugin,
             EntitySpawnPlugin,
             LobbyLifecyclePlugin,
             DebugPlugin,
@@ -253,9 +242,8 @@ fn main() {
         )
         .insert_resource(ClearColor(AppColors::Grass.color()));
 
-    // The wire format. Kept in functions of their own, and guarded by golden
-    // tests, because the order of those calls is a protocol rather than a style
-    // choice.
+    // The wire: both registries are frozen the first time a snapshot or a
+    // handshake reads them, so everything is registered before the app runs.
     register_networked_components(&mut app);
     register_broadcast_messages(&mut app);
 

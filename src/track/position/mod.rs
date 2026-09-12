@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy_ticked::prelude::*;
+use bevy_ticked_avian::avian2d::TickedSimulationSet;
 
 use crate::{
     kart::{LapUpdate, LapsCounter},
@@ -16,7 +17,14 @@ pub mod progress_line;
 impl Plugin for RacePositionPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(progress_line::ProgressLinePlugin)
-            .add_systems(TickedSimulation, compute_race_position);
+            // After the step, on the poses it produced, and after the progress
+            // those poses give: the two used to be unordered.
+            .add_systems(
+                TickedSimulation,
+                compute_race_position
+                    .in_set(TickedSimulationSet::AfterPhysics)
+                    .after(progress_line::compute_progress),
+            );
     }
 }
 

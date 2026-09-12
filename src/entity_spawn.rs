@@ -1,7 +1,14 @@
-use std::f32::consts::{PI, TAU};
+//! What a tracked entity looks like, on every peer.
+//!
+//! The simulation spawns bare bodies: an id, a kind, an owner, a pose. This
+//! module dresses them when they appear -- on the host as the tick spawns them,
+//! on a client as a snapshot introduces them -- and says what it looks and
+//! sounds like when one goes.
 
 use audio_manager::prelude::*;
 use avian2d::prelude::*;
+use bevy::ecs::entity_disabling::Disabled;
+use bevy::ecs::query::Allow;
 use bevy::prelude::*;
 use bevy_ensemble::prelude::*;
 use bevy_ticked::prelude::*;
@@ -9,8 +16,7 @@ use bevy_ticked_networking::prelude::*;
 use bevy_timer::{Timer as GameTimer, TimerFinished};
 
 use crate::{
-    AppPlayerData, AppState, AssetHandles, CorrectionSmoothing, EntityKind, OwnerPlayer,
-    PlayerInput, SpriteLayers, car_controller_2d, items,
+    AppPlayerData, AppState, AssetHandles, EntityKind, SpriteLayers, car_controller_2d, items,
     kart::{self, FollowTransform, LapsCounter, LocalKart},
     track,
 };
@@ -20,140 +26,59 @@ pub struct EntitySpawnPlugin;
 impl Plugin for EntitySpawnPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_tracked_entity_spawned)
-            // In `PreUpdate`, once Bevy has read this frame's keyboard state and
-            // before `RunTickedLoop` runs the tick that consumes it. In `Update`
-            // the input landed a tick late: ticks run before `Update`, so a key
-            // pressed this frame only reached the simulation on the next one.
-            .add_systems(
-                PreUpdate,
-                capture_local_input.after(bevy::input::InputSystems),
-            )
-            // Inside the tick loop, after any rollback and before the tick
-            // advances, so the "previous" pose is the corrected state at the tick
-            // the interpolation starts from.
-            .add_systems(
-                TickedLoop,
-                save_networked_visual_state
-                    .after(TickedSystems::PreTick)
-                    .before(TickedSystems::Tick),
-            )
-            .add_systems(PostUpdate, sync_visuals.before(TransformSystems::Propagate));
+            .add_observer(on_replication_mode_changed)
+            .add_observer(on_tracked_entity_gone);
     }
 }
 
-/// Capture keyboard input and write to InputQueue each tick.
-fn capture_local_input(
-    keys: Res<ButtonInput<KeyCode>>,
-    tick: Res<CurrentTick>,
-    local_client: Option<Res<LocalClientPlayer>>,
-    local_server: Option<Res<LocalServerPlayer>>,
-    params: Option<Res<crate::lobby::SessionParams>>,
-    mut input_queue: ResMut<InputQueue<PlayerInput>>,
-) {
-    let uuid = local_client
-        .as_ref()
-        .map(|p| p.0)
-        .or_else(|| local_server.as_ref().map(|p| p.0));
-    let Some(uuid) = uuid else { return };
-    let input = PlayerInput {
-        forward: keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp),
-        backward: keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown),
-        left: keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft),
-        right: keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight),
-        using_item: keys.pressed(KeyCode::Space),
-    };
-    // `autodrive`: throttle held, steering flipped every 1.5 s, item on the
-    // fifth second. Enough to keep every kart moving and colliding in a run
-    // nobody is driving.
-    let input = if params.is_some_and(|p| p.autodrive) {
-        let phase = (tick.0 / 96).is_multiple_of(2);
-        PlayerInput {
-            forward: true,
-            backward: false,
-            left: phase,
-            right: !phase,
-            using_item: tick.0 % 320 < 4,
-        }
-    } else {
-        input
-    };
-    input_queue.insert(tick.0 + 1, uuid, input);
-}
-
-/// Sub-tick interpolation state for the non-physics networked entities
-/// (rockets, items, explosions): the pose at the previous tick.
+/// What kind of body a kart is on this peer.
 ///
-/// Without it these were drawn straight from the latest tick, which at 64 ticks
-/// on a 60 Hz display is a visible beat, and on a client that has just applied a
-/// snapshot, a step of however many ticks arrived since the last frame.
-#[derive(Component, Default)]
-pub struct NetworkedVisual {
-    prev: Option<(Vec2, f32)>,
-}
-
-fn save_networked_visual_state(
-    mut visuals: Query<(&Position, Option<&Rotation>, &mut NetworkedVisual)>,
-) {
-    for (pos, rot, mut visual) in visuals.iter_mut() {
-        visual.prev = Some((pos.0, rot.map_or(0.0, |r| r.as_radians())));
-    }
-}
-
-/// Draw the bodies avian does not write a `Transform` for (it only does so for
-/// rigid bodies) between their previous and current tick.
-fn sync_visuals(
-    interpolation: TickInterpolation,
-    mut non_physics: Query<
-        (
-            &Position,
-            Option<&Rotation>,
-            Option<&NetworkedVisual>,
-            &mut Transform,
-        ),
-        (With<TickTrackedEntity>, Without<RigidBody>),
-    >,
-) {
-    let alpha = interpolation.fraction();
-    for (pos, rot, visual, mut transform) in non_physics.iter_mut() {
-        let curr_pos = pos.0;
-        let curr_rot = rot.map_or(0.0, |r| r.as_radians());
-        let (draw_pos, draw_rot) = match visual.and_then(|v| v.prev) {
-            Some((prev_pos, prev_rot)) => {
-                let rot_diff = (curr_rot - prev_rot + PI).rem_euclid(TAU) - PI;
-                (prev_pos.lerp(curr_pos, alpha), prev_rot + rot_diff * alpha)
-            }
-            None => (curr_pos, curr_rot),
-        };
-        transform.translation.x = draw_pos.x;
-        transform.translation.y = draw_pos.y;
-        if rot.is_some() {
-            transform.rotation = Quat::from_rotation_z(draw_rot);
-        }
+/// The host simulates every kart. A client simulates its own, which the stack
+/// marks `Predicted` from its `Owner`, and is handed every other kart's state
+/// by the host a couple of ticks behind: a dynamic body there would fight that
+/// restore every tick -- damping, colliding, integrating from a velocity the
+/// host has since changed -- so it is kinematic, moved by the record and still
+/// solid to drive into.
+fn body_kind(
+    local_client: Option<&LocalClientPlayer>,
+    owner: Option<&Owner>,
+    mode: Option<&ReplicationMode>,
+) -> RigidBody {
+    let Some(local) = local_client else {
+        return RigidBody::Dynamic;
+    };
+    let mine = owner.is_some_and(|owner| owner.0 == local.0);
+    if mine || matches!(mode, Some(ReplicationMode::Predicted)) {
+        RigidBody::Dynamic
+    } else {
+        RigidBody::Kinematic
     }
 }
 
 /// Observer: when a TickTrackedEntity is added (host spawn or client snapshot),
 /// add visual and physics components based on EntityKind.
+///
+/// A snapshot inserts `TickTrackedEntity` last, after every networked
+/// component, so this sees the owner and the pose.
 fn on_tracked_entity_spawned(
     trigger: On<Add, TickTrackedEntity>,
     mut commands: Commands,
     query: Query<(
         &EntityKind,
-        Option<&OwnerPlayer>,
+        Option<&Owner>,
         Option<&Position>,
         Option<&Rotation>,
+        Option<&ReplicationMode>,
     )>,
     asset_handles: Res<AssetHandles>,
     participants_with_data: Query<(&LobbyParticipant, Option<&PlayerData<AppPlayerData>>)>,
     local_player: Option<Res<LocalMultiplayerPlayerId>>,
-    local_server: Option<Res<LocalServerPlayer>>,
+    local_client: Option<Res<LocalClientPlayer>>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
     mut audio_manager: AudioManager,
 ) {
     let entity = trigger.entity;
-    let Ok((kind, maybe_owner, maybe_pos, maybe_rot)) = query.get(entity) else {
+    let Ok((kind, maybe_owner, maybe_pos, maybe_rot, maybe_mode)) = query.get(entity) else {
         return;
     };
     let pos = maybe_pos.map(|p| p.0).unwrap_or_default();
@@ -170,11 +95,11 @@ fn on_tracked_entity_spawned(
                 commands.entity(entity).insert(t);
             }
             let owner_uuid = maybe_owner.map(|o| o.0).unwrap_or(0);
-            let local_uuid = local_player
-                .as_ref()
-                .map(|p| p.0)
-                .or_else(|| local_server.as_ref().map(|p| p.0));
-            let is_local = local_uuid.is_some_and(|uuid| uuid == owner_uuid);
+            let is_local = local_player.as_ref().is_some_and(|p| p.0 == owner_uuid);
+            debug!(
+                "kart {entity} appeared: owner {owner_uuid:#x}, local player {:?}, mine: {is_local}",
+                local_player.as_ref().map(|p| format!("{:#x}", p.0))
+            );
 
             let player = participants_with_data
                 .iter()
@@ -190,10 +115,20 @@ fn on_tracked_entity_spawned(
                 car_controller_2d::CarController2d::new(1.),
                 car_controller_2d::SteeringState::default(),
                 car_controller_2d::CarControllerDisabled,
-                CorrectionSmoothing::default(),
-                NoTransformEasing,
+                // Drawn between its last two tick states, and a snapshot
+                // correction slides in over a few frames rather than blinking,
+                // up to the size that would read as clipping through a wall.
+                // The local kart is exempt by its `Owner`: a correction to
+                // what you are steering should be felt, not hidden.
+                TickedInterpolation::default(),
+                CorrectionSmoothing {
+                    decay_rate: 20.0,
+                    max_offset: 5.0,
+                    max_angle: 1.0,
+                    apply_to: SmoothingTarget::Self_,
+                },
                 Mass(1.),
-                RigidBody::Dynamic,
+                body_kind(local_client.as_deref(), maybe_owner, maybe_mode),
                 Collider::rectangle(4., 8.),
                 Visibility::Inherited,
                 LapsCounter::new(),
@@ -235,13 +170,8 @@ fn on_tracked_entity_spawned(
                 DespawnOnExit(AppState::Game),
                 Transform::from_xyz(pos.x, pos.y, SpriteLayers::Car.to_z()),
                 Sprite::from_image(asset_handles.crate_texture.clone()),
-                NetworkedVisual::default(),
+                TickedInterpolation::default(),
             ));
-            commands.entity(entity).observe(
-                |_trigger: On<Despawn>, mut audio_manager: AudioManager| {
-                    audio_manager.play_sound(PlayAudio2D::new_once("sounds/pickup.wav"));
-                },
-            );
         }
         EntityKind::Rocket => {
             let layout = TextureAtlasLayout::from_grid(UVec2::new(3, 8), 2, 1, None, None);
@@ -262,7 +192,7 @@ fn on_tracked_entity_spawned(
                 // so without this its rockets neither flew between snapshots nor
                 // animated.
                 items::Rocket,
-                NetworkedVisual::default(),
+                TickedInterpolation::default(),
             ));
             audio_manager.play_sound(
                 PlayAudio2D::new_once("sounds/rocket.wav")
@@ -279,17 +209,63 @@ fn on_tracked_entity_spawned(
                 // The marker `trigger_mines` keys on. The host spawns it with
                 // the mine; a client only ever sees `EntityKind`.
                 items::Mine::default(),
-                NetworkedVisual::default(),
+                TickedInterpolation::default(),
             ));
         }
-        EntityKind::Explosion => {
+    }
+}
+
+/// A kart whose mode changes after it appeared -- the role arriving after the
+/// body, or the game marking one predicted -- changes body kind with it.
+fn on_replication_mode_changed(
+    trigger: On<Insert, ReplicationMode>,
+    mut commands: Commands,
+    karts: Query<(&EntityKind, Option<&Owner>, &ReplicationMode), With<RigidBody>>,
+    local_client: Option<Res<LocalClientPlayer>>,
+) {
+    let Ok((kind, owner, mode)) = karts.get(trigger.entity) else {
+        return;
+    };
+    if matches!(kind, EntityKind::Kart) {
+        commands.entity(trigger.entity).insert(body_kind(
+            local_client.as_deref(),
+            owner,
+            Some(mode),
+        ));
+    }
+}
+
+/// What a tracked entity leaving the world looks and sounds like, on every peer.
+///
+/// `despawn_ticked` tombstones rather than destroys -- on the host when it
+/// decides, on a client when the snapshot says so -- and the tombstone is the
+/// one moment both see. A rocket or a mine that ceased to exist exploded; an
+/// item crate that did was picked up. The explosion is an entity of its own,
+/// untracked, so nothing about it is replicated or rolled back; the game used
+/// to spawn a *tracked* explosion for every peer to render and despawn it on a
+/// frame timer, which is a despawn no rollback could undo.
+///
+/// `Allow<Disabled>`: the tombstone disables the entity in the same breath, and
+/// a query that skipped disabled entities would find nothing to ask.
+fn on_tracked_entity_gone(
+    trigger: On<Add, Tombstone>,
+    mut commands: Commands,
+    gone: Query<(&EntityKind, &Position), Allow<Disabled>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut audio_manager: AudioManager,
+) {
+    let Ok((kind, pos)) = gone.get(trigger.entity) else {
+        return;
+    };
+    match kind {
+        EntityKind::Rocket | EntityKind::Mine => {
             audio_manager
                 .play_sound(PlayAudio2D::new_once("sounds/explosion.wav").with_volume(0.3));
             commands
-                .entity(entity)
-                .insert((
+                .spawn((
+                    DespawnOnExit(AppState::Game),
                     Transform::from_xyz(pos.x, pos.y, SpriteLayers::AboveCar.to_z()),
-                    NetworkedVisual::default(),
                     Mesh2d(meshes.add(Circle::new(items::EXPLOSION_RADIUS))),
                     MeshMaterial2d(materials.add(Color::WHITE)),
                     GameTimer::new_running().with_target_duration(0.1),
@@ -298,5 +274,9 @@ fn on_tracked_entity_spawned(
                     commands.entity(timer.event_target()).try_despawn();
                 });
         }
+        EntityKind::ItemPickup(_) => {
+            audio_manager.play_sound(PlayAudio2D::new_once("sounds/pickup.wav"));
+        }
+        EntityKind::Kart => {}
     }
 }

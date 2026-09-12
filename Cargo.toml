@@ -13,8 +13,14 @@ netdebug = ["bevy_ensemble/netdebug"]
 bevy_ticked = { git = "https://github.com/Sigma-studios/bevy_ticked", branch = "main" }
 bevy_ticked_networking = { git = "https://github.com/Sigma-studios/bevy_ticked", branch = "main" }
 bevy_ticked_networking_ensemble = { git = "https://github.com/Sigma-studios/bevy_ticked", branch = "main" }
-bevy_ensemble = { git = "https://github.com/Sigma-studios/bevy_ensemble", branch = "master" }
-bevy_ensemble_webrtc = { git = "https://github.com/Sigma-studios/bevy_ensemble", branch = "master" }
+# avian2d under the tick: the four body components on the wire, warm starting
+# and sleeping off, the solver state rolled back with the bodies.
+bevy_ticked_avian = { git = "https://github.com/Sigma-studios/bevy_ticked", branch = "main", default-features = false, features = ["2d"] }
+# Pinned at the commit bevy_ticked pins (its `[workspace.dependencies]`): the two
+# must agree about the transport's wire format, and cargo treats a different
+# `rev` as a different crate.
+bevy_ensemble = { git = "https://github.com/Sigma-studios/bevy_ensemble", rev = "9f7f245" }
+bevy_ensemble_webrtc = { git = "https://github.com/Sigma-studios/bevy_ensemble", rev = "9f7f245" }
 postcard = { version = "1", features = ["alloc"] }
 
 audio_manager = { path = "audio_manager" }
@@ -48,7 +54,9 @@ rand = "0.9.2"
 # The server half of the transport, so `examples/signalling_server.rs` can run a real one for
 # `scripts/local-session.sh`. The example reaches `axum` through that crate's re-export rather
 # than a dependency of its own, so `handle_socket` and the example agree on one `WebSocket`.
-bevy_ensemble_webrtc = { git = "https://github.com/Sigma-studios/bevy_ensemble", branch = "master", default-features = false, features = ["server"] }
+bevy_ensemble_webrtc = { git = "https://github.com/Sigma-studios/bevy_ensemble", rev = "9f7f245", default-features = false, features = ["server"] }
+# The in-process harness and the source guard, for the tests under `tests/`.
+bevy_ticked_testing = { git = "https://github.com/Sigma-studios/bevy_ticked", branch = "main" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

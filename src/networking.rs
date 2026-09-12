@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 #[allow(unused_imports)]
 use bevy_ensemble::prelude::*;
+use bevy_ticked_networking::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::items::ItemType;
@@ -16,29 +17,27 @@ pub struct PlayerInput {
     pub using_item: bool,
 }
 
-/// Networked component: identifies which player owns an entity.
-#[derive(Component, Clone, Debug, Serialize, Deserialize)]
-pub struct OwnerPlayer(pub u128);
-
-/// Retired. Items, rockets and explosions carry avian's `Position` directly,
-/// which is already replicated. Still registered because registration order is
-/// the wire format and entries are append-only; an unused entry costs an empty
-/// map per snapshot. Drop both in a deliberate wire break.
-#[derive(Component, Clone, Debug, Serialize, Deserialize, Default)]
-pub struct NetworkedPosition(pub Vec2);
-
-/// Retired, see [`NetworkedPosition`].
-#[derive(Component, Clone, Debug, Serialize, Deserialize, Default)]
-pub struct NetworkedRotation(pub f32);
-
 /// Networked component: what kind of networked entity this is.
+///
+/// Whose it is lives in `bevy_ticked_networking::Owner`, which the stack reads
+/// to decide what a client predicts and what it draws from the host's history.
 #[derive(Component, Clone, Debug, Serialize, Deserialize)]
 pub enum EntityKind {
     Kart,
     ItemPickup(ItemType),
     Rocket,
-    Explosion,
     Mine,
+}
+
+/// Whether this peer simulates a tracked entity, or only draws it.
+///
+/// The host simulates everything. A client simulates what it predicts -- its own
+/// kart, and anything else marked `ReplicationMode::Predicted` -- and everything
+/// else is put at the host's state, a couple of ticks behind, every tick: a
+/// system that moved one of those would be moving it away from where it is
+/// about to be put back. Absent marker means interpolated.
+pub fn simulates(local_client: Option<&LocalClientPlayer>, mode: Option<&ReplicationMode>) -> bool {
+    local_client.is_none() || matches!(mode, Some(ReplicationMode::Predicted))
 }
 
 /// Player metadata shared via ensemble messages.

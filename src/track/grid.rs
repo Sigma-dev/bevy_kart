@@ -14,14 +14,13 @@ use rand::seq::SliceRandom;
 use crate::car_controller_2d::CarControllerDisabled;
 use crate::track::map::build::BuiltTrack;
 use crate::track::spawn::grid_slot;
-use crate::{AppState, EntityKind, OwnerPlayer, SpriteLayers};
+use crate::{AppState, EntityKind, SpriteLayers};
 
 pub(crate) fn spawn_starting_grid(
-    mut commands: Commands,
+    mut spawner: TrackedSpawner,
     built: Res<BuiltTrack>,
     server_player: Option<Res<LocalServerPlayer>>,
     participants: Query<&LobbyParticipant>,
-    mut counter: ResMut<TickTrackedEntityCounter>,
 ) {
     if server_player.is_none() {
         return;
@@ -32,17 +31,16 @@ pub(crate) fn spawn_starting_grid(
 
     for (index, uuid) in player_uuids.iter().enumerate() {
         let (position, rotation) = grid_slot(&built, index);
-        let tracked_id = counter.next();
-        commands.spawn((
+        spawner.spawn((
             DespawnOnExit(AppState::Game),
-            tracked_id,
             EntityKind::Kart,
-            OwnerPlayer(*uuid),
+            Owner(*uuid),
             Mass(1.),
             RigidBody::Dynamic,
             Collider::rectangle(4., 8.),
-            // The pose goes to physics explicitly; `Transform` is only the view,
-            // and `transform_to_position` is off (see `main.rs`).
+            // The pose goes to physics explicitly; `Transform` is only the view.
+            // `TickedAvianPlugin` keeps avian from reading it back, and places a
+            // body from its `Transform` only when its `Position` is the default.
             Position(position),
             rotation,
             Transform::from_translation(position.extend(SpriteLayers::Car.to_z()))

@@ -1,13 +1,14 @@
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy_ticked::prelude::*;
+use bevy_ticked_avian::avian2d::TickedSimulationSet;
 use bevy_ticked_networking::prelude::*;
-use rand::seq::IndexedRandom;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AppState, EntityKind, OwnerPlayer, PlayerInput, SpriteLayers,
+    AppState, EntityKind, PlayerInput, SpriteLayers,
     car_controller_2d::{BoostEffect, CarController2d},
+    simulates,
 };
 
 pub const EXPLOSION_RADIUS: f32 = 12.;
@@ -15,6 +16,11 @@ const BOOST_DURATION_TICKS: u64 = TICKS_PER_SECOND as u64;
 const ITEM_RESPAWN_TICKS: u64 = TICKS_PER_SECOND as u64; // 1 second
 
 pub struct ItemsPlugin;
+
+/// The item systems, after the physics step, so a hit is decided on the poses
+/// the step produced. Anything that draws from an item's pose orders after it.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ItemsSet;
 
 impl Plugin for ItemsPlugin {
     fn build(&self, app: &mut App) {
@@ -28,8 +34,11 @@ impl Plugin for ItemsPlugin {
                 detect_rocket_hits,
                 resolve_rocket_hits,
                 trigger_mines,
+                sync_item_transforms,
             )
-                .chain(),
+                .chain()
+                .in_set(ItemsSet)
+                .in_set(TickedSimulationSet::AfterPhysics),
         )
         .add_systems(Update, animate_rocket);
     }
@@ -47,12 +56,18 @@ impl ItemType {
     /// per variant, so the HUD atlas is as wide as this enum.
     pub const ICON_COUNT: u32 = 3;
 
-    fn possible_items() -> Vec<ItemType> {
-        vec![ItemType::Boost, ItemType::Rocket, ItemType::Mine]
-    }
+    const POSSIBLE: [ItemType; 3] = [ItemType::Boost, ItemType::Rocket, ItemType::Mine];
 
-    fn random_possible_item() -> ItemType {
-        *Self::possible_items().choose(&mut rand::rng()).unwrap()
+    /// A deterministic pick: the same seed is the same item on every peer and
+    /// on every replay, which the thread's random generator was not.
+    fn for_seed(seed: u64) -> ItemType {
+        // splitmix64's finaliser: scatters the seed's bits, so consecutive ticks
+        // at one spawner do not walk the list in order.
+        let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        Self::POSSIBLE[(z % Self::POSSIBLE.len() as u64) as usize]
     }
 
     pub fn to_index(&self) -> usize {
@@ -101,14 +116,14 @@ pub struct Mine {
 
 /// A rocket's hit, as this peer has seen it: where it stopped.
 ///
-/// Registered for rollback but never sent, so every peer decides hits with the
-/// same code and a client's wrong guess is undone by the ordinary rollback: at
-/// the snapshot tick the marker is restored to absent, and the replay from
-/// authoritative positions decides again. What a hit *does*, the explosion,
-/// the torque and the despawn, stays with the host, because rollback cannot
-/// undo a spawn or a despawn. So a client's rocket waits where it hit until the
-/// host's explosion arrives, a prediction lead later, instead of flying on
-/// through the wall.
+/// Registered for rollback but never sent, so every peer that simulates the
+/// rocket decides hits with the same code and a client's wrong guess is undone
+/// by the ordinary rollback: at the snapshot tick the marker is restored to
+/// absent, and the replay from authoritative positions decides again. What a
+/// hit *does* -- the torque, the despawn that every peer shows as the
+/// explosion -- stays with the host. So a client's rocket waits where it hit
+/// until the host's word arrives, a prediction lead later, instead of flying
+/// on through the wall.
 #[derive(Component, Clone, Debug)]
 pub struct RocketHit {
     pub at: Vec2,
@@ -141,35 +156,37 @@ pub fn spawn_spawner(commands: &mut Commands, position: Vec2) {
 /// Host-only: spawn item crate entities at spawner positions on a tick-based interval.
 fn spawn_items(
     tick: Res<CurrentTick>,
-    mut commands: Commands,
+    mut spawner: TrackedSpawner,
     server_player: Option<Res<LocalServerPlayer>>,
-    mut counter: ResMut<TickTrackedEntityCounter>,
     mut spawners: Query<(Entity, &Transform, &mut ItemSpawner)>,
 ) {
     if server_player.is_none() {
         return;
     }
-    for (spawner_entity, transform, mut spawner) in spawners.iter_mut() {
-        if spawner.item_exists {
+    for (spawner_entity, transform, mut item_spawner) in spawners.iter_mut() {
+        if item_spawner.item_exists {
             continue;
         }
-        let ready = spawner
+        let ready = item_spawner
             .last_pickup_tick
-            .is_none_or(|t| tick.0.saturating_sub(t) >= spawner.interval_ticks);
+            .is_none_or(|t| tick.0.saturating_sub(t) >= item_spawner.interval_ticks);
         if !ready {
             continue;
         }
-        spawner.item_exists = true;
-        let item = ItemType::random_possible_item();
-        let tracked_id = counter.next();
-        commands.spawn((
+        item_spawner.item_exists = true;
+        // Seeded from the tick and the spawner's place on the map: nothing a
+        // replay, or another peer running the same tick, would draw differently.
+        let place = transform.translation;
+        let seed = tick.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+            ^ ((u64::from(place.x.to_bits()) << 32) | u64::from(place.y.to_bits()));
+        let item = ItemType::for_seed(seed);
+        spawner.spawn((
             DespawnOnExit(AppState::Game),
             *transform,
             Position(transform.translation.xy()),
             ItemPickup(item),
             ItemSpawnerId(spawner_entity),
             EntityKind::ItemPickup(item),
-            tracked_id,
             Collider::rectangle(4., 4.),
             Sensor,
             CollidingEntities::default(),
@@ -183,7 +200,7 @@ fn detect_item_pickup(
     mut commands: Commands,
     server_player: Option<Res<LocalServerPlayer>>,
     items: Query<(Entity, &ItemPickup, &ItemSpawnerId, &CollidingEntities)>,
-    cars: Query<(Entity, Option<&HeldItem>), (With<CarController2d>, With<OwnerPlayer>)>,
+    cars: Query<(Entity, Option<&HeldItem>), (With<CarController2d>, With<Owner>)>,
     mut spawners: Query<&mut ItemSpawner>,
 ) {
     if server_player.is_none() {
@@ -201,7 +218,7 @@ fn detect_item_pickup(
             commands
                 .entity(car_entity)
                 .insert(HeldItem(Some(item_pickup.0)));
-            commands.entity(item_entity).despawn();
+            commands.entity(item_entity).despawn_ticked();
             if let Ok(mut spawner) = spawners.get_mut(spawner_id.0) {
                 spawner.item_exists = false;
                 spawner.last_pickup_tick = Some(tick.0);
@@ -212,13 +229,16 @@ fn detect_item_pickup(
 }
 
 /// Host-only: when a player presses the item button, consume their held item.
+///
+/// `at_tick`, not the held-last input the karts drive on: a stale press would
+/// use an item the player never asked to use.
 fn use_item(
     mut commands: Commands,
+    mut spawner: TrackedSpawner,
     server_player: Option<Res<LocalServerPlayer>>,
     tick: Res<CurrentTick>,
     input_queue: Res<InputQueue<PlayerInput>>,
-    mut counter: ResMut<TickTrackedEntityCounter>,
-    cars: Query<(Entity, &OwnerPlayer, &HeldItem, &Position, &Rotation), With<CarController2d>>,
+    cars: Query<(Entity, &Owner, &HeldItem, &Position, &Rotation), With<CarController2d>>,
 ) {
     if server_player.is_none() {
         return;
@@ -251,46 +271,58 @@ fn use_item(
                 // view and can lag the simulation by up to a tick.
                 let angle = rotation.as_radians();
                 let forward = Vec2::from_angle(angle).rotate(Vec2::Y);
-                let tracked_id = counter.next();
                 // No collider: the hit is a shape cast in `detect_rocket_hits`,
-                // which every peer runs, rather than an overlap only the host sees.
-                commands.spawn((
+                // which every simulating peer runs, rather than an overlap only
+                // the host sees. Owned by the shooter, so the shooter's own
+                // client predicts it and it flies level with the kart it left;
+                // everyone else draws it from the host's history, level with
+                // the shooter's kart as they see it.
+                spawner.spawn((
                     DespawnOnExit(AppState::Game),
                     Position(position.0 + forward * 8.),
                     Rotation::radians(angle),
                     Rocket,
                     EntityKind::Rocket,
-                    tracked_id,
+                    Owner(*uuid),
                 ));
             }
             ItemType::Mine => {
                 // Under the kart, not behind it. It cannot go off until the kart
                 // has driven out of its radius: see `Mine`.
-                let tracked_id = counter.next();
-                commands.spawn((
+                spawner.spawn((
                     DespawnOnExit(AppState::Game),
                     Position(position.0),
                     Mine::default(),
                     EntityKind::Mine,
-                    tracked_id,
                 ));
             }
         }
     }
 }
 
-/// Runs on every peer. Straight-line flight from a replicated pose is
-/// deterministic, so a client predicts it through rollback like a kart and the
-/// rocket stays level with the karts around it instead of a prediction lead
-/// behind them. A rocket that has hit stays where it hit.
-fn move_rocket(mut rockets: Query<(&mut Position, &Rotation), (With<Rocket>, Without<RocketHit>)>) {
-    for (mut pos, rot) in rockets.iter_mut() {
-        pos.0 += rocket_direction(rot) * (ROCKET_SPEED * SECONDS_PER_TICK);
+/// Straight-line flight from a replicated pose is deterministic, so a peer
+/// that simulates a rocket predicts it through rollback like a kart. A rocket
+/// that has hit stays where it hit; one this peer only draws is left to the
+/// host's record.
+fn move_rocket(
+    time: Res<Time>,
+    local_client: Option<Res<LocalClientPlayer>>,
+    mut rockets: Query<
+        (&mut Position, &Rotation, Option<&ReplicationMode>),
+        (With<Rocket>, Without<RocketHit>),
+    >,
+) {
+    let step = ROCKET_SPEED * time.delta_secs();
+    for (mut pos, rot, mode) in rockets.iter_mut() {
+        if !simulates(local_client.as_deref(), mode) {
+            continue;
+        }
+        pos.0 += rocket_direction(rot) * step;
     }
 }
 
-/// Runs on every peer, with the same code: sweep the rocket's box over the step
-/// it just flew and stop it at the first solid thing.
+/// Runs with the same code on every peer that simulates the rocket: sweep the
+/// rocket's box over the step it just flew and stop it at the first solid thing.
 ///
 /// A swept box rather than an overlap test at the end of the step, so a rocket
 /// cannot tunnel through anything thinner than one step, and so the answer
@@ -299,15 +331,23 @@ fn move_rocket(mut rockets: Query<(&mut Position, &Rotation), (With<Rocket>, Wit
 /// and other rockets, do not count.
 fn detect_rocket_hits(
     mut commands: Commands,
+    time: Res<Time>,
+    local_client: Option<Res<LocalClientPlayer>>,
     spatial: SpatialQuery,
     sensors: Query<(), With<Sensor>>,
     // Read-only, and the stop is written through commands: `SpatialQuery`
     // reads every `Position` itself, so a mutable query here conflicts with it.
-    rockets: Query<(Entity, &Position, &Rotation), (With<Rocket>, Without<RocketHit>)>,
+    rockets: Query<
+        (Entity, &Position, &Rotation, Option<&ReplicationMode>),
+        (With<Rocket>, Without<RocketHit>),
+    >,
 ) {
     let shape = Collider::rectangle(ROCKET_HALF_SIZE * 2., ROCKET_HALF_SIZE * 2.);
-    let step = ROCKET_SPEED * SECONDS_PER_TICK;
-    for (rocket, pos, rot) in rockets.iter() {
+    let step = ROCKET_SPEED * time.delta_secs();
+    for (rocket, pos, rot, mode) in rockets.iter() {
+        if !simulates(local_client.as_deref(), mode) {
+            continue;
+        }
         let dir = rocket_direction(rot);
         let Ok(direction) = Dir2::new(dir) else {
             continue;
@@ -335,12 +375,12 @@ fn detect_rocket_hits(
     }
 }
 
-/// Host-only: what a hit does. Torque on the karts in the blast, an explosion
-/// entity for every peer to render, and the rocket goes.
+/// Host-only: what a hit does. Torque on the karts in the blast, and the rocket
+/// goes -- a tombstone every peer shows as the explosion, and a rewind can
+/// bring back.
 fn resolve_rocket_hits(
     mut commands: Commands,
     server_player: Option<Res<LocalServerPlayer>>,
-    mut counter: ResMut<TickTrackedEntityCounter>,
     rockets: Query<(Entity, &RocketHit), With<Rocket>>,
     mut cars: Query<(&Position, &Rotation, Forces), With<CarController2d>>,
 ) {
@@ -348,8 +388,8 @@ fn resolve_rocket_hits(
         return;
     }
     for (rocket_entity, hit) in rockets.iter() {
-        explode(&mut commands, &mut counter, &mut cars, hit.at);
-        commands.entity(rocket_entity).despawn();
+        explode(&mut cars, hit.at);
+        commands.entity(rocket_entity).despawn_ticked();
     }
 }
 
@@ -361,12 +401,11 @@ fn resolve_rocket_hits(
 /// own. The marker exists for the rocket because a rocket that has hit has to
 /// *stop*, and a client that waited for the host's word would fly it on through
 /// the wall for a prediction lead. A mine does not move, so there is nothing for
-/// a client to predict: everything a trigger does — the torque, the explosion,
-/// the despawn — is the host's, and arrives with the next snapshot.
+/// a client to predict: everything a trigger does -- the torque, the despawn --
+/// is the host's, and arrives with the next snapshot.
 fn trigger_mines(
     mut commands: Commands,
     server_player: Option<Res<LocalServerPlayer>>,
-    mut counter: ResMut<TickTrackedEntityCounter>,
     mut mines: Query<(Entity, &Position, &mut Mine)>,
     mut cars: Query<(&Position, &Rotation, Forces), With<CarController2d>>,
 ) {
@@ -386,20 +425,15 @@ fn trigger_mines(
             continue;
         }
         debug!("mine {mine_entity} triggered at {:?}", mine_pos.0);
-        explode(&mut commands, &mut counter, &mut cars, mine_pos.0);
-        commands.entity(mine_entity).despawn();
+        explode(&mut cars, mine_pos.0);
+        commands.entity(mine_entity).despawn_ticked();
     }
 }
 
-/// Host-only: what an explosion does, shared by the rocket and the mine. Torque
-/// on the karts in the blast, and a tracked explosion entity for every peer to
-/// render.
-fn explode(
-    commands: &mut Commands,
-    counter: &mut TickTrackedEntityCounter,
-    cars: &mut Query<(&Position, &Rotation, Forces), With<CarController2d>>,
-    at: Vec2,
-) {
+/// Host-only: what an explosion does to the karts in the blast, shared by the
+/// rocket and the mine. What it looks like is `entity_spawn`'s, from the
+/// tombstone of whatever exploded.
+fn explode(cars: &mut Query<(&Position, &Rotation, Forces), With<CarController2d>>, at: Vec2) {
     for (car_pos, car_rot, mut force) in cars.iter_mut() {
         if car_pos.0.distance(at) >= EXPLOSION_RADIUS {
             continue;
@@ -408,13 +442,25 @@ fn explode(
         let on_right = right.dot(at - car_pos.0) > 0.;
         force.apply_torque(if on_right { 1. } else { -1. } * 10000.);
     }
-    let tracked_id = counter.next();
-    commands.spawn((
-        DespawnOnExit(AppState::Game),
-        Position(at),
-        EntityKind::Explosion,
-        tracked_id,
-    ));
+}
+
+/// The drawn pose of the bodies avian does not write a `Transform` for: items,
+/// rockets and mines have a `Position` and no `RigidBody`. Written inside the
+/// tick, so `TickedInterpolation` records one state per tick and the frame
+/// blends between them, and a rocket that stopped this tick is drawn stopping.
+fn sync_item_transforms(
+    mut items: Query<
+        (&Position, Option<&Rotation>, &mut Transform),
+        (With<TickTrackedEntity>, Without<RigidBody>),
+    >,
+) {
+    for (pos, rot, mut transform) in items.iter_mut() {
+        transform.translation.x = pos.0.x;
+        transform.translation.y = pos.0.y;
+        if let Some(rot) = rot {
+            transform.rotation = Quat::from_rotation_z(rot.as_radians());
+        }
+    }
 }
 
 /// Visual-only: animate rocket sprite.
@@ -432,8 +478,11 @@ mod tests {
     //! window, assets or network.
     use super::*;
     use crate::{PlayerInput, register_networked_components};
+    use bevy::ecs::entity_disabling::Disabled;
+    use bevy::ecs::query::Allow;
     use bevy::time::TimeUpdateStrategy;
     use bevy_ticked::tick::ResetToTick;
+    use bevy_ticked_avian::avian2d::TickedAvianPlugin;
     use std::time::Duration;
 
     /// One tick per `app.update()`.
@@ -443,7 +492,7 @@ mod tests {
     const STOP_X: f32 = 18.;
 
     /// Ticks, physics and this module: no window, assets or network, and
-    /// nothing in the world yet.
+    /// nothing in the world yet. A host, or a client of someone else.
     fn base_app(host: bool) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, TransformPlugin))
@@ -452,12 +501,8 @@ mod tests {
                 source: TickSource::Hz(64.0),
                 ..default()
             })
-            .add_plugins(PhysicsPlugins::new(TickedSimulation))
+            .add_plugins(TickedAvianPlugin::default())
             .insert_resource(Gravity::ZERO)
-            .insert_resource(avian2d::physics_transform::PhysicsTransformConfig {
-                transform_to_position: false,
-                ..default()
-            })
             // Avian's per-step diagnostics counters, which its plugins only
             // create when `bevy_diagnostic` is on, but read unconditionally.
             .init_resource::<avian2d::collider_tree::ColliderTreeDiagnostics>()
@@ -469,6 +514,8 @@ mod tests {
         register_networked_components(&mut app);
         if host {
             app.insert_resource(LocalServerPlayer(1));
+        } else {
+            app.insert_resource(LocalClientPlayer(2));
         }
         app
     }
@@ -481,13 +528,15 @@ mod tests {
             Collider::rectangle(2., 40.),
             Position(Vec2::new(20., 0.)),
         ));
-        // Facing +x: the flight direction is (-sin a, cos a).
+        // Facing +x: the flight direction is (-sin a, cos a). Predicted, as a
+        // client's own rocket is; on the host the marker means nothing.
         app.world_mut().spawn((
             Position(Vec2::ZERO),
             Rotation::degrees(-90.),
             Rocket,
             EntityKind::Rocket,
             TickTrackedEntity(1),
+            ReplicationMode::Predicted,
         ));
         app
     }
@@ -530,11 +579,16 @@ mod tests {
             .map(|(pos, hit)| (pos.0, hit.map(|h| h.at)))
     }
 
-    fn explosion(app: &mut App) -> Option<Vec2> {
-        let mut query = app.world_mut().query::<(&EntityKind, &Position)>();
+    /// Where a rocket or a mine went off: its tombstone's pose. `despawn_ticked`
+    /// disables rather than destroys, so the queries above stop seeing it and
+    /// this one has to ask for disabled entities.
+    fn exploded_at(app: &mut App) -> Option<Vec2> {
+        let mut query = app
+            .world_mut()
+            .query_filtered::<(&EntityKind, &Position), (With<Tombstone>, Allow<Disabled>)>();
         query
             .iter(app.world())
-            .find(|(kind, _)| matches!(kind, EntityKind::Explosion))
+            .find(|(kind, _)| matches!(kind, EntityKind::Rocket | EntityKind::Mine))
             .map(|(_, pos)| pos.0)
     }
 
@@ -545,7 +599,7 @@ mod tests {
             if let Some((_, Some(_))) = rocket(app) {
                 return app.world().resource::<CurrentTick>().0;
             }
-            if explosion(app).is_some() {
+            if exploded_at(app).is_some() {
                 return app.world().resource::<CurrentTick>().0;
             }
         }
@@ -561,7 +615,7 @@ mod tests {
             rocket(&mut app).is_none(),
             "the host despawns a rocket that hit"
         );
-        let at = explosion(&mut app).expect("the host spawns an explosion");
+        let at = exploded_at(&mut app).expect("the host tombstones the rocket where it hit");
         assert!(
             (at.x - STOP_X).abs() < 0.2,
             "explosion at {at:?}, expected x = {STOP_X}"
@@ -584,9 +638,30 @@ mod tests {
         let (later, _) = rocket(&mut app).expect("still there, still waiting");
         assert_eq!(later, pos, "a rocket that hit does not move on");
         assert!(
-            explosion(&mut app).is_none(),
+            exploded_at(&mut app).is_none(),
             "the explosion is the host's to make"
         );
+    }
+
+    /// A rocket this client only draws is never flown by it: the host's record
+    /// puts it where it is, and moving it here would be moving it away.
+    #[test]
+    fn a_client_leaves_a_rocket_it_does_not_predict_alone() {
+        let mut app = app(false);
+        let rocket_entity = app
+            .world_mut()
+            .query_filtered::<Entity, With<Rocket>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .entity_mut(rocket_entity)
+            .remove::<ReplicationMode>();
+        for _ in 0..10 {
+            app.update();
+        }
+        let (pos, hit) = rocket(&mut app).unwrap();
+        assert_eq!(pos, Vec2::ZERO, "an interpolated rocket is not simulated");
+        assert!(hit.is_none());
     }
 
     /// The reason the marker is a rollback component: rewinding to before the
@@ -623,7 +698,7 @@ mod tests {
             app.update();
         }
         assert_eq!(mine_count(&mut app), 1, "just out of reach, so it waits");
-        assert!(explosion(&mut app).is_none());
+        assert!(exploded_at(&mut app).is_none());
 
         app.world_mut()
             .entity_mut(car)
@@ -635,7 +710,7 @@ mod tests {
             0,
             "the kart came close, so the mine went"
         );
-        let at = explosion(&mut app).expect("and it explodes like a rocket");
+        let at = exploded_at(&mut app).expect("and it explodes like a rocket");
         assert_eq!(at, Vec2::ZERO, "where the mine lay");
     }
 
@@ -651,7 +726,7 @@ mod tests {
             app.update();
         }
         assert_eq!(mine_count(&mut app), 1, "a client leaves the mine alone");
-        assert!(explosion(&mut app).is_none());
+        assert!(exploded_at(&mut app).is_none());
     }
 
     /// The mine is dropped under its own kart, so this is the case that would
@@ -664,7 +739,7 @@ mod tests {
         }
         assert_eq!(mine_count(&mut app), 1, "sitting on it does not set it off");
         assert!(
-            explosion(&mut app).is_none(),
+            exploded_at(&mut app).is_none(),
             "and nobody blows themselves up"
         );
 
@@ -674,13 +749,26 @@ mod tests {
             .insert(Position(Vec2::new(MINE_TRIGGER_RADIUS + 1., 0.)));
         app.update();
         assert_eq!(mine_count(&mut app), 1, "still there, now armed");
-        assert!(explosion(&mut app).is_none());
+        assert!(exploded_at(&mut app).is_none());
 
         // Come back over it.
         app.world_mut().entity_mut(car).insert(Position(Vec2::ZERO));
         app.update();
         app.update();
         assert_eq!(mine_count(&mut app), 0, "an armed mine goes off underfoot");
-        assert!(explosion(&mut app).is_some());
+        assert!(exploded_at(&mut app).is_some());
+    }
+
+    /// The pick is a function of the seed and nothing else.
+    #[test]
+    fn the_item_pick_is_deterministic_and_spread() {
+        assert_eq!(
+            ItemType::for_seed(7).to_index(),
+            ItemType::for_seed(7).to_index()
+        );
+        let picks: std::collections::BTreeSet<usize> = (0..64u64)
+            .map(|seed| ItemType::for_seed(seed).to_index())
+            .collect();
+        assert_eq!(picks.len(), 3, "sixty-four seeds reach every item");
     }
 }

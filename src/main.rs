@@ -69,9 +69,14 @@ use track::{
 /// A free function rather than an inline chain so the headless test in `items`
 /// can register the same set without building the whole app.
 pub fn register_networked_components(app: &mut App) {
-    // What an entity is never changes, so it travels with the entity's first
-    // record and in keyframes, never in a delta.
-    app.register_networked_ticked_component_once::<EntityKind>("EntityKind")
+    // What an entity is never changes -- but the *id* under it does. A replay hands
+    // a dead projectile's id to whatever the corrected timeline spawns in its place
+    // and the kind goes with it, which is why `_once` is gone from the stack: "with
+    // the entity's first record, never again" is once per *id*, so a peer that
+    // learned this one as a kart was never told it had become something else, and
+    // went on drawing a kart. `Changed` sends nothing while the bytes match, so it
+    // costs what `_once` cost and is correct on the tick they stop matching.
+    app.register_networked_ticked_component::<EntityKind>("EntityKind")
         .register_networked_ticked_component::<car_controller_2d::CarControllerInputs>(
             "CarControllerInputs",
         )

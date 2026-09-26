@@ -1376,6 +1376,7 @@ dependencies = [
  "bevy_timer",
  "js-sys",
  "miniz_oxide 0.7.4",
+ "orchestre-bevy",
  "postcard",
  "rand 0.9.5",
  "serde",
@@ -5407,6 +5408,35 @@ checksum = "5df339f526ea9a60e371768d50efc2f2508c7203290731565d1f7a6f71d21747"
 dependencies = [
  "libc",
  "libredox",
+]
+
+[[package]]
+name = "orchestre-bevy"
+version = "0.1.0"
+source = "git+https://github.com/Sigma-studios/orchestre?rev=9773cdb#9773cdbc8043165745484fefc4c881174031bcba"
+dependencies = [
+ "bevy",
+ "orchestre-core",
+ "orchestre-dsp",
+ "serde",
+]
+
+[[package]]
+name = "orchestre-core"
+version = "0.1.0"
+source = "git+https://github.com/Sigma-studios/orchestre?rev=9773cdb#9773cdbc8043165745484fefc4c881174031bcba"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "orchestre-dsp"
+version = "0.1.0"
+source = "git+https://github.com/Sigma-studios/orchestre?rev=9773cdb#9773cdbc8043165745484fefc4c881174031bcba"
+dependencies = [
+ "orchestre-core",
+ "serde",
 ]
 
 [[package]]

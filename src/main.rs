@@ -31,6 +31,7 @@ pub mod menu;
 pub mod networking;
 pub mod scene_util;
 pub mod screen;
+pub mod sound;
 pub mod theme;
 pub mod track;
 
@@ -182,6 +183,7 @@ fn main() {
             CameraPlugin,
             map_sync::MapSyncPlugin,
             editor::EditorPlugin,
+            sound::SoundPlugin,
         ))
         // States & resources
         .init_state::<AppState>()

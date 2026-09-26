@@ -1,0 +1,65 @@
+{
+  "format": "orchestre-sfx",
+  "version": 1,
+  "sound": {
+    "name": "Kart engine",
+    "layers": [
+      {
+        "id": 1,
+        "name": "Engine",
+        "color": [
+          239,
+          108,
+          94
+        ],
+        "start": 0.0,
+        "gain": 0.9,
+        "pan": 0.0,
+        "drive": 0.3,
+        "follow": 0.0,
+        "mute": false,
+        "solo": false,
+        "jitter": {
+          "pitch": 0.6,
+          "volume": 1.5,
+          "timing": 0.0,
+          "tone": 0.15,
+          "length": 0.1
+        },
+        "generator": {
+          "Engine": {
+            "shape": {
+              "attack": 0.2,
+              "hold": 1.0,
+              "decay": 0.4
+            },
+            "rpm": 1800.0,
+            "cylinders": 1,
+            "two_stroke": true,
+            "uneven": 0.0,
+            "exhaust": 1.0,
+            "load": 0.6,
+            "roughness": 0.4,
+            "mechanics": 0.4
+          }
+        }
+      }
+    ],
+    "next_id": 2,
+    "volume": 0.8,
+    "variation": 1.0,
+    "space": 0.0,
+    "max_voices": 8,
+    "looping": "Sustain",
+    "controls": [
+      {
+        "name": "RPM",
+        "target": "Pitch",
+        "unit": "rpm",
+        "base": 1800.0,
+        "min": 1200.0,
+        "max": 9000.0
+      }
+    ]
+  }
+}

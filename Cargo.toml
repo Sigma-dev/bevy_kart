@@ -24,6 +24,10 @@ bevy_ensemble_webrtc = { git = "https://github.com/Sigma-studios/bevy_ensemble",
 postcard = { version = "1", features = ["alloc"] }
 
 audio_manager = { path = "audio_manager" }
+# The music and the engines. An `.orch` song and an `.orsfx` sound are recipes rather than
+# recordings -- JSON a few kilobytes long, synthesized as they play -- and an engine sound has an
+# RPM that can follow the kart live, which a wav cannot. Same crate and commit as run-2d's.
+orchestre-bevy = { git = "https://github.com/Sigma-studios/orchestre", rev = "9773cdb" }
 bevy_timer = { path = "bevy_timer" }
 # Without the defaults. `default` is `2d`, `3d`, `ui` and `audio`, and this is a
 # 2D game: the `3d` group compiled bevy_pbr and embedded three tonemapping lookup

@@ -36,6 +36,11 @@ impl AudioManagerResource {
             volume_mult,
         }
     }
+
+    /// The game's master volume, for sounds played without the manager.
+    pub fn volume_mult(&self) -> f32 {
+        self.volume_mult
+    }
 }
 
 #[derive(SystemParam)]

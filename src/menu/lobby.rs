@@ -9,11 +9,12 @@ use crate::{
 use bevy::prelude::*;
 use bevy::text::EditableText;
 use bevy_ensemble::prelude::*;
+use bevy_ensemble::{AwaitingHost, CloseLobby, HostChanged};
 use bevy_ensemble_webrtc::LobbyWebrtcCode;
-use bevy_ticked_networking::prelude::*;
 use std::time::Duration;
 
 use super::TextSubmit;
+use super::widgets::text_button;
 
 /// Handle chat text submissions as a system (`TextSubmit` is a Message, not EntityEvent).
 fn on_chat_submit(
@@ -70,6 +71,8 @@ impl Plugin for LobbyPlugin {
                         .run_if(in_state(Screen::Lobby)),
                     spawn_background_elements,
                     handle_background_elements,
+                    rebuild_for_a_new_host,
+                    show_awaiting_host,
                 ),
             )
             // The session is over, however it ended: the role went, and with
@@ -103,6 +106,17 @@ struct LobbyChatInputHistoryText;
 
 #[derive(Component, Default, Clone)]
 struct LobbyPlayersButtons;
+
+/// The part of the lobby screen that depends on who hosts: the start and close
+/// buttons, the map picker, and everything laid out around them. Rebuilt when
+/// the lobby changes host; the road stripe and the ping readout are not.
+#[derive(Component, Default, Clone)]
+struct LobbyPanel;
+
+/// "The host left": over whatever screen this peer is on, while its lobby waits
+/// for a new host.
+#[derive(Component)]
+struct AwaitingHostBanner;
 
 /// The lobby's parallax scenery, as opposed to a track's.
 ///
@@ -270,13 +284,128 @@ fn update_lobby_cars(
 
 pub fn spawn_lobby(
     mut commands: Commands,
-    server_player: Option<Res<LocalServerPlayer>>,
+    hosted_lobbies: Query<(), (With<Lobby>, With<Host>)>,
     handles: Res<AssetHandles>,
 ) {
-    let is_host = server_player.is_some();
+    // Road stripe behind the lobby cars. `asset_value` creates the mesh/material
+    // inline at scene-resolve time, so no `Assets` params are needed here.
+    commands.spawn_scene(bsn! {
+        Mesh2d(asset_value(Rectangle::new(RESOLUTION.x, 10.)))
+        MeshMaterial2d::<ColorMaterial>(asset_value(ColorMaterial::from(AppColors::Road.color())))
+        Transform::from_xyz(0., 0., SpriteLayers::Background.to_z())
+        {insert(DespawnOnExit(Screen::Lobby))}
+    });
+
+    spawn_lobby_panel(&mut commands, !hosted_lobbies.is_empty(), &handles);
+
+    // Ping display.
+    commands.spawn_scene(bsn! {
+        {insert(DespawnOnExit(Screen::Lobby))}
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(5),
+        }
+        PingText
+    });
+}
+
+/// The lobby changed host while this peer was looking at the lobby screen.
+///
+/// No `OnEnter(Screen::Lobby)` comes for it -- the screen never changed -- so
+/// what the host sees and a client does not is rebuilt here: the panel with the
+/// start and close buttons and the map picker, and the cars, whose kick buttons
+/// are the host's. A peer that was racing is sent back by `lobby.rs`, and its
+/// `OnEnter` builds the screen for the new host on its own.
+///
+/// Keyed on the lobby's `Host` rather than the role, here and in `spawn_kart`:
+/// the lobby says who hosts in the same update that writes `HostChanged`, and
+/// the bridge swaps the role in the next `PreUpdate`, which can be a frame later.
+fn rebuild_for_a_new_host(
+    mut commands: Commands,
+    mut changes: MessageReader<HostChanged>,
+    screen: Res<State<Screen>>,
+    panels: Query<Entity, With<LobbyPanel>>,
+    cars: Query<Entity, With<LobbyCar>>,
+    mut listed: ResMut<crate::menu::map_picker::ListedTracks>,
+    handles: Res<AssetHandles>,
+) {
+    let Some(change) = changes.read().last() else {
+        return;
+    };
+    // The list is filled by whoever hosts, and only when it would differ: one
+    // this peer filled as an earlier host must not stand in for a new one.
+    *listed = default();
+    // Not on the lobby screen, or only just on it -- back from a race this
+    // frame, and built for the new host by `OnEnter` already.
+    if *screen.get() != Screen::Lobby || screen.is_changed() {
+        return;
+    }
+    for entity in panels.iter().chain(cars.iter()) {
+        commands.entity(entity).despawn();
+    }
+    // The cars come back from `spawn_lobby_players_buttons`, which places a
+    // whole new set when there is none.
+    spawn_lobby_panel(&mut commands, change.promoted, &handles);
+}
+
+/// Say so while the lobby waits for a new host, on any screen.
+///
+/// A race is not called off for it: a host that only stopped answering can
+/// come back, and then the race goes on. Over WebRTC the wait for a successor
+/// can be a minute and more, and without this it looks like a frozen game.
+fn show_awaiting_host(
+    mut commands: Commands,
+    awaiting: Query<&AwaitingHost, With<Lobby>>,
+    mut banners: Query<(Entity, &mut Text), With<AwaitingHostBanner>>,
+) {
+    let wanted = awaiting
+        .iter()
+        .next()
+        .map(|awaiting| match awaiting.successor {
+            None => format!(
+                "The host left. Waiting for a new one... {}s",
+                awaiting.waited.as_secs()
+            ),
+            Some(_) => "Reaching the new host...".to_string(),
+        });
+    match (wanted, banners.single_mut()) {
+        (Some(wanted), Ok((_, mut text))) => {
+            if text.0 != wanted {
+                text.0 = wanted;
+            }
+        }
+        (Some(wanted), Err(_)) => {
+            commands.spawn((
+                AwaitingHostBanner,
+                Text::new(wanted),
+                TextFont {
+                    font_size: FontSize::Px(24.),
+                    ..default()
+                },
+                BackgroundColor(AppColors::Dark.color()),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: vh(5),
+                    justify_self: JustifySelf::Center,
+                    padding: UiRect::axes(px(8), px(4)),
+                    ..default()
+                },
+                GlobalZIndex(10),
+            ));
+        }
+        (None, _) => {
+            for (banner, _) in &banners {
+                commands.entity(banner).despawn();
+            }
+        }
+    }
+}
+
+fn spawn_lobby_panel(commands: &mut Commands, is_host: bool, handles: &AssetHandles) {
     let lobby = commands
         .spawn_scene(bsn! {
             {insert(DespawnOnExit(Screen::Lobby))}
+            LobbyPanel
             Pickable::IGNORE
             Node {
                 width: percent(100),
@@ -287,16 +416,9 @@ pub fn spawn_lobby(
         })
         .id();
 
-    // Road stripe behind the lobby cars. `asset_value` creates the mesh/material
-    // inline at scene-resolve time, so no `Assets` params are needed here.
-    commands.spawn_scene(bsn! {
-        Mesh2d(asset_value(Rectangle::new(RESOLUTION.x, 10.)))
-        MeshMaterial2d::<ColorMaterial>(asset_value(ColorMaterial::from(AppColors::Road.color())))
-        Transform::from_xyz(0., 0., SpriteLayers::Background.to_z())
-        {insert(DespawnOnExit(Screen::Lobby))}
-    });
-
-    // Bottom button column: leave-lobby always, start-game only for the host.
+    // Bottom button column: leave-lobby always, start-game and close-lobby only
+    // for the host. A host that leaves hands the lobby to the player who has
+    // been in it longest, and the others play on; closing ends it for everyone.
     let buttons = commands
         .spawn_scene(bsn! {
             Node {
@@ -341,6 +463,14 @@ pub fn spawn_lobby(
                 })
             })
             .insert(ChildOf(buttons));
+        commands
+            .spawn_scene(bsn! {
+                text_button("CLOSE LOBBY")
+                on(|_: On<Pointer<Press>>, mut close: MessageWriter<CloseLobby>| {
+                    close.write(CloseLobby);
+                })
+            })
+            .insert(ChildOf(buttons));
     }
 
     let lobby_code_text = commands
@@ -380,7 +510,7 @@ pub fn spawn_lobby(
         .id();
 
     // Which track the race will use. Host picks; everybody sees.
-    let map_panel = crate::menu::map_picker::spawn_picker(&mut commands, is_host);
+    let map_panel = crate::menu::map_picker::spawn_picker(commands, is_host);
 
     let players_buttons = commands
         .spawn_scene(bsn! {
@@ -400,16 +530,6 @@ pub fn spawn_lobby(
         buttons,
         map_panel,
     ]);
-
-    // Ping display.
-    commands.spawn_scene(bsn! {
-        {insert(DespawnOnExit(Screen::Lobby))}
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: px(5),
-        }
-        PingText
-    });
 }
 
 fn receive_ping(

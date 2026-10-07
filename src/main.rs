@@ -110,7 +110,12 @@ fn main() {
         .add_plugins((
             EnsemblePlugin,
             LobbyBroadcastPlugin,
-            PlayerDataPlugin::<AppPlayerData>::default(),
+            // Who you are is kept between visits and published into every lobby
+            // by the stack: `LocalPlayerData<AppPlayerData>` is the resource the
+            // menu edits, read back from the page's storage before `Startup`, so
+            // `?name=` still wins over a stored name. Off the web nothing is
+            // stored and a launch starts from the default.
+            PlayerDataPlugin::<AppPlayerData>::default().persisted("bevy_kart.profile"),
         ))
         .add_plugins(BevyEnsembleWebrtcPlugin {
             server_url: signalling_url.clone(),
@@ -195,7 +200,6 @@ fn main() {
         // `Screen` is the cross-product of the three above, named. Everything that
         // used to test two states at once tests this instead.
         .add_computed_state::<Screen>()
-        .init_resource::<LocalPlayerData<AppPlayerData>>()
         .insert_resource(FinishTimes {
             times: HashMap::new(),
         })

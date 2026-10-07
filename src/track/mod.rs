@@ -67,8 +67,9 @@ impl FinishTimes {
 #[derive(Clone, Debug, Serialize, Deserialize, Message)]
 pub struct OnFinishTimeUpdate(pub FinishTimes);
 
+/// On the host, from the last kart over the line until the lobby is shown again.
 #[derive(Resource)]
-struct RaceEnded(f32);
+pub(crate) struct RaceEnded(f32);
 
 #[derive(Component)]
 pub(crate) struct StartLight;

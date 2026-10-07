@@ -252,7 +252,7 @@ pub(crate) fn spawn_kart(
     mut commands: Commands,
     participants_with_data: Query<(&LobbyParticipant, Option<&PlayerData<AppPlayerData>>)>,
     local_player: Option<Res<LocalMultiplayerPlayerId>>,
-    server_player: Option<Res<LocalServerPlayer>>,
+    hosted_lobbies: Query<(), (With<Lobby>, With<Host>)>,
     asset_handles: Res<AssetHandles>,
 ) {
     let wheel_tex = asset_handles.wheel_texture.clone();
@@ -333,7 +333,10 @@ pub(crate) fn spawn_kart(
         }
         KartControlType::LobbyCar(player_uuid, rank) => {
             let is_local = local_player.as_ref().is_some_and(|p| p.0 == player_uuid);
-            let is_host = server_player.is_some();
+            // The lobby's say rather than the role's: the two agree, but the
+            // lobby screen is rebuilt in the update the lobby changes host, and
+            // the role can follow it a frame later.
+            let is_host = !hosted_lobbies.is_empty();
             let player_data = participants_with_data
                 .iter()
                 .find(|(p, _)| p.player_uuid == player_uuid)
@@ -389,14 +392,8 @@ pub(crate) fn spawn_kart(
                         Button
                         Pickable
                         on(|_: On<Pointer<Press>>,
-                            mut local_data: ResMut<LocalPlayerData<AppPlayerData>>,
-                            mut commands: Commands,
-                            lobbies: Query<Entity, With<Lobby>>| {
+                            mut local_data: ResMut<LocalPlayerData<AppPlayerData>>| {
                             local_data.0.kart_color = local_data.0.kart_color.left();
-                            if let Some(lobby) = lobbies.iter().next() {
-                                let data = local_data.0.clone();
-                                commands.entity(lobby).trigger(move |entity| SetPlayerData::new(entity, data));
-                            }
                         })
                     })
                     .insert(ChildOf(ui));
@@ -409,14 +406,8 @@ pub(crate) fn spawn_kart(
                         Button
                         Pickable
                         on(|_: On<Pointer<Press>>,
-                            mut local_data: ResMut<LocalPlayerData<AppPlayerData>>,
-                            mut commands: Commands,
-                            lobbies: Query<Entity, With<Lobby>>| {
+                            mut local_data: ResMut<LocalPlayerData<AppPlayerData>>| {
                             local_data.0.kart_color = local_data.0.kart_color.right();
-                            if let Some(lobby) = lobbies.iter().next() {
-                                let data = local_data.0.clone();
-                                commands.entity(lobby).trigger(move |entity| SetPlayerData::new(entity, data));
-                            }
                         })
                     })
                     .insert(ChildOf(ui));

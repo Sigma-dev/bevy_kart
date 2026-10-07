@@ -5,3 +5,8 @@
 
 # Player-authored maps, saved next to the game.
 /maps
+# Where scripts/deploy-itch.sh stages a release and keeps its build logs.
+/tmp
+# The itch.io deploy's secrets (the TURN password). Written by hand, read by
+# scripts/deploy-itch.sh, and never committed. `.env.deploy.example` is the template.
+/.env.deploy

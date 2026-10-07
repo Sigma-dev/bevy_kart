@@ -246,3 +246,10 @@ every peer.
 `.github/workflows/release.yaml` is run by hand with a version number. It builds
 native packages for Windows, macOS and Linux and the web bundle, attaches them to
 a GitHub release, and can push to itch.io and GitHub Pages.
+
+Without Actions, `./scripts/deploy-itch.sh` (or `just deploy`) builds the same
+four packages on a Mac and pushes them to `sigmatronic/bevy-kart` with butler:
+web through the Bevy CLI, macOS universal, Linux in Docker, Windows through
+mingw. It reads the relay password from `.env.deploy` (copy
+`.env.deploy.example`); `--dry-run` builds and packages without pushing, and the
+script's header lists what to install once.

@@ -207,9 +207,11 @@ has mac && artifacts+=("mac-arm64=${target_dir}/aarch64-apple-darwin/release/${n
 # The linux build is wherever Docker put it: under this checkout, whatever CARGO_TARGET_DIR says.
 has linux && artifacts+=("linux=${PWD}/target/linux/release/${name}")
 has windows && artifacts+=("windows=${target_dir}/x86_64-pc-windows-gnu/release/${name}.exe")
-STARTED="${started}" python3 - "${artifacts[@]}" <<'PY'
+# A build that fails stops the script where it runs, so whatever is here was built by this run or,
+# when cargo had nothing to do (say, after a dry run of the same commit), is that same build. The
+# time is shown for reading, not checked.
+python3 - "${artifacts[@]}" <<'PY'
 import os, sys, time
-started = int(os.environ["STARTED"])
 needles = {k: os.environ[k] for k in ("SIGNALLING_SERVER_URL", "TURN_URL", "TURN_USER", "TURN_PASSWORD")}
 failed = False
 print(f"{'artifact':12s} {'built':>8s} " + " ".join(f"{k.lower():>22s}" for k in needles))
@@ -220,11 +222,8 @@ for item in sys.argv[1:]:
     mtime = os.path.getmtime(path)
     blob = open(path, "rb").read()
     counts = {k: blob.count(v.encode()) for k, v in needles.items()}
-    fresh = mtime >= started - 5
     print(f"{label:12s} {time.strftime('%H:%M:%S', time.localtime(mtime)):>8s} "
           + " ".join(f"{counts[k]:>22d}" for k in needles))
-    if not fresh:
-        print(f"  {label}: built before this run started — a failed build left an old binary"); failed = True
     turn = all(counts[k] for k in ("TURN_URL", "TURN_USER", "TURN_PASSWORD"))
     if not turn:
         print(f"  {label}: TURN settings missing"); failed = True

@@ -12,8 +12,8 @@ use crate::{
 };
 
 pub const EXPLOSION_RADIUS: f32 = 12.;
-const BOOST_DURATION_TICKS: u64 = TICKS_PER_SECOND as u64;
-const ITEM_RESPAWN_TICKS: u64 = TICKS_PER_SECOND as u64; // 1 second
+const BOOST_DURATION_TICKS: Ticks = Ticks(DEFAULT_TICK_HZ as u64);
+const ITEM_RESPAWN_TICKS: Ticks = Ticks(DEFAULT_TICK_HZ as u64); // 1 second
 
 pub struct ItemsPlugin;
 
@@ -81,9 +81,9 @@ impl ItemType {
 
 #[derive(Component)]
 pub struct ItemSpawner {
-    interval_ticks: u64,
+    interval_ticks: Ticks,
     item_exists: bool,
-    last_pickup_tick: Option<u64>,
+    last_pickup_tick: Option<Tick>,
 }
 
 #[derive(Component, Debug)]
@@ -169,7 +169,7 @@ fn spawn_items(
         }
         let ready = item_spawner
             .last_pickup_tick
-            .is_none_or(|t| tick.0.saturating_sub(t) >= item_spawner.interval_ticks);
+            .is_none_or(|t| tick.0.since(t) >= item_spawner.interval_ticks);
         if !ready {
             continue;
         }
@@ -177,7 +177,7 @@ fn spawn_items(
         // Seeded from the tick and the spawner's place on the map: nothing a
         // replay, or another peer running the same tick, would draw differently.
         let place = transform.translation;
-        let seed = tick.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        let seed = tick.0.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
             ^ ((u64::from(place.x.to_bits()) << 32) | u64::from(place.y.to_bits()));
         let item = ItemType::for_seed(seed);
         spawner.spawn((
@@ -593,7 +593,7 @@ mod tests {
     }
 
     /// Step until the rocket has hit, returning the tick it happened on.
-    fn fly_until_hit(app: &mut App) -> u64 {
+    fn fly_until_hit(app: &mut App) -> Tick {
         for _ in 0..40 {
             app.update();
             if let Some((_, Some(_))) = rocket(app) {
@@ -672,7 +672,8 @@ mod tests {
         let hit_tick = fly_until_hit(&mut app);
         let (_, first) = rocket(&mut app).unwrap();
 
-        app.world_mut().write_message(ResetToTick(hit_tick - 3));
+        app.world_mut()
+            .write_message(ResetToTick(hit_tick - Ticks(3)));
         app.update();
         let (pos, hit) = rocket(&mut app).unwrap();
         assert!(hit.is_none(), "the rewind restored the tick before the hit");

@@ -11,6 +11,7 @@ use bevy::text::EditableText;
 use bevy_ensemble::prelude::*;
 use bevy_ensemble_webrtc::LobbyWebrtcCode;
 use bevy_ticked_networking::prelude::*;
+use std::time::Duration;
 
 use super::TextSubmit;
 
@@ -412,14 +413,14 @@ pub fn spawn_lobby(
 }
 
 fn receive_ping(
-    lobby_rtt: Query<(&PeerRtt, Option<&PeerLastPong>), With<Lobby>>,
+    lobby_rtt: Query<(&PeerRtt, Option<&PeerSilence>), With<Lobby>>,
     mut texts: Query<&mut Text, With<PingText>>,
 ) {
-    let Ok((rtt, last_pong)) = lobby_rtt.single() else {
+    let Ok((rtt, silence)) = lobby_rtt.single() else {
         return;
     };
-    let ms = (rtt.0 * 1000.0) as u64;
-    let bad = last_pong.is_some_and(|p| p.0 > 2.);
+    let ms = rtt.0.as_millis();
+    let bad = silence.is_some_and(|s| s.0 > Duration::from_secs(2));
     let label = if bad {
         format!("Ping: {} ms - Bad connection", ms)
     } else {

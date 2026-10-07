@@ -76,7 +76,7 @@ pub struct SteeringState {
 #[derive(Component, Clone, Debug, Serialize, Deserialize)]
 pub struct BoostEffect {
     pub multiplier: f32,
-    pub remaining_ticks: u64,
+    pub remaining_ticks: Ticks,
 }
 
 /// Read from the input queue and apply inputs to each car this peer simulates,
@@ -286,10 +286,10 @@ fn handle_boost_effect(
         if !simulates(local_client.as_deref(), mode) {
             continue;
         }
-        if boost_effect.remaining_ticks == 0 {
+        if boost_effect.remaining_ticks.is_zero() {
             commands.entity(car_entity).remove::<BoostEffect>();
         } else {
-            boost_effect.remaining_ticks -= 1;
+            boost_effect.remaining_ticks -= Ticks::ONE;
         }
     }
 }

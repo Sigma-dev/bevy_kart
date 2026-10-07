@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy_ensemble::prelude::*;
+use bevy_ensemble::{EnsembleSet, HostChanged};
 use bevy_ensemble_webrtc::{
     JoinWebrtcLobby, JoinWebrtcLobbyByCode, LobbyWebrtcCode, RefreshLobbyList,
 };
@@ -14,25 +15,35 @@ use crate::{AppPlayerData, AppState, GameStateChanged, LobbyState};
 /// adopts the role the moment the local uuid exists, releases it when the lobby
 /// goes, and upstream's `reset_on_leave` despawns the tracked world, zeroes the
 /// tick and clears the input queue on the way out. What is left is what only the
-/// game knows: its menu state, its player data, how a copy started with nobody
-/// at the keyboard behaves, and what to do when the handshake finds the other
-/// peer was built from a different commit.
+/// game knows: its menu state, how a copy started with nobody at the keyboard
+/// behaves, what a race in progress becomes when the lobby changes host, and
+/// what to do when the handshake finds the other peer was built from a
+/// different commit. The player data is the stack's too:
+/// `PlayerDataPlugin::persisted` publishes it into every lobby.
 pub struct LobbyLifecyclePlugin;
 
 impl Plugin for LobbyLifecyclePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, apply_session_params).add_systems(
-            Update,
-            (
-                enter_lobby,
-                leave_on_registry_mismatch,
-                leave_on_handshake_timeout,
-                exit_lobby_when_session_ends,
-                receive_game_state_changed,
-                autostart_join,
-                autostart_race,
-            ),
-        );
+        app.add_systems(Startup, apply_session_params)
+            // Where the bridge re-enters the roles, so the race is called off in
+            // this frame's state transition, before anything in `Update` sees the
+            // new host's world with the old race's state. See `follow_host_change`.
+            .add_systems(
+                PreUpdate,
+                follow_host_change.after(EnsembleSet::ReceivePackets),
+            )
+            .add_systems(
+                Update,
+                (
+                    enter_lobby,
+                    leave_on_registry_mismatch,
+                    leave_on_handshake_timeout,
+                    exit_lobby_when_session_ends,
+                    receive_game_state_changed,
+                    autostart_join,
+                    autostart_race,
+                ),
+            );
     }
 }
 
@@ -237,6 +248,7 @@ fn autostart_race(
     params: Res<SessionParams>,
     selected: Res<crate::track::SelectedMap>,
     mut fired: Local<bool>,
+    mut host_changes: MessageReader<HostChanged>,
     server_player: Option<Res<LocalServerPlayer>>,
     app_state: Res<State<AppState>>,
     participants: Query<(), With<LobbyParticipant>>,
@@ -244,6 +256,10 @@ fn autostart_race(
     mut next_state: ResMut<NextState<AppState>>,
     mut commands: Commands,
 ) {
+    // A new host starts an empty world, and the race it would start is a new one.
+    if host_changes.read().count() > 0 {
+        *fired = false;
+    }
     let Some(wanted) = params.autostart else {
         return;
     };
@@ -264,21 +280,20 @@ fn autostart_race(
     crate::map_sync::begin_race(&mut commands, &mut next_state, map);
 }
 
-/// A lobby this game has already switched its screen to and announced itself
-/// in, so a promotion is acted on once. A host's lobby entity lives for as long
-/// as it hosts, through every client that comes and goes.
+/// A lobby this game has already switched its screen to, so a promotion is
+/// acted on once. A lobby entity lives for as long as the lobby does, through
+/// every client that comes and goes and through a change of host.
 #[derive(Component)]
 struct EnteredLobby;
 
-/// Once a lobby is promoted: show the lobby screen and push this player's data
-/// into it.
+/// Once a lobby is promoted: show the lobby screen.
 ///
 /// Keyed on `Lobby` and not on the role, deliberately. The role arrives earlier,
 /// on `PendingLobby`, before any data channel exists, and that is right for the
-/// simulation, which must not build a solo world in that window. The menu and
-/// the player data want the promoted lobby: its participant entities are what
-/// `SetPlayerData` attaches to, and the lobby screen reads the code and the
-/// roster off it.
+/// simulation, which must not build a solo world in that window. The menu wants
+/// the promoted lobby: the lobby screen reads the code and the roster off it.
+/// This player's data goes in on its own, from `PlayerDataPlugin::persisted`,
+/// which publishes it into every lobby and again whenever it changes.
 fn enter_lobby(
     mut commands: Commands,
     local_player: Option<Res<LocalMultiplayerPlayerId>>,
@@ -287,7 +302,6 @@ fn enter_lobby(
         (With<Lobby>, Without<EnteredLobby>),
     >,
     mut lobby_state: ResMut<NextState<LobbyState>>,
-    local_data: Res<LocalPlayerData<AppPlayerData>>,
     params: Option<Res<SessionParams>>,
 ) {
     if local_player.is_none() {
@@ -304,11 +318,7 @@ fn enter_lobby(
             }
         }
         lobby_state.set(LobbyState::InLobby);
-        let data = local_data.0.clone();
-        commands
-            .entity(lobby)
-            .insert(EnteredLobby)
-            .trigger(move |entity| SetPlayerData::new(entity, data));
+        commands.entity(lobby).insert(EnteredLobby);
     }
 }
 
@@ -321,7 +331,13 @@ fn enter_lobby(
 /// `Lobby`. The handshake drops it on a registry mismatch while the lobby is
 /// still standing. To the menu both are the same event.
 ///
-/// Nothing here touches the simulation. Upstream's `reset_on_leave` runs on the
+/// A change of host is not an end. The bridge swaps the roles in one command,
+/// so there is no frame without one and this never sees the lobby go: the
+/// survivors stay in it, and `follow_host_change` takes them back to its screen.
+/// A lobby that is never given a new host does end, with `LobbyLeft { HostGone }`
+/// and the role with it, and that comes through here like any other end.
+///
+/// Nothing here touches the simulation. The stack's leave door runs on the
 /// same removal: it despawns every tracked entity, zeroes the tick, clears the
 /// input queue and un-pauses. The un-pause is why ticks run in the menu after a
 /// session, as they do before the first one.
@@ -340,6 +356,47 @@ fn exit_lobby_when_session_ends(
     }
     lobby_state.set(LobbyState::OutOfLobby);
     app_state.set(AppState::OutOfGame);
+}
+
+/// The lobby changed host: the race, if there was one, is over, and everybody
+/// still in the lobby goes back to its screen.
+///
+/// The snapshot model cannot carry a race across a host change -- the world was
+/// the old host's -- so the bridge has already ended the ticked session and
+/// started a fresh one under the new host, in the same lobby. What is left is
+/// what is not a ticked resource: the screen, the finishing order that labels
+/// the lobby cars, and the host-only "race is over" timer. `LobbyState` stays
+/// `InLobby`, because the lobby did.
+///
+/// A promoted peer also announces the map it last heard about, so the new
+/// lobby starts on the track everybody was shown: `SelectedMap` is marked
+/// changed and `map_sync` sends it. Followers are seated on the new host as new
+/// clients and hear it from there.
+///
+/// In `PreUpdate`, after the transport, beside the bridge's own reaction. The
+/// state is then out of the race by this frame's transition, so nothing in
+/// `Update` -- `map_sync` catching a reseated follower up on "the race that is
+/// running", in particular -- acts on a race that is gone.
+fn follow_host_change(
+    mut commands: Commands,
+    mut changes: MessageReader<HostChanged>,
+    mut finish_times: ResMut<crate::FinishTimes>,
+    mut selected: ResMut<crate::track::SelectedMap>,
+    mut app_state: ResMut<NextState<AppState>>,
+) {
+    let Some(change) = changes.read().last() else {
+        return;
+    };
+    info!(
+        "the lobby has a new host ({:#x}); back to the lobby",
+        change.new
+    );
+    app_state.set(AppState::OutOfGame);
+    finish_times.times.clear();
+    commands.remove_resource::<crate::track::RaceEnded>();
+    if change.promoted {
+        selected.set_changed();
+    }
 }
 
 /// A peer built from a different commit cannot be played with, so leave.
@@ -406,5 +463,161 @@ fn receive_game_state_changed(
             warn!("a peer asked to start a race the old way; it is running a different build");
         }
         next_state.set(msg.message.0.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! The menu's side of a session, over the real lobby crate and the loopback
+    //! backend: a host, two clients, and the bridge doing what it does in the
+    //! game. No window and no assets, so no screens -- what is checked is the
+    //! state the screens are derived from.
+    use std::time::Duration;
+
+    use bevy::state::app::StatesPlugin;
+    use bevy_ensemble::CloseLobby;
+    use bevy_ticked_testing::prelude::*;
+
+    use super::*;
+    use crate::{EditorState, FinishTimes, PlayerInput};
+
+    const SETTLE: usize = 400;
+
+    const MIGRATION: HostMigratable = HostMigratable {
+        successor_within: Duration::from_secs(4),
+        reach_within: Duration::from_secs(20),
+    };
+
+    /// What `main` adds for a session, less everything that draws.
+    fn install(app: &mut App) {
+        if !app.is_plugin_added::<StatesPlugin>() {
+            app.add_plugins(StatesPlugin);
+        }
+        app.add_plugins((
+            LobbyBroadcastPlugin,
+            PlayerDataPlugin::<AppPlayerData>::default().persisted("bevy_kart.test-profile"),
+            LobbyLifecyclePlugin,
+            crate::map_sync::MapSyncPlugin,
+        ))
+        // The WebRTC backend's own requests, which the autostart systems write.
+        .add_message::<JoinWebrtcLobbyByCode>()
+        .add_message::<JoinWebrtcLobby>()
+        .add_message::<RefreshLobbyList>()
+        .init_state::<AppState>()
+        .init_state::<LobbyState>()
+        .init_state::<EditorState>()
+        .init_resource::<crate::track::SelectedMap>()
+        .insert_resource(FinishTimes {
+            times: Default::default(),
+        });
+        crate::register_broadcast_messages(app);
+    }
+
+    fn lobby_state(net: &TickedNetwork, peer: PeerId) -> LobbyState {
+        net.app(peer)
+            .world()
+            .resource::<State<LobbyState>>()
+            .get()
+            .clone()
+    }
+
+    fn app_state(net: &TickedNetwork, peer: PeerId) -> AppState {
+        net.app(peer)
+            .world()
+            .resource::<State<AppState>>()
+            .get()
+            .clone()
+    }
+
+    /// A host and two clients, settled, every one of them on the lobby screen and
+    /// then in a race, with a finishing order from an earlier one.
+    fn racing_session() -> (TickedNetwork, PeerId, PeerId, PeerId) {
+        let mut net = TickedNetwork::client_server::<PlayerInput>(2, install)
+            .with_link(Link::cable())
+            .with_seed(7)
+            .with_host_migration(MIGRATION);
+        assert!(net.settle(SETTLE), "the session did not settle");
+        let host = net.host();
+        let clients = net.clients();
+        let (a, b) = (clients[0], clients[1]);
+        net.run(10);
+        for peer in [host, a, b] {
+            assert_eq!(lobby_state(&net, peer), LobbyState::InLobby);
+            let world = net.world_mut(peer);
+            world
+                .resource_mut::<NextState<AppState>>()
+                .set(AppState::Game);
+            world
+                .resource_mut::<FinishTimes>()
+                .times
+                .insert(1, Tick(10));
+        }
+        net.run(2);
+        for peer in [host, a, b] {
+            assert_eq!(app_state(&net, peer), AppState::Game);
+        }
+        (net, host, a, b)
+    }
+
+    /// The host leaves mid-race -- the leave button, which despawns its lobby --
+    /// and the lobby is handed on. Nobody who stayed is thrown out of it: both
+    /// survivors are back on the lobby screen, one hosting and one a client of it,
+    /// with the old race's finishing order gone, and the client is given the new
+    /// host's world.
+    #[test]
+    fn the_players_who_stay_keep_their_lobby_when_the_host_leaves_mid_race() {
+        let (mut net, host, a, b) = racing_session();
+
+        net.lose_host(HostDeparture::Quits);
+        net.run(5);
+        assert_eq!(
+            lobby_state(&net, b),
+            LobbyState::InLobby,
+            "waiting for a new host is not leaving the lobby"
+        );
+        net.name_host(a);
+
+        let started = net.run_until(SETTLE, |net| {
+            role(net.app(a)) == Role::Host
+                && role(net.app(b)) == Role::Client
+                && applied_tick(net.app(b)).is_some()
+        });
+        assert!(started, "a hosts and b applies its snapshots");
+        for peer in [a, b] {
+            assert_eq!(lobby_state(&net, peer), LobbyState::InLobby, "{peer:?}");
+            assert_eq!(app_state(&net, peer), AppState::OutOfGame, "{peer:?}");
+            assert!(
+                net.app(peer)
+                    .world()
+                    .resource::<FinishTimes>()
+                    .times
+                    .is_empty(),
+                "{peer:?} forgot the old race's finishing order"
+            );
+        }
+        assert_eq!(
+            lobby_state(&net, host),
+            LobbyState::OutOfLobby,
+            "the host that left is out"
+        );
+    }
+
+    /// A host that means the game is over closes the lobby, and it ends for
+    /// everyone rather than being handed on.
+    #[test]
+    fn closing_the_lobby_ends_it_for_everyone() {
+        let (mut net, host, a, b) = racing_session();
+
+        net.world_mut(host).write_message(CloseLobby);
+        let ended = net.run_until(SETTLE, |net| {
+            [host, a, b]
+                .into_iter()
+                .all(|peer| lobby_state(net, peer) == LobbyState::OutOfLobby)
+        });
+        assert!(ended, "every peer left the lobby");
+        for peer in [host, a, b] {
+            assert_eq!(app_state(&net, peer), AppState::OutOfGame, "{peer:?}");
+            assert_eq!(role(net.app(peer)), Role::Solo, "{peer:?} holds no role");
+        }
     }
 }

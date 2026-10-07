@@ -285,20 +285,18 @@ fn handle_code_submit(
     }
 }
 
-/// Sync name input text to local player data.
+/// Sync name input text to local player data. The stack stores it and
+/// publishes it into the lobby, if there is one.
 fn handle_name_change(
     name_inputs: Query<&EditableText, (With<NameInput>, Changed<EditableText>)>,
     mut local_data: ResMut<LocalPlayerData<AppPlayerData>>,
-    mut commands: Commands,
-    lobbies: Query<Entity, With<Lobby>>,
 ) {
     for contents in name_inputs.iter() {
-        local_data.0.name = contents.value().to_string();
-        if let Some(lobby) = lobbies.iter().next() {
-            let data = local_data.0.clone();
-            commands
-                .entity(lobby)
-                .trigger(move |entity| SetPlayerData::new(entity, data));
+        let name = contents.value().to_string();
+        // Written only when it differs, so a stored name is not written back
+        // out the frame its field is filled in with it.
+        if local_data.0.name != name {
+            local_data.0.name = name;
         }
     }
 }

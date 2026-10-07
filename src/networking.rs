@@ -67,10 +67,6 @@ pub struct ChatMessage {
 #[derive(Clone, Debug, Serialize, Deserialize, Message)]
 pub struct GameStateChanged(pub AppState);
 
-/// Local player's data (stored locally, pushed via SetPlayerData when in a lobby).
-#[derive(Resource, Default)]
-pub struct LocalPlayerData(pub AppPlayerData);
-
 #[derive(States, Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum AppState {
     #[default]

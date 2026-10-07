@@ -31,7 +31,7 @@ pub(crate) fn sample_local_input(
     // fifth second. Enough to keep every kart moving and colliding in a run
     // nobody is driving. Phased on the tick the input will run in.
     if params.is_some_and(|p| p.autodrive) {
-        let next = tick.0 + 1;
+        let next = tick.0.next().0;
         let phase = (next / 96).is_multiple_of(2);
         return Some(PlayerInput {
             forward: true,

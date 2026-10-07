@@ -45,7 +45,7 @@ pub const LAPS_TO_WIN: u32 = 3;
 
 #[derive(Resource, Clone, Debug, Serialize, Deserialize)]
 pub struct FinishTimes {
-    pub times: HashMap<u128, u64>,
+    pub times: HashMap<u128, Tick>,
 }
 
 impl FinishTimes {
@@ -74,7 +74,7 @@ struct RaceEnded(f32);
 pub(crate) struct StartLight;
 
 #[derive(Resource)]
-struct RaceStarted(u64);
+struct RaceStarted(Tick);
 
 fn on_receive_finish_times(
     mut commands: Commands,
@@ -159,8 +159,11 @@ fn start_light(
     let Some(race) = race_started else {
         return;
     };
-    let ticks_elapsed = tick.0.saturating_sub(race.0);
-    let seconds_elapsed = ticks_elapsed as f32 * SECONDS_PER_TICK;
+    let seconds_elapsed = tick
+        .0
+        .since(race.0)
+        .duration(DEFAULT_TIMESTEP)
+        .as_secs_f32();
     for mut light in lights.iter_mut() {
         let Some(texture_atlas) = &mut light.texture_atlas else {
             continue;

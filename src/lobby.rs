@@ -6,7 +6,7 @@ use bevy_ensemble_webrtc::{
 use bevy_ticked_networking::prelude::*;
 use bevy_ticked_networking_ensemble::{HandshakeTimedOut, RegistryMismatch};
 
-use crate::{AppState, GameStateChanged, LobbyState, LocalPlayerData};
+use crate::{AppPlayerData, AppState, GameStateChanged, LobbyState};
 
 /// The game's side of a session's lifecycle.
 ///
@@ -156,7 +156,7 @@ impl SessionParams {
 fn apply_session_params(
     mut commands: Commands,
     mut editor_state: ResMut<NextState<crate::EditorState>>,
-    mut local_data: ResMut<LocalPlayerData>,
+    mut local_data: ResMut<LocalPlayerData<AppPlayerData>>,
     mut selected_map: ResMut<crate::track::SelectedMap>,
     mut join_by_code: MessageWriter<JoinWebrtcLobbyByCode>,
     mut start_hosting: MessageWriter<StartHosting>,
@@ -287,7 +287,7 @@ fn enter_lobby(
         (With<Lobby>, Without<EnteredLobby>),
     >,
     mut lobby_state: ResMut<NextState<LobbyState>>,
-    local_data: Res<LocalPlayerData>,
+    local_data: Res<LocalPlayerData<AppPlayerData>>,
     params: Option<Res<SessionParams>>,
 ) {
     if local_player.is_none() {

@@ -195,7 +195,7 @@ fn main() {
         // `Screen` is the cross-product of the three above, named. Everything that
         // used to test two states at once tests this instead.
         .add_computed_state::<Screen>()
-        .init_resource::<LocalPlayerData>()
+        .init_resource::<LocalPlayerData<AppPlayerData>>()
         .insert_resource(FinishTimes {
             times: HashMap::new(),
         })

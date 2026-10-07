@@ -6,7 +6,7 @@ use crate::scene_util::insert;
 use crate::track::LAPS_TO_WIN;
 use crate::track::position::TrackPosition;
 use crate::{
-    AppPlayerData, AppState, AssetHandles, LocalPlayerData, Screen, SpriteLayers,
+    AppPlayerData, AppState, AssetHandles, Screen, SpriteLayers,
     car_controller_2d::CarController2dWheel, track::FinishTimes,
 };
 use audio_manager::prelude::*;
@@ -389,7 +389,7 @@ pub(crate) fn spawn_kart(
                         Button
                         Pickable
                         on(|_: On<Pointer<Press>>,
-                            mut local_data: ResMut<LocalPlayerData>,
+                            mut local_data: ResMut<LocalPlayerData<AppPlayerData>>,
                             mut commands: Commands,
                             lobbies: Query<Entity, With<Lobby>>| {
                             local_data.0.kart_color = local_data.0.kart_color.left();
@@ -409,7 +409,7 @@ pub(crate) fn spawn_kart(
                         Button
                         Pickable
                         on(|_: On<Pointer<Press>>,
-                            mut local_data: ResMut<LocalPlayerData>,
+                            mut local_data: ResMut<LocalPlayerData<AppPlayerData>>,
                             mut commands: Commands,
                             lobbies: Query<Entity, With<Lobby>>| {
                             local_data.0.kart_color = local_data.0.kart_color.right();
@@ -518,7 +518,7 @@ mod tests {
 
         app.world_mut().entity_mut(kart).insert(BoostEffect {
             multiplier: 3.,
-            remaining_ticks: 64,
+            remaining_ticks: Ticks(64),
         });
         app.update();
         assert_eq!(flame_visibility(&mut app), Visibility::Inherited);

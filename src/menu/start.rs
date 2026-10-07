@@ -1,6 +1,6 @@
 use crate::scene_util::insert;
 use crate::{
-    AppColors, AssetHandles, LocalPlayerData, RESOLUTION, Screen, SpriteLayers,
+    AppColors, AppPlayerData, AssetHandles, RESOLUTION, Screen, SpriteLayers,
     kart::{AutoCar, KartControlType, spawn_kart},
     menu::animated_button,
 };
@@ -80,7 +80,7 @@ pub(crate) fn spawn_menu(
     mut commands: Commands,
     mut texture_atlases: ResMut<Assets<TextureAtlasLayout>>,
     handles: Res<AssetHandles>,
-    local_data: Res<LocalPlayerData>,
+    local_data: Res<LocalPlayerData<AppPlayerData>>,
 ) {
     let name_atlas = texture_atlases.add(TextureAtlasLayout::from_grid(
         UVec2::new(32, 8),
@@ -288,7 +288,7 @@ fn handle_code_submit(
 /// Sync name input text to local player data.
 fn handle_name_change(
     name_inputs: Query<&EditableText, (With<NameInput>, Changed<EditableText>)>,
-    mut local_data: ResMut<LocalPlayerData>,
+    mut local_data: ResMut<LocalPlayerData<AppPlayerData>>,
     mut commands: Commands,
     lobbies: Query<Entity, With<Lobby>>,
 ) {
@@ -381,6 +381,7 @@ fn report_join_failure(
             // Our own doing, and nothing to explain.
             LobbyLeftReason::Left => continue,
             LobbyLeftReason::Kicked => "the host removed you".to_string(),
+            LobbyLeftReason::TimedOut => "the host stopped hearing from you".to_string(),
             LobbyLeftReason::HostGone => "the host left".to_string(),
             LobbyLeftReason::PeerTimeout => "the host stopped answering".to_string(),
             LobbyLeftReason::SignallingLost => "lost the signalling server".to_string(),

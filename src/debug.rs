@@ -8,7 +8,7 @@ use crate::camera::MainCamera;
 use crate::track::position::progress_line::{DrawProgressLine, ProgressLine};
 use bevy_ensemble::prelude::{Lobby, NetDebugExtras, PeerRtt, PeerRttJitter};
 use bevy_ticked::prelude::{
-    CurrentTick, TickHolds, TickRateDilation, TickTrackedEntity, TickedLoop, TickedSystems,
+    CurrentTick, TickHolds, TickRateDilation, TickTrackedEntity, TickedLoop, TickedSystems, Ticks,
 };
 use bevy_ticked_networking::client::SnapshotApplied;
 use bevy_ticked_networking::diagnostics::{ReplayStats, SnapshotStats};
@@ -72,7 +72,7 @@ struct PerfStats {
     tick_ms_max: f64,
     ticks: u32,
     snapshots: u32,
-    replay_ticks: u64,
+    replay_ticks: Ticks,
 }
 
 const PERF_WINDOW_SECS: f64 = 2.0;
@@ -109,8 +109,8 @@ fn perf_count_replay(
 ) {
     for snapshot in applied.read() {
         stats.snapshots += 1;
-        // The tick loop advanced once more after the replay, hence the `+ 1`.
-        stats.replay_ticks += tick.0.saturating_sub(snapshot.tick + 1);
+        // The tick loop advanced once more after the replay, hence the `next()`.
+        stats.replay_ticks += tick.0.since(snapshot.tick.next());
     }
 }
 
@@ -222,7 +222,7 @@ fn perf_frame_end(
         stats.tick_ms_sum / frames,
         stats.tick_ms_max,
         stats.ticks as f64 / frames,
-        stats.replay_ticks as f64 / stats.snapshots.max(1) as f64,
+        stats.replay_ticks.0 as f64 / stats.snapshots.max(1) as f64,
         stats.snapshots as f64 / elapsed,
     );
     // Only when asked. The readout is one line every two seconds, for ever, and an
@@ -300,7 +300,12 @@ fn report_tick_buffer(
             let (ping, jitter) = rtt
                 .iter()
                 .next()
-                .map(|(rtt, jitter)| (rtt.0 * 1000.0, jitter.map_or(0.0, |j| j.0 * 1000.0)))
+                .map(|(rtt, jitter)| {
+                    (
+                        rtt.0.as_secs_f64() * 1000.0,
+                        jitter.map_or(0.0, |j| j.0.as_secs_f64() * 1000.0),
+                    )
+                })
                 .unwrap_or((0.0, 0.0));
             // The dilation is how hard the client is currently steering toward
             // that lead; sustained non-zero drift is the signal that the

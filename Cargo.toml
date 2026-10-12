@@ -10,12 +10,12 @@ netdebug = ["bevy_ensemble/netdebug"]
 
 [dependencies]
 # Networking stack
-bevy_ticked = { git = "https://github.com/Sigma-studios/bevy_ticked", branch = "main" }
-bevy_ticked_networking = { git = "https://github.com/Sigma-studios/bevy_ticked", branch = "main" }
-bevy_ticked_networking_ensemble = { git = "https://github.com/Sigma-studios/bevy_ticked", branch = "main" }
+bevy_ticked = { git = "https://github.com/Sigma-studios/bevy_ticked", rev = "1611315" }
+bevy_ticked_networking = { git = "https://github.com/Sigma-studios/bevy_ticked", rev = "1611315" }
+bevy_ticked_networking_ensemble = { git = "https://github.com/Sigma-studios/bevy_ticked", rev = "1611315" }
 # avian2d under the tick: the four body components on the wire, warm starting
 # and sleeping off, the solver state rolled back with the bodies.
-bevy_ticked_avian = { git = "https://github.com/Sigma-studios/bevy_ticked", branch = "main", default-features = false, features = ["2d"] }
+bevy_ticked_avian = { git = "https://github.com/Sigma-studios/bevy_ticked", rev = "1611315", default-features = false, features = ["2d"] }
 # Pinned at the commit bevy_ticked pins (its `[workspace.dependencies]`): the two
 # must agree about the transport's wire format, and cargo treats a different
 # `rev` as a different crate.
@@ -60,7 +60,7 @@ rand = "0.9.2"
 # than a dependency of its own, so `handle_socket` and the example agree on one `WebSocket`.
 bevy_ensemble_webrtc = { git = "https://github.com/Sigma-studios/bevy_ensemble", rev = "a923e26", default-features = false, features = ["server"] }
 # The in-process harness and the source guard, for the tests under `tests/`.
-bevy_ticked_testing = { git = "https://github.com/Sigma-studios/bevy_ticked", branch = "main" }
+bevy_ticked_testing = { git = "https://github.com/Sigma-studios/bevy_ticked", rev = "1611315" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

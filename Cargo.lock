@@ -1954,7 +1954,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#17042a05f21789d860b7f1a7ab3253964b61d15e"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?rev=1611315#1611315eb51d95dd282f71f02b799664a29cb429"
 dependencies = [
  "bevy",
  "log",
@@ -1965,7 +1965,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked_avian"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#17042a05f21789d860b7f1a7ab3253964b61d15e"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?rev=1611315#1611315eb51d95dd282f71f02b799664a29cb429"
 dependencies = [
  "avian2d",
  "bevy",
@@ -1976,7 +1976,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked_networking"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#17042a05f21789d860b7f1a7ab3253964b61d15e"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?rev=1611315#1611315eb51d95dd282f71f02b799664a29cb429"
 dependencies = [
  "bevy",
  "bevy_ticked",
@@ -1988,7 +1988,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked_networking_ensemble"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#17042a05f21789d860b7f1a7ab3253964b61d15e"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?rev=1611315#1611315eb51d95dd282f71f02b799664a29cb429"
 dependencies = [
  "bevy",
  "bevy_ensemble",
@@ -2001,7 +2001,7 @@ dependencies = [
 [[package]]
 name = "bevy_ticked_testing"
 version = "0.1.0"
-source = "git+https://github.com/Sigma-studios/bevy_ticked?branch=main#17042a05f21789d860b7f1a7ab3253964b61d15e"
+source = "git+https://github.com/Sigma-studios/bevy_ticked?rev=1611315#1611315eb51d95dd282f71f02b799664a29cb429"
 dependencies = [
  "bevy",
  "bevy_ensemble",

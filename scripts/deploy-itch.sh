@@ -329,3 +329,17 @@ if ! ${dry_run}; then
   # not a failure. Run `butler status ${itch_page}` again in a minute if one is lagging.
   "${butler}" status "${itch_page}"
 fi
+
+# --- Portfolio -----------------------------------------------------------------------------------
+
+# The portfolio site (sigmaland) plays the web build too, and a browser holding another
+# commit's wasm cannot join this one's lobbies: point it at this commit and redeploy it. The itch
+# channels are already pushed, so a failure here only leaves the portfolio behind.
+if has web && ! ${dry_run}; then
+  portfolio="${SIGMALAND:-${HOME}/Projects/sigmaland}/scripts/publish-game.sh"
+  if [[ -x "${portfolio}" ]]; then
+    "${portfolio}" "${PWD}" || echo "warning: the portfolio still has an older build of this game" >&2
+  else
+    echo "note: no portfolio checkout at ${portfolio} (set SIGMALAND); its copy is not updated" >&2
+  fi
+fi
